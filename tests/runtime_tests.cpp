@@ -68,7 +68,7 @@ void test_guest(const std::filesystem::path& dir) {
     for (const auto& name : rt.linker().missing()) std::cerr << "  missing import: " << name << "\n";
 
     for (const char* test : {"test_constructor", "test_printf", "test_scanf", "test_strto", "test_heap", "test_qsort",
-                             "test_setjmp", "test_threads", "test_files", "test_stack_guard"}) {
+                             "test_setjmp", "test_threads", "test_files", "test_stack_guard", "test_sockets"}) {
         auto fn = lib.find_export(test);
         EXPECT(fn.has_value());
         if (!fn) continue;
@@ -85,13 +85,32 @@ void test_guest(const std::filesystem::path& dir) {
     EXPECT(rt.call(*lib.find_export("destroyed_value")) == 7);
 }
 
+void test_guest_offline(const std::filesystem::path& dir) {
+    rfu::RuntimeOptions options;
+    options.lib_dir = dir;
+    options.network = false;
+    rfu::Runtime rt(options);
+    auto& lib = rt.linker().load(dir / "libtest.so");
+    rt.run_initializers();
+    auto fn = lib.find_export("test_offline");
+    EXPECT(fn.has_value());
+    if (fn) {
+        auto r = rt.call(*fn) & 0xFFFFFFFF;
+        if (r) std::cerr << "  test_offline failed check " << r << "\n";
+        EXPECT(r == 0);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     rfu::log::set_level(rfu::log::Level::Warn);
     std::vector<std::pair<const char*, std::function<void()>>> tests{
         {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"heap", test_heap}};
-    if (argc > 1) tests.emplace_back("guest", [&] { test_guest(argv[1]); });
+    if (argc > 1) {
+        tests.emplace_back("guest", [&] { test_guest(argv[1]); });
+        tests.emplace_back("guest offline", [&] { test_guest_offline(argv[1]); });
+    }
     else std::cerr << "no guest library directory given; skipping guest tests\n";
     for (auto& [name, fn] : tests) {
         int before = failures;

@@ -32,6 +32,7 @@ struct Thunk {
 struct RuntimeOptions {
     std::filesystem::path lib_dir;          // where libPVZ2.so and friends live
     std::string package = "com.ea.game.pvz2_row";
+    bool network = true;                    // false: sockets and DNS fail, the game plays offline
 };
 
 // Owns everything the guest sees: memory, heap, loaded modules, threads and shims.

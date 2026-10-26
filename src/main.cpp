@@ -21,6 +21,7 @@ void usage() {
     std::cerr << "usage: rfu --lib-dir <dir with libPVZ2.so> [options]\n"
                  "  --mount <guest>=<host>   make a host directory visible to the game\n"
                  "  --no-rflib               don't load libRFLib.so (run vanilla code only)\n"
+                 "  --offline                no network: the game skips its CDN update and plays offline\n"
                  "  --log <level>            trace, debug, info (default), warn, error\n"
                  "  --dump-patches <file>    write the libPVZ2.so offsets RFLib patched, one per line\n";
 }
@@ -88,6 +89,8 @@ int main(int argc, char** argv) {
                 mounts.emplace_back(m.substr(0, eq), m.substr(eq + 1));
             } else if (arg == "--dump-patches") {
                 dump_patches = value();
+            } else if (arg == "--offline") {
+                options.network = false;
             } else if (arg == "--no-rflib") {
                 load_rflib = false;
             } else if (arg == "--log") {

@@ -25,6 +25,7 @@ add_library(rfu_core STATIC
     src/shims/libc_stdio.cpp
     src/shims/libc_math.cpp
     src/shims/libc_misc.cpp
+    src/shims/libc_net.cpp
     src/shims/libc_pthread.cpp
     src/shims/libdl.cpp
     src/shims/libz.cpp
@@ -33,6 +34,9 @@ add_library(rfu_core STATIC
 target_include_directories(rfu_core PUBLIC src)
 find_package(ZLIB REQUIRED)
 target_link_libraries(rfu_core PUBLIC dynarmic fmt::fmt ZLIB::ZLIB)
+if (WIN32)
+    target_link_libraries(rfu_core PUBLIC ws2_32)
+endif()
 if (MSVC)
     # C4100: unused parameter, which every shim that ignores its CallContext has.
     target_compile_options(rfu_core PRIVATE /W4 /permissive- /utf-8 /wd4100)

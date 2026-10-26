@@ -19,7 +19,9 @@ Milestone 2 (the loader) is in progress. Today `rfu` can:
   bionic's libc, libm, libdl and zlib provided by host code (`src/shims`);
 - give native code a JavaVM/JNIEnv backed by a small fake Java world (`src/jni`);
 - run every static initializer and both `JNI_OnLoad`s, after which RFLib has installed all of its
-  hooks into libPVZ2.
+  hooks into libPVZ2;
+- give the game real sockets and DNS, so its own CDN client (libcurl and OpenSSL inside libPVZ2)
+  can fetch updates and live events from the Reflourished server once the game gets that far.
 
 There is no window, rendering, audio or input yet: OpenGL ES, OpenSL ES and the game's Java side
 are the next milestones. `rfu` reports which imports are still unimplemented.
@@ -56,7 +58,8 @@ checks the four libraries are there), then:
 rfu --lib-dir path/to/arm64-v8a
 ```
 
-Options: `--log trace|debug|info|warn|error`, `--no-rflib` (vanilla code only),
+Options: `--log trace|debug|info|warn|error`, `--no-rflib` (vanilla code only), `--offline` (no
+network: the game skips its CDN update and plays offline),
 `--mount <guest path>=<host dir>` (make a folder visible to the game), `--dump-patches <file>`.
 
 ## Layout

@@ -48,6 +48,7 @@ struct OpenFile {
     std::string guest_path;
     bool directory = false;
     enum class Device { None, Null, Random } device = Device::None;
+    std::shared_ptr<GuestSocket> socket;  // set for fds made by socket() and accept()
 
     ~OpenFile() {
         if (fp && !console) std::fclose(fp);
@@ -309,6 +310,19 @@ void wide_print(CallContext& c, VarArgs& args) {
 
 }  // namespace
 
+int add_socket_fd(Runtime& rt, std::shared_ptr<GuestSocket> s) {
+    auto f = std::make_shared<OpenFile>();
+    f->socket = std::move(s);
+    return files(rt).add(std::move(f));
+}
+
+std::shared_ptr<GuestSocket> socket_at(Runtime& rt, int fd) {
+    auto f = files(rt).get(fd);
+    return f ? f->socket : nullptr;
+}
+
+bool fd_is_open(Runtime& rt, int fd) { return files(rt).get(fd) != nullptr; }
+
 std::int64_t guest_pread(Runtime& rt, int fd, void* buf, std::uint64_t n, std::int64_t offset) {
     auto f = files(rt).get(fd);
     if (!f) return -1;
@@ -346,12 +360,20 @@ void register_libc_stdio(ShimRegistry& reg) {
     reg.add("read", [](CallContext& c) {
         auto f = files(c.rt()).get(static_cast<int>(c.x(0)));
         if (!f) return c.fail(android::kEBADF);
+        if (f->socket) {
+            std::int64_t n = socket_read(*f->socket, c.ptr(1), c.x(2));
+            return n < 0 ? c.fail(static_cast<int>(-n)) : ret_int(c, n);
+        }
         std::int64_t n = f->read(c.ptr(1), c.x(2));
         n < 0 ? c.fail(android::kEIO) : ret_int(c, n);
     });
     reg.add("write", [](CallContext& c) {
         auto f = files(c.rt()).get(static_cast<int>(c.x(0)));
         if (!f) return c.fail(android::kEBADF);
+        if (f->socket) {
+            std::int64_t n = socket_write(*f->socket, c.ptr(1), c.x(2));
+            return n < 0 ? c.fail(static_cast<int>(-n)) : ret_int(c, n);
+        }
         std::int64_t n = f->write(c.ptr(1), c.x(2));
         n < 0 ? c.fail(android::kEBADF) : ret_int(c, n);
     });
@@ -460,8 +482,20 @@ void register_libc_stdio(ShimRegistry& reg) {
     for (const char* name : {"chmod", "fchmod", "fchmodat", "lchown", "utime", "utimensat"}) reg.add(name, [](CallContext& c) { c.ret(0); });
     for (const char* name : {"link", "symlink", "mkfifo", "mknod", "pipe", "dup2", "sendfile"}) reg.add(name, [](CallContext& c) { c.fail(android::kENOSYS); });
     reg.add("pathconf", [](CallContext& c) { c.ret(255); });
-    reg.add("fcntl", [](CallContext& c) { c.ret(0); });
-    reg.add("ioctl", [](CallContext& c) { c.fail(25 /* ENOTTY */); });
+    reg.add("fcntl", [](CallContext& c) {
+        if (auto s = socket_at(c.rt(), static_cast<int>(c.x(0)))) {
+            int r = socket_fcntl(*s, static_cast<int>(c.x(1)), c.x(2));
+            return r < 0 ? c.fail(-r) : c.ret(static_cast<std::uint64_t>(r));
+        }
+        c.ret(0);
+    });
+    reg.add("ioctl", [](CallContext& c) {
+        if (auto s = socket_at(c.rt(), static_cast<int>(c.x(0)))) {
+            int r = socket_ioctl(c, *s, c.x(1), c.x(2));
+            return r < 0 ? c.fail(-r) : c.ret(static_cast<std::uint64_t>(r));
+        }
+        c.fail(25 /* ENOTTY */);
+    });
     reg.add("statvfs", [](CallContext& c) {
         GuestAddr b = c.x(1);
         std::memset(c.mem().host(b), 0, 112);
@@ -749,17 +783,6 @@ void register_libc_stdio(ShimRegistry& reg) {
         ret_int(c, r);
     });
 
-    // select() and poll() only ever see sockets, which don't exist here.
-    reg.add("__FD_SET_chk", [](CallContext& c) {
-        auto fd = static_cast<std::uint64_t>(c.x(0));
-        c.mem().host(c.x(1))[fd / 8] |= static_cast<std::uint8_t>(1u << (fd % 8));
-    });
-    reg.add("__FD_ISSET_chk", [](CallContext& c) {
-        auto fd = static_cast<std::uint64_t>(c.x(0));
-        c.ret((c.mem().host(c.x(1))[fd / 8] >> (fd % 8)) & 1);
-    });
-    reg.add("select", [](CallContext& c) { c.ret(0); });
-    reg.add("poll", [](CallContext& c) { c.ret(0); });
 }
 
 }  // namespace rfu

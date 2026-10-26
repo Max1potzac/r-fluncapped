@@ -43,6 +43,7 @@ void register_libc_string(ShimRegistry& reg);
 void register_libc_stdio(ShimRegistry& reg);
 void register_libc_math(ShimRegistry& reg);
 void register_libc_misc(ShimRegistry& reg);
+void register_libc_net(ShimRegistry& reg);
 void register_libc_pthread(ShimRegistry& reg);
 void register_libdl(ShimRegistry& reg);
 void register_libz(ShimRegistry& reg);

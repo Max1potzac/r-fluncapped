@@ -492,6 +492,16 @@ void App::implement_java() {
         return rt.options().network ? 2 : 0;  // NET_REACHABLE_WIFI / NET_NOT_REACHABLE
     });
 
+    // --- Nimble's Network component: Network.Status is an enum (UNKNOWN, NONE, DEAD, OK), which
+    // the game reads with ordinal(). -------------------------------------------------------------
+    impl("com/ea/nimble/INetwork", "getStatus", [this](jni::JavaCall& j) -> std::uint64_t {
+        GuestAddr status = j.jni.new_instance("com/ea/nimble/Network$Status");
+        j.jni.set_field(status, "ordinal", rt.options().network ? 3 : 1);
+        return status;
+    });
+    impl("com/ea/nimble/INetwork", "isNetworkWifi", [this](jni::JavaCall&) -> std::uint64_t { return rt.options().network; });
+    impl("java/lang/Enum", "ordinal", [](jni::JavaCall& j) -> std::uint64_t { return j.jni.field(j.self, "ordinal").value_or(0); });
+
     // --- AndroidNotification ---------------------------------------------------------------
     // There are no local notifications on the desktop, so nothing is ever scheduled; the game
     // parses the list as a JSON array.

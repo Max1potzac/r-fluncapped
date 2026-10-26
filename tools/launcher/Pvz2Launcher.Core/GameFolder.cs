@@ -35,7 +35,8 @@ public sealed class GameFolder
 
     public string DisplayName => Settings.DisplayName ?? Name;
     public bool HasIcon => File.Exists(IconPath);
-    public bool HasRfLib => File.Exists(Path.Combine(LibDir, "libRFLib.so"));
+    /// The mod's own libraries (libRFLib, libSnowie...): part of the game, so always loaded.
+    public IReadOnlyList<string> ModLibraries => Info?.ModLibraries ?? [];
     public bool LibrariesReady => File.Exists(Path.Combine(LibDir, "libPVZ2.so"));
 
     /// The APK's libraries need taking out: there are none yet, or the APK is newer than them.
@@ -126,7 +127,7 @@ public sealed class GameFolder
 }
 
 /// What pvz2conv read from the APK (_apk_manifest.json).
-public sealed record ApkInfo(string Package, string VersionName, string VersionCode, string? Obb)
+public sealed record ApkInfo(string Package, string VersionName, string VersionCode, string? Obb, IReadOnlyList<string> ModLibraries)
 {
     public static ApkInfo? Read(string path)
     {
@@ -136,7 +137,10 @@ public sealed record ApkInfo(string Package, string VersionName, string VersionC
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var r = doc.RootElement;
             string Get(string name) => r.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : "";
-            return new ApkInfo(Get("package"), Get("version_name"), Get("version_code"), Get("obb") is { Length: > 0 } o ? o : null);
+            var mods = r.TryGetProperty("mod_libraries", out var m) && m.ValueKind == JsonValueKind.Array
+                ? m.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
+                : [];
+            return new ApkInfo(Get("package"), Get("version_name"), Get("version_code"), Get("obb") is { Length: > 0 } o ? o : null, mods);
         }
         catch (JsonException) { return null; }
     }

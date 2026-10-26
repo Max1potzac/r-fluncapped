@@ -18,7 +18,6 @@ public sealed class GameSettings
 
     // what the game does
     public bool Offline { get; set; }
-    public bool LoadRfLib { get; set; } = true;
 
     // code injections
     public bool Keybinds { get; set; }

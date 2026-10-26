@@ -66,7 +66,7 @@ The tests (`ctest --test-dir build`) include an arm64 guest library; building it
 ## Running
 
 You need the game's APK and its OBB (`main.675.com.ea.game.pvz2_rfl.obb` for 1.4.2). Drop the APK
-onto `tools/pvz2conv` to take its `lib/arm64-v8a/` out (it checks the four libraries are there),
+onto `tools/pvz2conv` to take its `lib/arm64-v8a/` out (it checks the libraries rfu needs are there),
 then:
 
 ```
@@ -97,7 +97,7 @@ Options:
 | `--angle` | draw through ANGLE: put `libEGL.dll` and `libGLESv2.dll` (from vcpkg's `angle` port, or a Chrome / Edge install) next to `rfu.exe`. Use it if your driver has no OpenGL ES profile |
 | `--no-vsync` | don't wait for the display between frames |
 | `--offline` | no network: the game skips its CDN update and plays offline |
-| `--no-rflib` | don't load `libRFLib.so` (vanilla code only) |
+| `--no-mod-libs` | don't load the mod's own libraries (vanilla code only). Without it, rfu loads every library in `--lib-dir` but the game's (`libPVZ2`, `libc++_shared`, `libNimble`) and Crashlytics', after libPVZ2: Reflourished's `libRFLib.so`, AltverZ's `libSnowie.so` |
 | `--package <name>`, `--version-code <n>` | for other builds of the game (default `com.ea.game.pvz2_rfl`, 675) |
 | `--log trace\|debug\|info\|warn\|error` | how much to log (default info) |
 | `--mount <guest path>=<host dir>` | make a folder visible to the game |

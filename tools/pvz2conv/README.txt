@@ -16,8 +16,10 @@ HOW TO USE
   once this has run the APK itself isn't needed. A file that is really an APK
   is recognised whatever its extension (.zip too). An XAPK / APKS bundle isn't
   unpacked: take the base .apk and the .obb out of it first. A 32-bit-only APK
-  or one missing libPVZ2 / libRFLib / libc++_shared / libNimble is reported as
-  a failure. When an APK and an OBB are dropped together, pvz2conv checks the
+  or one missing libPVZ2 / libc++_shared / libNimble is reported as a
+  failure. Any other library (but Crashlytics') is the mod's own code, such as
+  Reflourished's libRFLib or AltverZ's libSnowie: it's listed in the log and
+  in _apk_manifest.json ("mod_libraries"), and rfu loads it after libPVZ2. When an APK and an OBB are dropped together, pvz2conv checks the
   OBB is the one the APK asks for (main.<version code>.<package>.obb).
 
   The .obb is unpacked into a folder named

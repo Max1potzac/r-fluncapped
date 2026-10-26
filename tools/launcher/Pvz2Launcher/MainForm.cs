@@ -43,7 +43,6 @@ sealed class MainForm : Form, ILaunchUi
     readonly Panel _menu = new() { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(12) };
 
     const string KeybindsItem = "Keybinds (keybinds.txt)";
-    const string RfLibItem = "Load libRFLib (the mod's own code)";
 
     public MainForm(string launcherDir)
     {
@@ -212,6 +211,7 @@ sealed class MainForm : Form, ILaunchUi
             _name.Text = game.DisplayName;
             var info = game.Info;
             string version = info != null ? $"{info.Package}  version {info.VersionName} ({info.VersionCode})" : "";
+            if (game.ModLibraries.Count > 0) version += $"\nmod code: {string.Join(", ", game.ModLibraries)}";
             _status.Text = game.Problem() is { } problem ? $"{version}\n{problem}".Trim() : $"{version}\n{Path.GetFileName(game.Obb)}";
             _status.ForeColor = game.Problem() != null ? Color.Firebrick : SystemColors.ControlText;
 
@@ -226,7 +226,6 @@ sealed class MainForm : Form, ILaunchUi
 
             _injections.Items.Clear();
             _injections.Items.Add(KeybindsItem, s.Keybinds);
-            if (game.HasRfLib) _injections.Items.Add(RfLibItem, s.LoadRfLib);
             foreach (var p in game.PatchFiles())
                 _injections.Items.Add(new PatchItem(p), s.Patches.Contains(p.FileName, StringComparer.OrdinalIgnoreCase));
 
@@ -265,7 +264,6 @@ sealed class MainForm : Form, ILaunchUi
             switch (_injections.Items[i])
             {
                 case KeybindsItem: s.Keybinds = on; break;
-                case RfLibItem: s.LoadRfLib = on; break;
                 case PatchItem p when on: s.Patches.Add(p.Patch.FileName); break;
             }
         }

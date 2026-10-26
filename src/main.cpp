@@ -16,6 +16,7 @@
 
 #include <fmt/ranges.h>
 
+#include <algorithm>
 #include <cstdio>
 #ifdef _WIN32
 #include <io.h>
@@ -28,6 +29,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <set>
 
 namespace {
 
@@ -50,7 +52,7 @@ void usage() {
                  "  --icon <file.png>        the window's icon\n"
                  "  --title <text>           the window's title\n"
                  "  --version-name <x.y.z>   the APK's version name, which the game reports (default: 1.4.0)\n"
-                 "  --no-rflib               don't load libRFLib.so (run vanilla code only)\n"
+                 "  --no-mod-libs            don't load the mod's own libraries (libRFLib, libSnowie...): vanilla code\n"
                  "  --offline                no network: the game skips its CDN update and plays offline\n"
                  "  --log <level>            trace, debug, info (default), warn, error\n"
                  "  --log-file <file>        write the log (and the game's own output) to a file\n"
@@ -59,6 +61,22 @@ void usage() {
                  "  --screenshot <file.bmp>  with --frames: save the last frame\n"
                  "  --script <file>          scripted input for testing (see docs/runtime.md)\n"
                  "  --dump-patches <file>    write the libPVZ2.so offsets RFLib patched, one per line\n";
+}
+
+// The mod's own libraries in the APK's lib folder: every .so but the game's (libPVZ2 and what it
+// links) and Crashlytics', which the game dlopens itself. Reflourished has libRFLib.so, AltverZ
+// libSnowie.so.
+std::vector<std::filesystem::path> mod_libraries(const std::filesystem::path& lib_dir) {
+    static const std::set<std::string> game_libs{"libPVZ2.so", "libc++_shared.so", "libNimble.so"};
+    std::vector<std::filesystem::path> libs;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(lib_dir, ec)) {
+        std::string name = rfu::path_to_utf8(e.path().filename());
+        if (e.path().extension() != ".so" || game_libs.count(name) || name.rfind("libcrashlytics", 0) == 0) continue;
+        libs.push_back(e.path());
+    }
+    std::sort(libs.begin(), libs.end());
+    return libs;
 }
 
 rfu::log::Level parse_level(const std::string& s) {
@@ -107,7 +125,7 @@ int main(int argc, char** argv) {
     rfu::RuntimeOptions options;
     std::vector<std::pair<std::string, std::string>> mounts, overlays;
     std::vector<std::string> patch_files;
-    bool load_rflib = true;
+    bool load_mod_libs = true;
     std::string dump_patches;
     bool init_only = false;
     std::string log_file;
@@ -190,8 +208,8 @@ int main(int argc, char** argv) {
                 app.script = rfu::path_from_utf8(value());
             } else if (arg == "--screenshot") {
                 app.screenshot = rfu::path_from_utf8(value());
-            } else if (arg == "--no-rflib") {
-                load_rflib = false;
+            } else if (arg == "--no-mod-libs" || arg == "--no-rflib") {
+                load_mod_libs = false;
             } else if (arg == "--log-file") {
                 log_file = value();
             } else if (arg == "--log") {
@@ -256,8 +274,9 @@ int main(int argc, char** argv) {
         }
 
         // What the game's Java side does: System.loadLibrary() on libPVZ2 (bringing in its
-        // dependencies), JNI_OnLoad on each library that has one, then RFLib, which looks for
-        // libPVZ2 in /proc/self/maps and patches it.
+        // dependencies), JNI_OnLoad on each library that has one, then the mod's own library
+        // (Reflourished's libRFLib, AltverZ's libSnowie), which looks for libPVZ2 in
+        // /proc/self/maps and patches it.
         auto& pvz2 = rt.linker().load(options.lib_dir / "libPVZ2.so");
         CodeSnapshot snapshot;
         snapshot.take(rt.mem(), pvz2);
@@ -270,13 +289,16 @@ int main(int argc, char** argv) {
             auto version = rt.call(*onload, {vm, 0});
             rfu::log::info("{}: JNI_OnLoad returned {:#x}", name, version & 0xFFFFFFFF);
         }
-        if (load_rflib) {
-            auto rflib = options.lib_dir / "libRFLib.so";
-            if (std::filesystem::exists(rflib)) {
-                rt.linker().load(rflib);
+        if (load_mod_libs) {
+            auto mod_libs = mod_libraries(options.lib_dir);
+            if (mod_libs.empty()) rfu::log::info("no mod libraries in {}; running the game's own code only", rfu::path_to_utf8(options.lib_dir));
+            for (const auto& path : mod_libs) {
+                auto& m = rt.linker().load(path);
                 rt.run_initializers();
-            } else {
-                rfu::log::warn("no libRFLib.so in {}; running vanilla code only", rfu::path_to_utf8(options.lib_dir));
+                if (auto onload = m.find_export("JNI_OnLoad")) {
+                    auto version = rt.call(*onload, {vm, 0});
+                    rfu::log::info("{}: JNI_OnLoad returned {:#x}", rfu::path_to_utf8(path.filename()), version & 0xFFFFFFFF);
+                }
             }
         }
         rfu::log::info("all static initializers finished");

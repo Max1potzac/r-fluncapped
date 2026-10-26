@@ -43,6 +43,8 @@ void test_vfs() {
     EXPECT(vfs.absolute("/a/./b/../c//d") == "/a/c/d");
     EXPECT(rfu::path_to_utf8(*vfs.to_host("/sdcard/data/x/y.txt")) == "/host/data/x/y.txt");
     EXPECT(!vfs.to_host("/sdcard/database"));
+    EXPECT(vfs.is_mount_parent("/") && vfs.is_mount_parent("//sdcard") && vfs.is_mount_parent("sdcard"));
+    EXPECT(!vfs.is_mount_parent("/sdcard/data") && !vfs.is_mount_parent("/sdcard/dat") && !vfs.is_mount_parent("/storage"));
 }
 
 void test_heap() {

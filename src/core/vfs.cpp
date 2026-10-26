@@ -79,6 +79,14 @@ std::optional<std::string> Vfs::to_guest(const std::filesystem::path& host_path)
     return std::nullopt;
 }
 
+bool Vfs::is_mount_parent(const std::string& guest_path) const {
+    std::string path = absolute(guest_path);
+    if (path == "/") return true;
+    for (const auto& m : mounts_)
+        if (m.guest.size() > path.size() && m.guest.compare(0, path.size(), path) == 0 && m.guest[path.size()] == '/') return true;
+    return false;
+}
+
 const Vfs::Generator* Vfs::virtual_file(const std::string& guest_path) const {
     std::string path = absolute(guest_path);
     for (const auto& [name, gen] : virtual_)

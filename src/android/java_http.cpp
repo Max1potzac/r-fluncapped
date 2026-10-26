@@ -5,6 +5,7 @@
 #include "platform/http.h"
 #include "runtime.h"
 
+#include <cstdlib>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -54,6 +55,13 @@ void run(HttpState& s, Transaction& t) {
         args.insert(args.end(), extra.begin(), extra.end());
         jni.call_native(kTransaction, name, t.self, args);
     };
+    // For testing against a local copy of a server: RFU_URL_REWRITE=<prefix>=<replacement>.
+    if (const char* rw = std::getenv("RFU_URL_REWRITE")) {
+        std::string_view v(rw);
+        auto eq = v.find('=');
+        if (eq != std::string_view::npos && t.request.url.starts_with(v.substr(0, eq)))
+            t.request.url = std::string(v.substr(eq + 1)) + t.request.url.substr(eq);
+    }
     log::debug("http: {} {}", t.request.method, t.request.url);
     if (!s.online) {
         fire("HttpTransactionError");

@@ -27,6 +27,9 @@ public:
     std::optional<std::filesystem::path> to_host(const std::string& guest_path) const;
     std::optional<std::string> to_guest(const std::filesystem::path& host_path) const;
     const Generator* virtual_file(const std::string& guest_path) const;
+    // True for "/" and the directories above a mount point ("/storage" when
+    // "/storage/emulated/0" is mounted): they exist for the guest without a host directory.
+    bool is_mount_parent(const std::string& guest_path) const;
 
     const std::string& cwd() const { return cwd_; }
     void set_cwd(std::string path) { cwd_ = absolute(path); }

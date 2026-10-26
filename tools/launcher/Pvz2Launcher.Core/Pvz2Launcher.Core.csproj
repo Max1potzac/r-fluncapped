@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Everything the launcher does that isn't a window: game folders, settings, mods, the update
+       check and rfu's command line. Plain .NET, so it builds and is tested on any OS. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Pvz2Launcher</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pvz2Launcher" />
+    <InternalsVisibleTo Include="Pvz2Launcher.Tests" />
+  </ItemGroup>
+
+  <!-- RTON both ways, shared with pvz2conv -->
+  <ItemGroup>
+    <Compile Include="../../pvz2conv/BinReader.cs" Link="pvz2conv/BinReader.cs" />
+    <Compile Include="../../pvz2conv/Rton.cs" Link="pvz2conv/Rton.cs" />
+    <Compile Include="../../pvz2conv/RtonWriter.cs" Link="pvz2conv/RtonWriter.cs" />
+  </ItemGroup>
+
+</Project>

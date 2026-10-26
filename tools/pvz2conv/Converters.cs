@@ -29,6 +29,13 @@ static class Converters
         _ => null,
     };
 
+    /// A JSON file that stands for an RTON (x.json), as opposed to x.pam.json and x.popfx.json.
+    public static bool IsRtonJson(string path)
+    {
+        string name = Path.GetFileName(path).ToLowerInvariant();
+        return name.EndsWith(".json") && !name.EndsWith(".pam.json") && !name.EndsWith(".popfx.json") && !name.StartsWith("_");
+    }
+
     // community convention: x.rton -> x.json, x.pam -> x.pam.json, x.popfx -> x.popfx.json
     public static string JsonName(string stem, string kind) => kind switch
     {

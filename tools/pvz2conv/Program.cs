@@ -1,15 +1,17 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using Pvz2Conv;
 
-// pvz2conv - unpacks PvZ2 .apk and .obb files and converts RTON, PAM, POPFX to JSON and PTX to PNG.
-// Drag an .apk, an .obb, files or folders onto the exe.
+// pvz2conv - unpacks PvZ2 .apk and .obb files and converts RTON, PAM, POPFX to JSON and PTX to PNG,
+// and JSON back to RTON. Drag an .apk, an .obb, files or folders onto the exe.
 
 var inputs = new List<string>();
 string? outDir = null;
 bool pause = !Console.IsInputRedirected;
 bool overwrite = true;
 bool deleteOriginal = false;
+bool toRton = false;
 var obbOptions = new ObbOptions();
 
 for (int i = 0; i < args.Length; i++)
@@ -23,6 +25,7 @@ for (int i = 0; i < args.Length; i++)
         case "--only" when i + 1 < args.Length: obbOptions.Only = args[++i]; break;
         case "--list": obbOptions.ListOnly = true; break;
         case "--no-convert": obbOptions.Convert = false; break;
+        case "--to-rton": toRton = true; break;
         case "--help": case "-h": case "/?": PrintUsage(); return 0;
         default:
             if (args[i].StartsWith("--")) { Console.Error.WriteLine($"unknown option {args[i]}"); PrintUsage(); return 2; }
@@ -55,7 +58,7 @@ foreach (var input in inputs)
         logDir ??= outDir ?? full;
         Log($"scanning {full}");
         var files = Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories)
-            .Where(f => Converters.KindFromExtension(f) != null)
+            .Where(f => toRton ? Converters.IsRtonJson(f) : Converters.KindFromExtension(f) != null)
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
         foreach (var f in files)
             ConvertOne(f, outDir == null ? null : Path.Combine(outDir, Path.GetRelativePath(full, Path.GetDirectoryName(f)!)));
@@ -127,6 +130,12 @@ void ConvertOne(string path, string? targetDir)
     try { data = File.ReadAllBytes(path); }
     catch (Exception e) { Log($"FAIL {path}: {e.Message}"); failed++; return; }
 
+    if (Converters.IsRtonJson(path))
+    {
+        ToRton(path, data, targetDir);
+        return;
+    }
+
     // Trust the signature over the extension; fall back to the extension
     // only to give a useful message.
     string? kind = Converters.KindFromSignature(data);
@@ -168,6 +177,29 @@ void ConvertOne(string path, string? targetDir)
     }
 }
 
+// x.json -> x.rton, next to it (or in targetDir)
+void ToRton(string path, byte[] data, string? targetDir)
+{
+    string dir = targetDir ?? Path.GetDirectoryName(path)!;
+    string outName = Path.GetFileNameWithoutExtension(path) + ".rton";
+    string outPath = Path.Combine(dir, outName);
+    if (!overwrite && File.Exists(outPath)) { skipped++; return; }
+    try
+    {
+        byte[] rton = RtonWriter.FromJson(data);
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Converters.LongPath(outPath), rton);
+        if (deleteOriginal) File.Delete(path);
+        converted++;
+        Log($"ok   json  {path} -> {outName}");
+    }
+    catch (Exception e) when (e is JsonException or FormatException or IOException or UnauthorizedAccessException)
+    {
+        Log($"FAIL json  {path}: {e.Message}");
+        failed++;
+    }
+}
+
 static bool IsObb(string path)
 {
     string ext = Path.GetExtension(path).ToLowerInvariant();
@@ -202,6 +234,7 @@ static void PrintUsage()
           RTON, PAM and POPFX files become JSON. _obb_manifest.json lists every group.
           Other files and folders: RTON, PAM and POPFX are converted to JSON next to
           each file. Folders are searched recursively for *.rton, *.pam and *.popfx.
+          A .json file (one that came from an RTON) is converted back to .rton.
           --out <dir>          write everything under <dir> instead
           --converted-only     don't keep the original of a file that converted
                                (OBB: PTX/RTON/PAM/POPFX aren't written; files: the
@@ -210,6 +243,9 @@ static void PrintUsage()
           --list               OBB: list the groups, extract nothing
           --no-convert         OBB: extract files as they are, convert nothing
           --skip-existing      don't overwrite JSON files that already exist
+          --to-rton            folders: convert *.json back to RTON (a single .json
+                               file given on its own always is; .pam.json and
+                               .popfx.json are left alone)
           --no-pause           don't wait for Enter at the end (for scripts)
         """);
 }

@@ -1,7 +1,9 @@
 #include "platform/window.h"
 
 #include "core/log.h"
+#include "core/vfs.h"
 #include "platform/gles.h"
+#include "platform/png.h"
 
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -128,6 +130,15 @@ Window::Window(const WindowOptions& options) {
     load_gles([](const char* name) { return SDL_GL_GetProcAddress(name); });
     SDL_StopTextInput();
 
+    if (!options.icon.empty()) set_icon(options.icon);
+    for (const auto& bind : options.keybinds) {
+        SDL_Keycode key = SDL_GetKeyFromName(bind.key.c_str());
+        if (key == SDLK_UNKNOWN) log::warn("keybinds: SDL doesn't know a key called \"{}\"", bind.key);
+        else if (key == SDLK_ESCAPE || key == SDLK_F11) log::warn("keybinds: {} is taken (back button, full screen)", bind.key);
+        else binds_.emplace_back(key, bind);
+    }
+    if (!binds_.empty()) log::info("{} keybinds", binds_.size());
+
     game_w_ = options.game_width;
     game_h_ = options.game_height;
     if (game_w_ <= 0 || game_h_ <= 0) default_game_size(window_, options.low_assets, game_w_, game_h_);
@@ -253,7 +264,21 @@ void Window::swap() {
     if (scissor) gl.Enable(GL_SCISSOR_TEST);
 }
 
+void Window::set_icon(const std::filesystem::path& file) {
+    std::string error;
+    auto image = decode_png_file(file, error);
+    if (!image) return log::warn("window icon {}: {}", path_to_utf8(file), error);
+    // A window icon doesn't need a launcher icon's 1200 pixels.
+    image = shrink(*image, 256);
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(image->rgba.data(), image->width, image->height, 32, image->width * 4,
+                                                              SDL_PIXELFORMAT_RGBA32);
+    if (!surface) return log::warn("window icon: {}", SDL_GetError());
+    SDL_SetWindowIcon(window_, surface);
+    SDL_FreeSurface(surface);
+}
+
 void Window::set_text_input(bool on) {
+    text_input_ = on;
     if (on) SDL_StartTextInput();
     else SDL_StopTextInput();
 }
@@ -322,6 +347,24 @@ std::vector<Input> Window::poll() {
                 bool fs = SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN_DESKTOP;
                 SDL_SetWindowFullscreen(window_, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
                 break;
+            }
+            // A keybind is a finger (or the back button) while the game isn't taking typing.
+            if (!text_input_) {
+                auto bind = std::find_if(binds_.begin(), binds_.end(), [&](const auto& b) { return b.first == ev.key.keysym.sym; });
+                if (bind != binds_.end()) {
+                    if (ev.key.repeat) break;
+                    const KeyBind& b = bind->second;
+                    if (b.action == KeyBind::Action::Back) {
+                        if (down) out.push_back(BackInput{});
+                    } else {
+                        // Pointer ids from 100, clear of the mouse (1) and fingers (2 and up).
+                        int id = 100 + static_cast<int>(bind - binds_.begin());
+                        float x = std::clamp(b.surface_x(game_w_), 0.0f, static_cast<float>(game_w_ - 1));
+                        float y = std::clamp(b.surface_y(game_h_), 0.0f, static_cast<float>(game_h_ - 1));
+                        out.push_back(TouchInput{down ? TouchInput::Began : TouchInput::Ended, id, x, y});
+                    }
+                    break;
+                }
             }
             int code = android_keycode(ev.key.keysym.sym);
             if (code) {

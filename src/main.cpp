@@ -7,6 +7,7 @@
 // the runtime doesn't implement.
 
 #include "android/app.h"
+#include "core/patches.h"
 #include "core/log.h"
 #include "jni/jni.h"
 #include "platform/gles.h"
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 
 namespace {
@@ -42,6 +44,12 @@ void usage() {
                  "  --angle                  draw through ANGLE (libEGL.dll and libGLESv2.dll next to rfu)\n"
                  "  --no-vsync               don't wait for the display between frames\n"
                  "  --mount <guest>=<host>   make a host directory visible to the game\n"
+                 "  --overlay <guest>=<host> lay a host directory over a guest one, read-only (mods); later ones win\n"
+                 "  --keybinds <file>        keys that tap spots of the screen (see src/platform/keybinds.h)\n"
+                 "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
+                 "  --icon <file.png>        the window's icon\n"
+                 "  --title <text>           the window's title\n"
+                 "  --version-name <x.y.z>   the APK's version name, which the game reports (default: 1.4.0)\n"
                  "  --no-rflib               don't load libRFLib.so (run vanilla code only)\n"
                  "  --offline                no network: the game skips its CDN update and plays offline\n"
                  "  --log <level>            trace, debug, info (default), warn, error\n"
@@ -97,7 +105,8 @@ struct CodeSnapshot {
 
 int main(int argc, char** argv) {
     rfu::RuntimeOptions options;
-    std::vector<std::pair<std::string, std::string>> mounts;
+    std::vector<std::pair<std::string, std::string>> mounts, overlays;
+    std::vector<std::string> patch_files;
     bool load_rflib = true;
     std::string dump_patches;
     bool init_only = false;
@@ -118,6 +127,27 @@ int main(int argc, char** argv) {
                 auto eq = m.find('=');
                 if (eq == std::string::npos) throw std::invalid_argument("--mount wants <guest>=<host>");
                 mounts.emplace_back(m.substr(0, eq), m.substr(eq + 1));
+            } else if (arg == "--overlay") {
+                std::string m = value();
+                auto eq = m.find('=');
+                if (eq == std::string::npos) throw std::invalid_argument("--overlay wants <guest>=<host>");
+                overlays.emplace_back(m.substr(0, eq), m.substr(eq + 1));
+            } else if (arg == "--patch") {
+                patch_files.push_back(value());
+            } else if (arg == "--keybinds") {
+                std::string file = value();
+                std::ifstream in(rfu::path_from_utf8(file));
+                if (!in) throw std::invalid_argument("can't read " + file);
+                std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                std::vector<std::string> errors;
+                app.window.keybinds = rfu::platform::parse_keybinds(text, errors);
+                for (const auto& e : errors) std::cerr << "rfu: " << file << ": " << e << "\n";
+            } else if (arg == "--icon") {
+                app.window.icon = rfu::path_from_utf8(value());
+            } else if (arg == "--title") {
+                app.window.title = value();
+            } else if (arg == "--version-name") {
+                app.version_name = value();
             } else if (arg == "--dump-patches") {
                 dump_patches = value();
             } else if (arg == "--offline") {
@@ -220,6 +250,10 @@ int main(int argc, char** argv) {
         auto& rt = *new rfu::Runtime(options);
         rfu::android::mount_storage(rt, app);
         for (const auto& [guest, host] : mounts) rt.vfs().mount(guest, rfu::path_from_utf8(host));
+        for (const auto& [guest, host] : overlays) {
+            rt.vfs().overlay(guest, rfu::path_from_utf8(host));
+            rfu::log::info("overlay: {} over {}", host, guest);
+        }
 
         // What the game's Java side does: System.loadLibrary() on libPVZ2 (bringing in its
         // dependencies), JNI_OnLoad on each library that has one, then RFLib, which looks for
@@ -252,6 +286,18 @@ int main(int argc, char** argv) {
         if (!dump_patches.empty()) {
             std::ofstream out(rfu::path_from_utf8(dump_patches));
             for (auto a : sites) out << fmt::format("{:#x}\n", a - pvz2.base());
+        }
+
+        // Code patches go on after RFLib's own, so they can check (and build on) what it did, and
+        // aren't counted as its.
+        for (const auto& file : patch_files) {
+            std::ifstream in(rfu::path_from_utf8(file));
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            std::vector<std::string> errors;
+            auto patches = rfu::parse_patches(text, errors);
+            std::string why = !in ? "can't read it" : !errors.empty() ? errors.front() : rfu::apply_patches(rt, patches);
+            if (why.empty()) rfu::log::info("patch {}: {} changes applied", file, patches.size());
+            else rfu::log::warn("patch {} left out: {}", file, why);
         }
 
         const auto& missing = rt.linker().missing();

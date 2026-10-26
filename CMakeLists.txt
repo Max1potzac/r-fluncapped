@@ -15,6 +15,7 @@ add_library(rfu_core STATIC
     src/core/module.cpp
     src/core/linker.cpp
     src/core/log.cpp
+    src/core/patches.cpp
     src/core/vfs.cpp
     src/cpu/cpu.cpp
     src/jni/jni.cpp
@@ -30,6 +31,9 @@ add_library(rfu_core STATIC
     src/shims/libdl.cpp
     src/shims/libz.cpp
     src/runtime.cpp
+    # SDL-free parts of src/platform, here so the tests reach them
+    src/platform/keybinds.cpp
+    src/platform/png.cpp
 )
 target_include_directories(rfu_core PUBLIC src)
 find_package(ZLIB REQUIRED)

@@ -66,6 +66,10 @@ put them elsewhere). The game's own folders are inside it: `external/files` is w
 `/sdcard/Android/data/com.ea.game.pvz2_rfl/files`, so custom levels go in
 `external/files/No_Backup/CDN.9.6/levels`.
 
+Or use the launcher (`tools/launcher`): a menu for each game you have (Reflourished, AltverZ...)
+that takes the libraries out of the APK, checks for a new version the way the game does, and
+starts `rfu` with your settings, keybinds, code patches and custom content. See its README.txt.
+
 Controls: the left mouse button is your finger, Escape (or the mouse's back button) is Android's
 back button, F11 toggles full screen. When the game shows its keyboard, type.
 
@@ -85,6 +89,11 @@ Options:
 | `--package <name>`, `--version-code <n>` | for other builds of the game (default `com.ea.game.pvz2_rfl`, 675) |
 | `--log trace\|debug\|info\|warn\|error` | how much to log (default info) |
 | `--mount <guest path>=<host dir>` | make a folder visible to the game |
+| `--overlay <guest path>=<host dir>` | lay a folder over one of the game's, read-only: custom levels, strings and other content without changing the game's files (later ones win) |
+| `--keybinds <file>` | keys that act as a finger on a spot of the screen, or as the back button (see `src/platform/keybinds.h`) |
+| `--patch <file>` | code patches to apply after the libraries load, checked against the bytes they expect (see `src/core/patches.h`) |
+| `--icon <file.png>`, `--title <text>` | the window's icon (pvz2conv takes the game's out of the APK) and title |
+| `--version-name <x.y.z>` | the APK's version name, which the game reports (default 1.4.0) |
 | `--init-only` | stop after loading and initialising the libraries, and list unimplemented imports |
 | `--script <file>`, `--frames <n>`, `--screenshot <file.bmp>` | scripted input and screenshots, for testing (see [docs/runtime.md](docs/runtime.md)) |
 | `--dump-patches <file>` | write the libPVZ2.so offsets RFLib patched |
@@ -100,6 +109,7 @@ Options:
 | `src/android` | The game's Java side: activity lifecycle, render loop, input queue, preferences, paths, web requests |
 | `src/platform` | SDL2 window and input, OpenGL ES and OpenSL ES for the guest, ETC texture decoding, the host HTTP client |
 | `tests` | Host unit tests and `tests/guest/testlib.c`, an arm64 library run under the JIT |
-| `tools/pvz2conv` | C# tool that takes the libraries out of the game's .apk, unpacks its .obb and converts PTX to PNG and RTON, PAM, POPFX to JSON (see its README.txt) |
+| `tools/pvz2conv` | C# tool that takes the libraries and icon out of the game's .apk, unpacks its .obb, converts PTX to PNG and RTON, PAM, POPFX to JSON, and JSON back to RTON (see its README.txt) |
+| `tools/launcher` | C# launcher: a menu per game, the update check, custom content (mods), keybinds and code patches (see its README.txt) |
 
 See [docs/runtime.md](docs/runtime.md) for how the pieces fit together.

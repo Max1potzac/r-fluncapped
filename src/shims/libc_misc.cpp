@@ -425,6 +425,31 @@ void register_libc_misc(ShimRegistry& reg) {
         s = s * 6364136223846793005ull + 1442695040888963407ull;
         c.ret((s >> 33) & 0x7FFFFFFF);
     });
+    reg.add("srand48", [](CallContext& c) { c.rt().state<Rand>().state = c.x(0); });
+    reg.add("lrand48", [](CallContext& c) {
+        auto& s = c.rt().state<Rand>().state;
+        s = s * 6364136223846793005ull + 1442695040888963407ull;
+        c.ret((s >> 33) & 0x7FFFFFFF);
+    });
+    reg.add("getpagesize", [](CallContext& c) { c.ret(GuestMemory::kPageSize); });
+    // mincore(addr, length, vec): everything counts as resident.
+    reg.add("mincore", [](CallContext& c) {
+        std::uint64_t pages = (c.x(1) + GuestMemory::kPageSize - 1) / GuestMemory::kPageSize;
+        std::memset(c.mem().host(c.x(2)), 1, pages);
+        c.ret(0);
+    });
+    reg.add("sysinfo", [](CallContext& c) {
+        // struct sysinfo { long uptime; ulong loads[3]; ulong totalram, freeram, sharedram, bufferram,
+        //                  totalswap, freeswap; u16 procs; ...; ulong totalhigh, freehigh; u32 mem_unit; }
+        GuestAddr info = c.x(0);
+        std::memset(c.mem().host(info), 0, 112);
+        c.mem().write<std::int64_t>(info, 3600);
+        c.mem().write<std::uint64_t>(info + 32, 4ull << 30);
+        c.mem().write<std::uint64_t>(info + 40, 2ull << 30);
+        c.mem().write<std::uint16_t>(info + 80, 1);
+        c.mem().write<std::uint32_t>(info + 104, 1);
+        c.ret(0);
+    });
     reg.add("syscall", [](CallContext& c) {
         switch (c.x(0)) {
         case 98: return c.ret(static_cast<std::uint64_t>(futex(c)));  // futex: errors are -errno

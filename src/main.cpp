@@ -73,6 +73,10 @@ std::vector<std::filesystem::path> mod_libraries(const std::filesystem::path& li
     for (const auto& e : std::filesystem::directory_iterator(lib_dir, ec)) {
         std::string name = rfu::path_to_utf8(e.path().filename());
         if (e.path().extension() != ".so" || game_libs.count(name) || name.rfind("libcrashlytics", 0) == 0) continue;
+        // Some mods keep data next to their code under a library's name (libSnowie.config.so).
+        char magic[4] = {};
+        std::ifstream(e.path(), std::ios::binary).read(magic, 4);
+        if (std::memcmp(magic, "\x7f" "ELF", 4) != 0) continue;
         libs.push_back(e.path());
     }
     std::sort(libs.begin(), libs.end());

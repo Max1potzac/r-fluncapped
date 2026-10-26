@@ -17,8 +17,16 @@ sealed class Apk
     // code (Reflourished's libRFLib, AltverZ's libSnowie), which rfu loads after it.
     static readonly string[] Required = ["libPVZ2.so", "libc++_shared.so", "libNimble.so"];
 
-    static bool IsModLibrary(string name) =>
-        !Required.Contains(name) && !name.StartsWith("libcrashlytics", StringComparison.Ordinal) && name.EndsWith(".so");
+    static bool IsModLibrary(string name, bool elf) =>
+        elf && !Required.Contains(name) && !name.StartsWith("libcrashlytics", StringComparison.Ordinal) && name.EndsWith(".so");
+
+    /// Some mods keep data files named like libraries next to their code (AltverZ's libSnowie.config.so).
+    static bool IsElf(string path)
+    {
+        Span<byte> magic = stackalloc byte[4];
+        using var f = File.OpenRead(path);
+        return f.Read(magic) == 4 && magic.SequenceEqual((ReadOnlySpan<byte>)[0x7F, (byte)'E', (byte)'L', (byte)'F']);
+    }
 
     readonly Action<string> _log;
     readonly string? _outDir;
@@ -73,7 +81,7 @@ sealed class Apk
             return false;
         }
 
-        var libs = new List<(string Name, long Size, string Sha256)>();
+        var libs = new List<(string Name, long Size, string Sha256, bool Elf)>();
         var assets = new List<(string Path, long Size)>();
         int dex = 0;
         foreach (var e in zip.Entries)
@@ -82,7 +90,8 @@ sealed class Apk
             if (e.FullName.StartsWith(LibDir) && e.FullName.IndexOf('/', LibDir.Length) < 0)
             {
                 string dest = Path.Combine(outDir, "lib", "arm64-v8a", e.Name);
-                libs.Add((e.Name, e.Length, Extract(e, dest)));
+                string sha = Extract(e, dest);
+                libs.Add((e.Name, e.Length, sha, IsElf(dest)));
             }
             else if (e.FullName.StartsWith("assets/"))
             {
@@ -104,7 +113,7 @@ sealed class Apk
         _log($"ok   {assets.Count} files in assets/{(dex > 0 ? $" ({dex} .dex left out)" : "")}");
         var missing = Required.Where(r => !libs.Any(l => l.Name == r)).ToList();
         if (missing.Count > 0) _log($"FAIL rfu needs {string.Join(", ", missing)}, which this APK doesn't have");
-        var modLibs = libs.Where(l => IsModLibrary(l.Name)).Select(l => l.Name).ToList();
+        var modLibs = libs.Where(l => IsModLibrary(l.Name, l.Elf)).Select(l => l.Name).ToList();
         _log(modLibs.Count > 0 ? $"     the mod's own code: {string.Join(", ", modLibs)} (rfu loads it after libPVZ2)" : "     no mod libraries: the game's own code only");
 
         WriteManifest(outDir, info, abis, libs, assets, icon);
@@ -164,7 +173,7 @@ sealed class Apk
     static string SafeRelative(string name) =>
         Path.Combine(name.Split('/').Where(p => p is not ("" or "." or "..")).ToArray());
 
-    void WriteManifest(string outDir, Info info, List<string> abis, List<(string Name, long Size, string Sha256)> libs, List<(string Path, long Size)> assets, string? icon)
+    void WriteManifest(string outDir, Info info, List<string> abis, List<(string Name, long Size, string Sha256, bool Elf)> libs, List<(string Path, long Size)> assets, string? icon)
     {
         Directory.CreateDirectory(outDir);
         using var fs = File.Create(Path.Combine(outDir, "_apk_manifest.json"));
@@ -182,7 +191,7 @@ sealed class Apk
         foreach (var a in abis) w.WriteStringValue(a);
         w.WriteEndArray();
         w.WriteStartArray("mod_libraries");
-        foreach (var l in libs.Where(l => IsModLibrary(l.Name))) w.WriteStringValue(l.Name);
+        foreach (var l in libs.Where(l => IsModLibrary(l.Name, l.Elf))) w.WriteStringValue(l.Name);
         w.WriteEndArray();
         w.WriteStartArray("libraries");
         foreach (var l in libs)

@@ -93,7 +93,7 @@ void GameFolderTest()
 
     g.EnsureKeybindsFile();
     Expect(File.ReadAllText(g.KeybindsPath).Contains("tap"), "keybinds sample");
-    Expect(File.ReadAllText(g.KeybindsPath).Contains("1 seed 1") && File.ReadAllText(g.KeybindsPath).Contains("D shovel"), "keybinds sample: seeds and shovel on");
+    Expect(File.ReadAllText(g.KeybindsPath).Contains("1 seed 1") && File.ReadAllText(g.KeybindsPath).Contains("D shovel") && File.ReadAllText(g.KeybindsPath).Contains("Right scroll right"), "keybinds sample: seeds, shovel and scrolling on");
 
     Expect(g.ModLibraries.Count == 0, "no mod libraries listed");
     File.WriteAllText(Path.Combine(g.Dir, "_apk_manifest.json"),

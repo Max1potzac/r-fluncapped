@@ -139,8 +139,10 @@ call's Java arguments decoded from whichever of the three calling conventions na
   by `Graphics_SetFramerate`, `Native_onDrawFrame`, swap. Everything runs on the main thread, which
   is both Android's UI thread and its GL thread; the game's own threads are guest threads.
 - **Keybinds.** `--keybinds` maps keys to a touch at a point of the game's surface (pointer
-  ids from 100, held while the key is), to the back button, or to a seed packet or the shovel
-  (`GameKeyInput`, handled by `src/game/game_keys.cpp`). `Window::poll` turns them into the
+  ids from 100, held while the key is), to the back button, to a seed packet or the shovel
+  (`GameKeyInput`, handled by `src/game/game_keys.cpp`), or to scrolling: a finger that goes down
+  under the mouse and drags a little each frame while the key is held (`ScrollDrag`). The mouse
+  wheel makes the same drags, a few frames a notch (pointer 97). `Window::poll` turns them into the
   same input as the mouse; they're off while the game's keyboard is up.
 - **Input.** `AndroidUIEventManager` serialises touches, keys, text, the back button and gestures
   into a direct ByteBuffer the game passes to `UI_ProcessEvents`: the event count at offset 0,
@@ -209,6 +211,7 @@ repeated without a person at the mouse (and on a machine without one). Each line
 | `screenshot <file.bmp>` | save the frame |
 | `peek <hex address> <bytes>` | log guest memory as words and floats |
 | `seed <n>`, `shovel` | a seed packet's or the shovel's keybind, held for three frames |
+| `scroll <dir> <frames> [speed] [x y]` | a scroll keybind held for `frames` frames, the mouse at (x, y) (the middle by default) |
 | `quit` | close the window |
 
 rfu keeps reading the file while the game runs, so lines appended to it drive the game live; a

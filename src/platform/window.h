@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -34,6 +35,8 @@ struct WindowOptions {
 // The pointer id of the mouse moving with no button down (WindowOptions::hover): the game
 // sees a finger sliding over the screen, which collects sun, coins and plant food it passes.
 constexpr int kHoverPointer = 99;
+// The pointer id of the mouse wheel: each notch is a short drag under the cursor (Shift: sideways).
+constexpr int kWheelPointer = 97;
 
 struct TouchInput {
     enum Phase { Began = 0, Moved = 1, Stationary = 2, Ended = 3, Cancelled = 4 } phase;
@@ -97,6 +100,8 @@ private:
     void drawable_size(int& w, int& h) const;
     // Window points to the game's surface pixels, through the letterbox swap() draws.
     void to_surface(float wx, float wy, float& x, float& y) const;
+    // Where the mouse is, in the game's surface pixels.
+    void mouse_on_surface(float& x, float& y) const;
 
     SDL_Window* window_ = nullptr;
     int game_w_ = 0, game_h_ = 0;
@@ -106,6 +111,9 @@ private:
     bool text_input_ = false;
     bool hover_ = false;
     std::vector<std::pair<int, KeyBind>> binds_;  // by SDL key code
+    std::vector<std::pair<int, ScrollDrag>> scrolls_;  // scroll keys held, by their pointer id
+    std::optional<ScrollDrag> wheel_;  // the mouse wheel's drag (kWheelPointer)
+    int wheel_frames_ = 0, wheel_dir_x_ = 0, wheel_dir_y_ = 0;
 };
 
 }  // namespace rfu::platform

@@ -357,6 +357,24 @@ void App::load_script(const fs::path& file, std::uint64_t now) {
             ls >> code;
             script.emplace(frame, Scripted{platform::Input{platform::KeyInput{code, code == 66 ? 10u : 0u, true, 0}}, {}});
             script.emplace(frame + 1, Scripted{platform::Input{platform::KeyInput{code, code == 66 ? 10u : 0u, false, 0}}, {}});
+        } else if (verb == "scroll") {
+            // A scroll keybind held for `frames` frames with the mouse at (x, y), the middle by default:
+            // "scroll <left|right|up|down> <frames> [speed] [x y]".
+            std::string dir, speed = "2%";
+            int frames = 30;
+            float x = window->width() / 2.0f, y = window->height() / 2.0f;
+            ls >> dir >> frames >> speed >> x >> y;
+            std::vector<std::string> errors;
+            auto binds = platform::parse_keybinds("K scroll " + dir + " " + speed, errors);
+            if (binds.empty()) throw std::runtime_error(fmt::format("{}:{}: {}", path_to_utf8(file), line_no, errors.at(0)));
+            platform::ScrollDrag drag(binds[0], window->width(), window->height(), x, y);
+            auto add = [&](std::uint64_t f, const std::vector<platform::ScrollDrag::Step>& steps) {
+                for (const auto& step : steps)
+                    touch(f, step.phase == platform::ScrollDrag::Step::Down ? TouchInput::Began : step.phase == platform::ScrollDrag::Step::Move ? TouchInput::Moved : TouchInput::Ended,
+                          step.x, step.y);
+            };
+            for (int i = 0; i < frames; ++i) add(frame + i, drag.frame());
+            add(frame + frames, drag.release());
         } else if (verb == "seed" || verb == "shovel") {
             // A game keybind pressed for three frames: "seed <n>" or "shovel".
             int slot = 0;

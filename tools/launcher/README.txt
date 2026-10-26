@@ -78,12 +78,15 @@ KEYBINDS (keybinds.txt)
   Tick "Keybinds" and press "Edit keybinds". One key per line:
     1 seed 1            1 picks the first seed packet (top of the seed bank)
     D shovel            D picks up the shovel; D again puts it back
+    Right scroll right  hold Right to scroll what's under the mouse (the
+                        world map, the almanac); "scroll right 3%" is faster
     1 tap 5% 18%        hold 1 = a finger at 5% across, 18% down
     Space tap 640 360   in pixels of the game's screen (its resolution)
     Backspace back      Android's back button
   seed and shovel find the packet or the shovel wherever the level puts
-  them; a new keybinds.txt starts with 1-9 for the packets and D for the
-  shovel (an older one keeps what it has: add those lines to it).
+  them. A new keybinds.txt starts with 1-9 for the packets, D for the
+  shovel and the arrow keys for scrolling (an older one keeps what it has:
+  add those lines to it). The mouse wheel scrolls too, sideways with Shift.
   Key names are SDL's (A, 1, Space, F1, Left_Shift, Keypad_1). Keybinds are
   off while the game shows its keyboard, so typing a name still works.
 

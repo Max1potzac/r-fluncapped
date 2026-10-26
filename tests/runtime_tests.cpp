@@ -98,6 +98,25 @@ void test_keybinds() {
     EXPECT(binds.size() == 2 && errors.size() == 2);
     EXPECT(binds[0].action == rfu::platform::KeyBind::Action::Seed && binds[0].slot == 3);
     EXPECT(binds[1].key == "D" && binds[1].action == rfu::platform::KeyBind::Action::Shovel);
+
+    errors.clear();
+    binds = rfu::platform::parse_keybinds("Right scroll right\nUp scroll up 10\nX scroll sideways\n", errors);
+    EXPECT(binds.size() == 2 && errors.size() == 1);
+    EXPECT(binds[0].dir_x == 1 && binds[0].speed_fraction && binds[1].dir_y == -1 && !binds[1].speed_fraction);
+    // Scrolling right drags the finger left from the point, and lifts it near the edge.
+    rfu::platform::ScrollDrag drag(binds[0], 1000, 500, 500, 250);
+    auto steps = drag.frame();
+    EXPECT(steps.size() == 1 && steps[0].phase == rfu::platform::ScrollDrag::Step::Down && steps[0].x == 500 && steps[0].y == 250);
+    steps = drag.frame();
+    EXPECT(steps.size() == 1 && steps[0].phase == rfu::platform::ScrollDrag::Step::Move && steps[0].x == 490);
+    int frames = 0;
+    while (frames < 100 && drag.frame().back().phase != rfu::platform::ScrollDrag::Step::Up) ++frames;
+    EXPECT(frames == 39);  // 490 down to 100, ten pixels a frame
+    EXPECT(drag.frame()[0].phase == rfu::platform::ScrollDrag::Step::Down && drag.release().size() == 1 && drag.release().empty());
+    // From a point with no room to the left, it starts from the middle across, at the point's height.
+    rfu::platform::ScrollDrag edge(binds[0], 1000, 500, 150, 400);
+    steps = edge.frame();
+    EXPECT(steps[0].x == 500 && steps[0].y == 400);
 }
 
 void test_patches() {

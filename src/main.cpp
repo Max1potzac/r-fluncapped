@@ -50,7 +50,7 @@ void usage() {
                  "  --no-vsync               don't wait for the display between frames\n"
                  "  --mount <guest>=<host>   make a host directory visible to the game\n"
                  "  --overlay <guest>=<host> lay a host directory over a guest one, read-only (mods); later ones win\n"
-                 "  --keybinds <file>        keys for seed packets, the shovel or spots of the screen (see src/platform/keybinds.h)\n"
+                 "  --keybinds <file>        keys for seed packets, the shovel, scrolling or spots of the screen (see src/platform/keybinds.h)\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
                  "  --icon <file.png>        the window's icon\n"

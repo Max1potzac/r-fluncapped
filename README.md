@@ -49,7 +49,8 @@ The tests (`ctest --test-dir build`) include an arm64 guest library; building it
 
 ## Running
 
-Extract `lib/arm64-v8a/` from the game's APK, then:
+Extract `lib/arm64-v8a/` from the game's APK (dropping the APK onto `tools/pvz2conv` does this and
+checks the four libraries are there), then:
 
 ```
 rfu --lib-dir path/to/arm64-v8a
@@ -67,6 +68,6 @@ Options: `--log trace|debug|info|warn|error`, `--no-rflib` (vanilla code only),
 | `src/shims` | Host implementations of the Android system libraries the game imports |
 | `src/jni` | JavaVM and JNIEnv for native code, with logged default answers for Java calls |
 | `tests` | Host unit tests and `tests/guest/testlib.c`, an arm64 library run under the JIT |
-| `tools/pvz2conv` | C# tool that unpacks the game's .obb and converts PTX to PNG and RTON, PAM, POPFX to JSON (see its README.txt) |
+| `tools/pvz2conv` | C# tool that takes the libraries out of the game's .apk, unpacks its .obb and converts PTX to PNG and RTON, PAM, POPFX to JSON (see its README.txt) |
 
 See [docs/runtime.md](docs/runtime.md) for how the pieces fit together.

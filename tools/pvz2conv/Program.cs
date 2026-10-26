@@ -2,8 +2,8 @@ using System.Diagnostics;
 using System.Text;
 using Pvz2Conv;
 
-// pvz2conv - unpacks PvZ2 .obb files and converts RTON, PAM, POPFX to JSON and PTX to PNG.
-// Drag an .obb, files or folders onto the exe.
+// pvz2conv - unpacks PvZ2 .apk and .obb files and converts RTON, PAM, POPFX to JSON and PTX to PNG.
+// Drag an .apk, an .obb, files or folders onto the exe.
 
 var inputs = new List<string>();
 string? outDir = null;
@@ -38,6 +38,8 @@ if (inputs.Count == 0)
     return 2;
 }
 
+var apkObbs = new List<string>();   // the OBB each APK given expects
+var obbsGiven = new List<string>();
 var log = new StringBuilder();
 void Log(string line) { lock (log) { Console.WriteLine(line); log.AppendLine(line); } }
 
@@ -58,11 +60,29 @@ foreach (var input in inputs)
         foreach (var f in files)
             ConvertOne(f, outDir == null ? null : Path.Combine(outDir, Path.GetRelativePath(full, Path.GetDirectoryName(f)!)));
     }
+    else if (File.Exists(full) && Apk.LooksLike(full))
+    {
+        Log($"unpacking {full}");
+        logDir ??= outDir ?? Path.Combine(Path.GetDirectoryName(full)!, Path.GetFileNameWithoutExtension(full) + "_extracted");
+        try
+        {
+            var apk = new Apk(outDir, Log);
+            if (apk.Run(full)) converted++;
+            else failed++;
+            if (apk.ObbName != null) apkObbs.Add(apk.ObbName);
+        }
+        catch (Exception e) when (e is FormatException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Log($"FAIL {full}: {e.Message}");
+            failed++;
+        }
+    }
     else if (File.Exists(full) && IsObb(full))
     {
         obbOptions.OutDir = outDir;
         obbOptions.ConvertedOnly = deleteOriginal;
         Log($"unpacking {full}");
+        obbsGiven.Add(Path.GetFileName(full));
         try
         {
             var (_, groupFailures) = new Obb(obbOptions, Log).Run(full);
@@ -89,6 +109,9 @@ foreach (var input in inputs)
     }
 }
 
+// an APK and an OBB from different versions won't run together
+if (apkObbs.Count > 0 && obbsGiven.Count > 0 && !obbsGiven.Any(o => apkObbs.Contains(o, StringComparer.OrdinalIgnoreCase)))
+    Log($"warning: the APK expects {string.Join(" or ", apkObbs)}, but the OBB given is {string.Join(", ", obbsGiven)}; check they're the same version");
 Log($"done in {sw.Elapsed.TotalSeconds:0.0}s: {converted} converted, {skipped} skipped, {failed} failed");
 if (logDir != null)
 {
@@ -171,7 +194,9 @@ void Pause()
 static void PrintUsage()
 {
     Console.WriteLine("""
-        Usage: pvz2conv [options] <.obb, file or folder> ...
+        Usage: pvz2conv [options] <.apk, .obb, file or folder> ...
+          An .apk gives "<name>_extracted" with lib\arm64-v8a (the libraries rfu
+          loads), assets and _apk_manifest.json (version, library hashes).
           An .obb (or .rsb / .rsb.smf) is unpacked into "<name>_extracted" next to it,
           in the game's own folder layout. On the way, textures (PTX) become PNG and
           RTON, PAM and POPFX files become JSON. _obb_manifest.json lists every group.

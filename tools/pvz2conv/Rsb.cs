@@ -205,11 +205,12 @@ sealed class Rsg
 /// units of 4 bytes) to the record holding the alternative character at the
 /// same position. A zero character ends a name and is followed by payload.
 ///
-/// Mod repackers write pointers the game never follows (at the end of the
-/// table, or back into names already read). Following them blindly is what
-/// produced duplicate files under glued-together folder names, so a pointer
-/// is only taken when it lands exactly where the alternative must start:
-/// right after everything that hangs off the current character.
+/// Mod repackers write pointers the game never follows: at the end of the
+/// table, back into names already read, or copies of an enclosing
+/// character's pointer. Following them blindly is what produced duplicate
+/// files under glued-together folder names, so a pointer is only taken when
+/// it lands exactly where the alternative must start (right after everything
+/// that hangs off the current character) and no enclosing character owns it.
 static class Trie
 {
     public static void Read(byte[] buf, int offset, int size, Func<int, int> payloadSize,
@@ -217,8 +218,9 @@ static class Trie
     {
         if (size <= 0) return;
         if (offset < 0 || offset + (long)size > buf.Length) throw new FormatException($"{what} runs past the data");
-        var name = new StringBuilder();
         var bytes = new List<byte>();
+        // alternatives already promised by enclosing characters, innermost last
+        var claimed = new List<int>();
         int strays = 0;
 
         // returns the position just past this subtree
@@ -241,11 +243,19 @@ static class Trie
                 }
                 else
                 {
+                    bool owns = alt != 0 && alt < size;
+                    if (owns) claimed.Add(alt);
                     bytes.Add(c);
                     end = Node(rel + 4, depth + 1);
                     bytes.RemoveAt(bytes.Count - 1);
+                    if (owns) claimed.RemoveAt(claimed.Count - 1);
                 }
                 if (alt == 0 || alt >= size) return end; // none, or the end-of-table pointer some packers write
+                // Packers like Reflourished's give the last alternative in a run
+                // the pointer of an enclosing character. It lands on the right
+                // spot but belongs to the outer branch; taking it here glues
+                // the outer names onto this prefix.
+                if (claimed.Contains(alt)) return end;
                 if (alt != end) { strays++; return end; }
                 rel = alt;
             }

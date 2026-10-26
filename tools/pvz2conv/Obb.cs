@@ -111,12 +111,24 @@ sealed class Obb
             }
             var data = new ReadOnlySpan<byte>(part, (int)e.Offset, (int)e.Size);
             string rel = SafeRelative(e.Path);
+            if (e.Path.Split('\\', '/').Any(p => p.Length > MaxName))
+                warnings.Add($"{e.Path}: name too long for Windows, written as {rel}");
             string output;
             string? texInfo = null;
-            if (e.IsTexture)
-                (output, texInfo) = WriteTexture(rsb, g, e, data, rel, outDir, warnings);
-            else
-                output = WriteResident(data, rel, outDir, warnings);
+            try
+            {
+                if (e.IsTexture)
+                    (output, texInfo) = WriteTexture(rsb, g, e, data, rel, outDir, warnings);
+                else
+                    output = WriteResident(data, rel, outDir, warnings);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // one file that can't be written doesn't stop the rest of its group
+                warnings.Add($"{e.Path}: couldn't be written ({ex.Message})");
+                Interlocked.Increment(ref _failed);
+                continue;
+            }
             files.Add(new FileResult(e.Path.Replace('\\', '/'), e.Size, output, texInfo));
         }
         string summary = $"ok   group {g.Name}: {rsg.Entries.Count} files" +
@@ -210,9 +222,24 @@ sealed class Obb
     {
         var parts = gamePath.Split('\\', '/').Where(p => p.Length > 0 && p != "." && p != "..")
             .Select(p => string.Concat(p.Select(c => c < 32 || "<>:\"|?*".Contains(c) ? '_' : c)).TrimEnd('.', ' '))
-            .Where(p => p.Length > 0);
+            .Where(p => p.Length > 0)
+            .Select(Shorten);
         string rel = Path.Combine(parts.ToArray());
         return rel.Length == 0 ? "_unnamed" : rel;
+    }
+
+    // Windows allows 255 characters per name. Longer ones keep their start
+    // and extension plus a hash of the full name, so they stay unique; the
+    // manifest maps them back to the game's name.
+    const int MaxName = 120;
+
+    static string Shorten(string name)
+    {
+        if (name.Length <= MaxName) return name;
+        string ext = Path.GetExtension(name);
+        if (ext.Length > 16) ext = "";
+        string hash = Hash(System.Text.Encoding.UTF8.GetBytes(name)).ToString("x16");
+        return name[..(MaxName - ext.Length - 18)] + "~" + hash + ext;
     }
 
     static void WriteManifest(string path, Rsb rsb, GroupResult?[] results)

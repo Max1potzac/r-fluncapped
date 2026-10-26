@@ -2,6 +2,7 @@
 
 #include "android/java_http.h"
 #include "core/log.h"
+#include "core/trace.h"
 #include "jni/jni.h"
 #include "runtime.h"
 #include "shims/common.h"
@@ -113,6 +114,8 @@ private:
 class UiEvents {
 public:
     void touch(const platform::TouchInput& t) {
+        if (tracing() && t.phase != platform::TouchInput::Moved)
+            log::info("trace: touch {} at {:.0f}, {:.0f}", t.phase == platform::TouchInput::Began ? "down" : "up", t.x, t.y);
         auto& prev = touches_[t.id];
         if (t.phase == platform::TouchInput::Began) prev = {t.x, t.y};
         Record r;

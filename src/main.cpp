@@ -8,6 +8,7 @@
 
 #include "android/app.h"
 #include "core/patches.h"
+#include "core/trace.h"
 #include "core/log.h"
 #include "jni/jni.h"
 #include "platform/gles.h"
@@ -60,6 +61,7 @@ void usage() {
                  "  --frames <n>             quit after n frames (for testing)\n"
                  "  --screenshot <file.bmp>  with --frames: save the last frame\n"
                  "  --script <file>          scripted input for testing (see docs/runtime.md)\n"
+                 "  --trace-class <name>     log calls to a libPVZ2 class's virtual functions (repeatable; see src/core/trace.h)\n"
                  "  --dump-patches <file>    write the libPVZ2.so offsets RFLib patched, one per line\n";
 }
 
@@ -131,6 +133,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> patch_files;
     bool load_mod_libs = true;
     std::string dump_patches;
+    std::vector<std::string> trace_classes;
     bool init_only = false;
     std::string log_file;
     rfu::android::AppOptions app;
@@ -170,6 +173,8 @@ int main(int argc, char** argv) {
                 app.window.title = value();
             } else if (arg == "--version-name") {
                 app.version_name = value();
+            } else if (arg == "--trace-class") {
+                trace_classes.push_back(value());
             } else if (arg == "--dump-patches") {
                 dump_patches = value();
             } else if (arg == "--offline") {
@@ -325,6 +330,8 @@ int main(int argc, char** argv) {
             if (why.empty()) rfu::log::info("patch {}: {} changes applied", file, patches.size());
             else rfu::log::warn("patch {} left out: {}", file, why);
         }
+
+        for (const auto& name : trace_classes) rfu::trace_class(rt, pvz2, name);
 
         const auto& missing = rt.linker().missing();
         rfu::log::info("{} imports have no implementation yet", missing.size());

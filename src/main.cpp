@@ -9,6 +9,7 @@
 #include "android/app.h"
 #include "core/patches.h"
 #include "core/trace.h"
+#include "game/hover.h"
 #include "core/log.h"
 #include "jni/jni.h"
 #include "platform/gles.h"
@@ -50,6 +51,7 @@ void usage() {
                  "  --overlay <guest>=<host> lay a host directory over a guest one, read-only (mods); later ones win\n"
                  "  --keybinds <file>        keys that tap spots of the screen (see src/platform/keybinds.h)\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
+                 "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
                  "  --icon <file.png>        the window's icon\n"
                  "  --title <text>           the window's title\n"
                  "  --version-name <x.y.z>   the APK's version name, which the game reports (default: 1.4.0)\n"
@@ -173,6 +175,8 @@ int main(int argc, char** argv) {
                 app.window.title = value();
             } else if (arg == "--version-name") {
                 app.version_name = value();
+            } else if (arg == "--hover") {
+                app.window.hover = true;
             } else if (arg == "--trace-class") {
                 trace_classes.push_back(value());
             } else if (arg == "--dump-patches") {
@@ -331,6 +335,7 @@ int main(int argc, char** argv) {
             else rfu::log::warn("patch {} left out: {}", file, why);
         }
 
+        if (app.window.hover) app.window.hover = rfu::install_hover_collect(rt, pvz2);
         for (const auto& name : trace_classes) rfu::trace_class(rt, pvz2, name);
 
         const auto& missing = rt.linker().missing();

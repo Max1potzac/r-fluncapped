@@ -26,10 +26,15 @@ struct WindowOptions {
     int game_width = 0, game_height = 0;
     bool low_assets = false;
     std::vector<KeyBind> keybinds;
+    bool hover = false;  // send the mouse's moves with no button down too (kHoverPointer)
     std::filesystem::path icon;  // a PNG for the window's (and taskbar's) icon
 };
 
 // Input, in the shape the game's Java side reports it.
+// The pointer id of the mouse moving with no button down (WindowOptions::hover): the game
+// sees a finger sliding over the screen, which collects sun, coins and plant food it passes.
+constexpr int kHoverPointer = 99;
+
 struct TouchInput {
     enum Phase { Began = 0, Moved = 1, Stationary = 2, Ended = 3, Cancelled = 4 } phase;
     int id;          // 1-based pointer id
@@ -93,6 +98,7 @@ private:
     void* context_ = nullptr;
     bool mouse_down_ = false;
     bool text_input_ = false;
+    bool hover_ = false;
     std::vector<std::pair<int, KeyBind>> binds_;  // by SDL key code
 };
 

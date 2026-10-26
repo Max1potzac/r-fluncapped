@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <map>
 #include <memory>
 
@@ -76,6 +77,11 @@ bool trace_class(Runtime& rt, const Module& module, const std::string& class_nam
                 if (!worth_logging(n)) return;
                 log::info("trace {:.0f}ms [t{}] {} ({}) call {}: this={:#x} x1={:#x} x2={:#x} from {}", ms_since_start(), c.thread().id,
                           t->names, rt.describe(fn), n, c.x(0), c.x(1), c.x(2), rt.describe(c.x(30)));
+                if (std::getenv("RFU_TRACE_X1") && c.mem().is_committed(c.x(1), 0x40)) {
+                    std::string words;
+                    for (int i = 0; i < 16; ++i) words += fmt::format(" {:08x}", c.mem().read<std::uint32_t>(c.x(1) + 4 * i));
+                    log::info("trace   *x1:{}", words);
+                }
             });
             ++hooked;
         } catch (const std::exception& e) {

@@ -138,6 +138,7 @@ Window::Window(const WindowOptions& options) {
         else binds_.emplace_back(key, bind);
     }
     if (!binds_.empty()) log::info("{} keybinds", binds_.size());
+    hover_ = options.hover;
 
     game_w_ = options.game_width;
     game_h_ = options.game_height;
@@ -322,8 +323,9 @@ std::vector<Input> Window::poll() {
             }
             break;
         case SDL_MOUSEMOTION:
-            if (ev.motion.which == SDL_TOUCH_MOUSEID || !mouse_down_) break;
-            touch(TouchInput::Moved, 1, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
+            if (ev.motion.which == SDL_TOUCH_MOUSEID) break;
+            if (mouse_down_) touch(TouchInput::Moved, 1, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
+            else if (hover_) touch(TouchInput::Moved, kHoverPointer, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
             break;
         case SDL_FINGERDOWN:
         case SDL_FINGERMOTION:

@@ -264,26 +264,50 @@ struct App {
         std::string action;  // "screenshot <file>", "quit"
     };
     std::multimap<std::uint64_t, Scripted> script;
-    void load_script(const fs::path& file);
+    std::streamoff script_read = 0;  // how far into the file: lines added later run too
+    void load_script(const fs::path& file, std::uint64_t now);
     void save_screenshot(const fs::path& file);
+    // "peek <address> <bytes>": logs guest memory as words and floats, to study game objects.
+    void peek(const std::string& args) {
+        std::istringstream ls(args);
+        std::uint64_t addr = 0, size = 64;
+        ls >> std::hex >> addr >> std::dec >> size;
+        for (std::uint64_t off = 0; off < size; off += 16) {
+            if (!rt.mem().is_committed(addr + off, 16)) break;
+            std::string words, floats;
+            for (int i = 0; i < 4; ++i) {
+                auto w = rt.mem().read<std::uint32_t>(addr + off + 4 * i);
+                float f;
+                std::memcpy(&f, &w, 4);
+                words += fmt::format(" {:08x}", w);
+                floats += fmt::format(" {:10.3f}", f);
+            }
+            log::info("peek {:#x} +{:#05x}:{}  |{}", addr, off, words, floats);
+        }
+    }
 
     void implement_java();
     void handle(const platform::Input& input);
     int run();
 };
 
-void App::load_script(const fs::path& file) {
-    std::ifstream in(file);
+// Reads the script's lines from where the last call stopped. A frame written "+N" is N frames
+// after `now`, so lines appended to the file while the game runs drive it live.
+void App::load_script(const fs::path& file, std::uint64_t now) {
+    std::ifstream in(file, std::ios::binary);
     if (!in) throw std::runtime_error("can't read the script " + path_to_utf8(file));
+    in.seekg(script_read);
     std::string line;
     int line_no = 0;
     while (std::getline(in, line)) {
+        if (in.eof()) break;  // a line still being written: read it next time
+        script_read = in.tellg();
         ++line_no;
         if (auto hash = line.find('#'); hash != std::string::npos) line.resize(hash);
         std::istringstream ls(line);
-        std::uint64_t frame;
-        std::string verb;
-        if (!(ls >> frame >> verb)) continue;
+        std::string when, verb;
+        if (!(ls >> when >> verb)) continue;
+        std::uint64_t frame = when[0] == '+' ? now + std::stoull(when.substr(1)) : std::stoull(when);
         using platform::TouchInput;
         auto touch = [&](std::uint64_t f, TouchInput::Phase phase, float x, float y) {
             script.emplace(f, Scripted{platform::Input{TouchInput{phase, 1, x, y}}, {}});
@@ -302,6 +326,15 @@ void App::load_script(const fs::path& file) {
             for (int i = 1; i <= steps; ++i)
                 touch(frame + i, TouchInput::Moved, x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps);
             touch(frame + steps + 1, TouchInput::Ended, x2, y2);
+        } else if (verb == "hover") {
+            // The mouse moving with no button down, from x1, y1 to x2, y2 over `frames` frames.
+            float x1, y1, x2, y2;
+            int steps = 10;
+            ls >> x1 >> y1 >> x2 >> y2 >> steps;
+            steps = std::max(steps, 1);
+            for (int i = 0; i <= steps; ++i)
+                script.emplace(frame + i, Scripted{platform::Input{TouchInput{TouchInput::Moved, platform::kHoverPointer, x1 + (x2 - x1) * i / steps,
+                                                                              y1 + (y2 - y1) * i / steps}}, {}});
         } else if (verb == "back") {
             script.emplace(frame, Scripted{platform::Input{platform::BackInput{}}, {}});
         } else if (verb == "text") {
@@ -324,7 +357,7 @@ void App::load_script(const fs::path& file) {
             ls >> code;
             script.emplace(frame, Scripted{platform::Input{platform::KeyInput{code, code == 66 ? 10u : 0u, true, 0}}, {}});
             script.emplace(frame + 1, Scripted{platform::Input{platform::KeyInput{code, code == 66 ? 10u : 0u, false, 0}}, {}});
-        } else if (verb == "screenshot" || verb == "quit") {
+        } else if (verb == "screenshot" || verb == "quit" || verb == "peek") {
             std::string rest;
             std::getline(ls >> std::ws, rest);
             script.emplace(frame, Scripted{std::nullopt, verb + " " + rest});
@@ -613,7 +646,7 @@ int App::run() {
     try_gain_focus();
 
     // AndroidRenderer.onDrawFrame, forever.
-    if (!options.script.empty()) load_script(options.script);
+    if (!options.script.empty()) load_script(options.script, 0);
     auto* clear = reinterpret_cast<void (*)(unsigned)>(SDL_GL_GetProcAddress("glClear"));
     using clock = std::chrono::steady_clock;
     auto last_frame = clock::now();
@@ -638,6 +671,7 @@ int App::run() {
     }).detach();
     while (!quit) {
         for (const auto& input : window->poll()) handle(input);
+        if (!options.script.empty() && frames % 10 == 0) load_script(options.script, frames);
         std::vector<std::string> actions;
         for (auto [it, end] = script.equal_range(frames); it != end; ++it) {
             if (it->second.input) handle(*it->second.input);
@@ -659,6 +693,7 @@ int App::run() {
         for (const auto& a : actions) {
             if (a.starts_with("screenshot ")) save_screenshot(path_from_utf8(a.substr(11)));
             else if (a.starts_with("quit")) quit = true;
+            else if (a.starts_with("peek ")) peek(a.substr(5));
         }
         if (options.max_frames && frames >= static_cast<std::uint64_t>(options.max_frames)) {
             if (!options.screenshot.empty()) save_screenshot(options.screenshot);

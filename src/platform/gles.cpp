@@ -89,6 +89,7 @@ struct Gl {
 
 Gl g_gl;
 std::atomic<bool> g_loaded{false};
+std::atomic<GLuint> g_default_fbo{0};
 
 // The game makes every GL call from its render thread, which is where rfu made the context
 // current; a call from anywhere else would go to no context at all.
@@ -152,6 +153,8 @@ void get_integerv(CallContext& c) {
         return;
     }
     g.GetIntegerv(pname, out);
+    // The offscreen framebuffer stands in for the window's: the game sees it as 0.
+    if (pname == GL_FRAMEBUFFER_BINDING && *out == static_cast<GLint>(g_default_fbo.load())) *out = 0;
 }
 
 void get_string(CallContext& c) {
@@ -201,11 +204,16 @@ void load_gles(void* (*get_proc)(const char*)) {
     g_loaded.store(true, std::memory_order_release);
 }
 
+void set_default_framebuffer(unsigned fbo) { g_default_fbo.store(fbo); }
+
 void register_gles(ShimRegistry& reg) {
     reg.add("glActiveTexture", [](CallContext& c) { gl(c).ActiveTexture(e(c, 0)); });
     reg.add("glAttachShader", [](CallContext& c) { gl(c).AttachShader(u32(c, 0), u32(c, 1)); });
     reg.add("glBindAttribLocation", [](CallContext& c) { gl(c).BindAttribLocation(u32(c, 0), u32(c, 1), c.str(2)); });
-    reg.add("glBindFramebuffer", [](CallContext& c) { gl(c).BindFramebuffer(e(c, 0), u32(c, 1)); });
+    reg.add("glBindFramebuffer", [](CallContext& c) {
+        GLuint fbo = u32(c, 1);
+        gl(c).BindFramebuffer(e(c, 0), fbo ? fbo : g_default_fbo.load());
+    });
     reg.add("glBindTexture", [](CallContext& c) { gl(c).BindTexture(e(c, 0), u32(c, 1)); });
     reg.add("glBlendFunc", [](CallContext& c) { gl(c).BlendFunc(e(c, 0), e(c, 1)); });
     reg.add("glCheckFramebufferStatus", [](CallContext& c) { c.ret(gl(c).CheckFramebufferStatus(e(c, 0))); });

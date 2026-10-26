@@ -16,4 +16,9 @@ void register_gles(ShimRegistry& reg);
 // calling thread, before the guest makes any GL call.
 void load_gles(void* (*get_proc)(const char* name));
 
+// The framebuffer the game draws to when it binds framebuffer 0 (the window's, on Android).
+// rfu points it at an offscreen framebuffer of a fixed size and scales that to the window, so
+// the game keeps the surface size it started with whatever the window does. 0: the window.
+void set_default_framebuffer(unsigned fbo);
+
 }  // namespace rfu::platform

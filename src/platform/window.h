@@ -17,6 +17,11 @@ struct WindowOptions {
     bool fullscreen = false;
     bool angle = false;  // use ANGLE's libEGL / libGLESv2 even when the driver has an ES profile
     bool vsync = true;
+    // The size of the surface the game draws on, fixed for the run (the game reads it once, at
+    // startup, and picks its 768 or 1536 asset set from it). It is scaled to fit the window.
+    // 0x0: the desktop's shape, 720 pixels tall for low_assets, else 1080 to 1440.
+    int game_width = 0, game_height = 0;
+    bool low_assets = false;
 };
 
 // Input, in the shape the game's Java side reports it.
@@ -52,13 +57,16 @@ public:
     Window(const Window&) = delete;
     Window& operator=(const Window&) = delete;
 
-    // Size of the drawable surface in pixels.
-    int width() const;
-    int height() const;
+    // Size of the game's surface in pixels.
+    int width() const { return game_w_; }
+    int height() const { return game_h_; }
 
     // Makes the GL context current on the calling thread.
     void make_current();
+    // Shows the game's surface, scaled to fit the window, and gets ready for the next frame.
     void swap();
+    // Binds the game's surface (for reading it back).
+    void bind_surface();
 
     // Collects pending input. Mouse buttons become touches (left button = pointer 1),
     // Escape and the mouse's back button become the Android back button.
@@ -68,7 +76,14 @@ public:
     void set_text_input(bool on);
 
 private:
+    void create_surface();
+    void drawable_size(int& w, int& h) const;
+    // Window points to the game's surface pixels, through the letterbox swap() draws.
+    void to_surface(float wx, float wy, float& x, float& y) const;
+
     SDL_Window* window_ = nullptr;
+    int game_w_ = 0, game_h_ = 0;
+    unsigned fbo_ = 0;  // 0: the game draws straight to the window, which then has the game's size
     void* context_ = nullptr;
     bool mouse_down_ = false;
 };

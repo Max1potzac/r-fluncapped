@@ -31,6 +31,9 @@ void usage() {
                  "  --version-code <n>       the APK's version code, which names the OBB (default: 675)\n"
                  "  --window <w>x<h>         window size in pixels (default: 1280x720)\n"
                  "  --fullscreen             start full screen (F11 switches)\n"
+                 "  --assets high|low        the game's 1536 (default) or 768 asset set; low is lighter on slow GPUs\n"
+                 "  --resolution <w>x<h>     the size the game draws at, whatever the window's (default: the\n"
+                 "                           desktop's shape, 720 pixels tall for low assets, else 1080 to 1440)\n"
                  "  --angle                  draw through ANGLE (libEGL.dll and libGLESv2.dll next to rfu)\n"
                  "  --no-vsync               don't wait for the display between frames\n"
                  "  --mount <guest>=<host>   make a host directory visible to the game\n"
@@ -126,6 +129,16 @@ int main(int argc, char** argv) {
                 if (x == std::string::npos) throw std::invalid_argument("--window wants <width>x<height>");
                 app.window.width = std::stoi(v.substr(0, x));
                 app.window.height = std::stoi(v.substr(x + 1));
+            } else if (arg == "--resolution") {
+                std::string v = value();
+                auto x = v.find('x');
+                if (x == std::string::npos) throw std::invalid_argument("--resolution wants <width>x<height>");
+                app.window.game_width = std::stoi(v.substr(0, x));
+                app.window.game_height = std::stoi(v.substr(x + 1));
+            } else if (arg == "--assets") {
+                std::string v = value();
+                if (v != "high" && v != "low") throw std::invalid_argument("--assets wants high or low");
+                app.window.low_assets = v == "low";
             } else if (arg == "--fullscreen") {
                 app.window.fullscreen = true;
             } else if (arg == "--angle") {

@@ -119,9 +119,18 @@ call's Java arguments decoded from whichever of the three calling conventions na
   every vertex array is a client-side pointer into guest memory, which the host GL reads in
   place). Each is a shim calling the host's ES implementation through `SDL_GL_GetProcAddress`, with
   guest pointers turned into host ones; `glTexImage2D`'s ninth argument comes from the guest
-  stack. The context is an ES 2 context: on Windows from the driver's ES profile
+  stack. The context is ES 3 where available (for `glBlitFramebuffer`), else ES 2: on Windows from the driver's ES profile
   (`WGL_EXT_create_context_es2_profile`, which NVIDIA, AMD and Intel drivers have) or, with
   `--angle`, from ANGLE; on Linux from Mesa through EGL.
+- **The game's surface.** The game reads its screen size once, at startup, and keeps it: it
+  sizes its UI and maps touches with it, and picks its asset set from the height (the 1536
+  assets from 1080 pixels up, the 768 ones below). So the game draws to an offscreen framebuffer
+  of a fixed size (`--resolution`, or the desktop's shape at 1080 to 1440 pixels tall, 720 with
+  `--assets low`), which `Window::swap` scales into the window, letterboxed, and mouse and touch
+  input is mapped back through the same rectangle. Resizing or going full screen changes only the
+  scaling. The game binds framebuffer 0 to draw to the screen; the `glBindFramebuffer` shim sends
+  that to the offscreen framebuffer, and `glGetIntegerv(GL_FRAMEBUFFER_BINDING)` reports it as 0.
+  Without `glBlitFramebuffer` the game draws straight to the window at the window's size.
 - **Textures.** Reflourished's PTX textures are RGBA8888, RGBA4444, RGB565, ETC1 with a separate
   alpha plane, and ETC2 RGBA8. When the driver doesn't list an ETC format as a compressed texture
   format, `glCompressedTexImage2D` decodes it to RGBA8 (`src/platform/etc.cpp`, the same decoder as
@@ -143,7 +152,7 @@ repeated without a person at the mouse (and on a machine without one). Each line
 
 | Action | What |
 | --- | --- |
-| `tap <x> <y>` | press and release (three frames later) at surface pixel x, y |
+| `tap <x> <y>` | press and release (three frames later) at pixel x, y of the game's surface (`--resolution`) |
 | `drag <x1> <y1> <x2> <y2> [frames]` | press, move over `frames` frames (default 10), release |
 | `text <characters>` | type, as on the soft keyboard (digits as key presses) |
 | `key <android keycode>` | press and release a key: 66 Enter, 67 Delete, 7-16 digits |
@@ -151,7 +160,7 @@ repeated without a person at the mouse (and on a machine without one). Each line
 | `screenshot <file.bmp>` | save the frame |
 | `quit` | close the window |
 
-For example, from a fresh `--data` folder on the 1.4.2 OBB at 1280x720, this reaches the intro:
+For example, from a fresh `--data` folder on the 1.4.2 OBB with `--resolution 1280x720`, this reaches the intro:
 
 ```
 800  tap 640 225     # the name box on the Welcome dialog

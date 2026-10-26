@@ -415,7 +415,9 @@ void register_libc_stdio(ShimRegistry& reg) {
     });
     reg.add("mkdir", [](CallContext& c) {
         auto host = c.rt().vfs().to_host(guest_path(c, 0));
-        if (!host) return c.fail(android::kEACCES);
+        // libtar's mkdirhier creates every component from the root and gives up on anything
+        // but EEXIST, as Android answers for /storage.
+        if (!host) return c.fail(c.rt().vfs().is_mount_parent(guest_path(c, 0)) ? android::kEEXIST : android::kEACCES);
         std::error_code ec;
         if (fs::exists(*host, ec)) return c.fail(android::kEEXIST);
         if (!fs::create_directory(*host, ec)) return c.fail(map_errno(ec));

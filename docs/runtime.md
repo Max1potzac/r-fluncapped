@@ -55,19 +55,25 @@ pointers (`libPVZ2.so+0x...`), which is usually enough to see two threads waitin
 
 ## Network
 
-The game downloads its updates and live events itself: libPVZ2 links libcurl 7.61 and OpenSSL
-1.1.1 statically, and RFLib points the CDN client at `https://reflourished.ducnguyen.org/cdn`. So
-rfu only provides the BSD socket layer (`src/shims/libc_net.cpp`): `socket`, `connect`, `send`,
-`recv`, `getaddrinfo`, `poll`, `select` and friends map onto host sockets (Winsock on Windows).
-A socket is an fd in the same table as files, so `read`, `write`, `close` and `fcntl(O_NONBLOCK)`
-work on it. bionic's constants and structs differ from Windows' (`AF_INET6`, the poll bits,
-`SOL_SOCKET`, errno values, `struct addrinfo` field order), so every value is translated at the
-boundary. `--offline` makes `socket()` and `getaddrinfo()` fail as they would without a
-connection, and the game takes its offline path.
+The game fetches its CDN content (`https://reflourished.ducnguyen.org/cdn/1.4.2.main.tar`, the
+URL RFLib sets) through the Java class `AndroidHttpTransaction`, which rfu implements over WinHTTP
+or libcurl (`src/android/java_http.cpp`). It saves the archive as
+`No_Backup/CDN.<version>/tar.full` and unpacks it with libtar into the same folder (liveconfig,
+event and market schedules, quests, strings, levels), then applies each file. libtar creates every
+directory of a path from the root and stops at any error other than `EEXIST`, so `mkdir` answers
+`EEXIST` for the directories above a mount point (`/storage`, `/data`), as Android does.
 
-Not known yet: where the game's OpenSSL looks for trusted root certificates. Its compiled-in
-default is a path from the build machine; if the game neither sets one nor turns verification
-off, rfu will need to mount a CA bundle there.
+libPVZ2 also links libcurl 7.61 and OpenSSL 1.1.1 statically, so rfu provides the BSD socket layer
+(`src/shims/libc_net.cpp`): `socket`, `connect`, `send`, `recv`, `getaddrinfo`, `poll`, `select`
+and friends map onto host sockets (Winsock on Windows). A socket is an fd in the same table as
+files, so `read`, `write`, `close` and `fcntl(O_NONBLOCK)` work on it. bionic's constants and
+structs differ from Windows' (`AF_INET6`, the poll bits, `SOL_SOCKET`, errno values,
+`struct addrinfo` field order), so every value is translated at the boundary. `--offline` makes
+`socket()` and `getaddrinfo()` fail and the Java HTTP requests fail, and the game takes its
+offline path.
+
+To test against a local copy of a server, set `RFU_URL_REWRITE=<prefix>=<replacement>`, e.g.
+`RFU_URL_REWRITE=https://reflourished.ducnguyen.org=http://127.0.0.1:8000`.
 
 ## Java
 

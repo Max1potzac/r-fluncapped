@@ -34,6 +34,7 @@ add_library(rfu_core STATIC
     src/shims/libdl.cpp
     src/shims/libz.cpp
     src/runtime.cpp
+    src/game/anim_fix.cpp
     src/game/game_keys.cpp
     src/game/hover.cpp
     # SDL-free parts of src/platform, here so the tests reach them

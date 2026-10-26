@@ -43,6 +43,7 @@ sealed class MainForm : Form, ILaunchUi
     readonly Panel _menu = new() { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(12) };
 
     const string HoverItem = "Hover to collect sun, coins and plant food";
+    const string AnimationsItem = "Fix frozen plant animations (Citron)";
     const string KeybindsItem = "Keybinds (keybinds.txt)";
 
     public MainForm(string launcherDir)
@@ -227,6 +228,7 @@ sealed class MainForm : Form, ILaunchUi
 
             _injections.Items.Clear();
             _injections.Items.Add(HoverItem, s.HoverCollect);
+            _injections.Items.Add(AnimationsItem, s.FixAnimations);
             _injections.Items.Add(KeybindsItem, s.Keybinds);
             foreach (var p in game.PatchFiles())
                 _injections.Items.Add(new PatchItem(p), s.Patches.Contains(p.FileName, StringComparer.OrdinalIgnoreCase));
@@ -266,6 +268,7 @@ sealed class MainForm : Form, ILaunchUi
             switch (_injections.Items[i])
             {
                 case HoverItem: s.HoverCollect = on; break;
+                case AnimationsItem: s.FixAnimations = on; break;
                 case KeybindsItem: s.Keybinds = on; break;
                 case PatchItem p when on: s.Patches.Add(p.Patch.FileName); break;
             }

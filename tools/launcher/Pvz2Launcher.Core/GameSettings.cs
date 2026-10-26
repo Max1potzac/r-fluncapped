@@ -21,6 +21,7 @@ public sealed class GameSettings
 
     // code injections
     public bool HoverCollect { get; set; } = true;     // sun, coins and plant food picked up by moving the mouse over them
+    public bool FixAnimations { get; set; } = true;    // plants that freeze on an animation while the level isn't running
     public bool Keybinds { get; set; }
     public List<string> Patches { get; set; } = [];     // file names in patches/ that are switched on
 

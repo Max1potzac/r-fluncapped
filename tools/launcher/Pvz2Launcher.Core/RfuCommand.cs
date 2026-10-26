@@ -27,6 +27,7 @@ public static class RfuCommand
         if (s.Offline) args.Add("--offline");
 
         if (s.HoverCollect) args.Add("--hover");
+        if (s.FixAnimations) args.Add("--fix-animations");
         if (s.Keybinds && File.Exists(game.KeybindsPath)) args.AddRange(["--keybinds", game.KeybindsPath]);
         foreach (var patch in s.Patches)
         {

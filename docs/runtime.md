@@ -87,6 +87,14 @@ and plant food are collected by moving the mouse over them. The addresses are ch
 code expected there (the libPVZ2 build Reflourished 1.4.2 and AltverZ share); on another build the
 fix stays off.
 
+`src/game/anim_fix.cpp` (`--fix-animations`): a plant moves from one animation to the next (a
+Citron's charging to its charged idle) in its PlantFramework's special update, which runs from
+`Plant::Update`; the game calls that only while the board is running, so before a Last Stand's
+first wave and after the last zombie the plant stays on the last frame of what it was playing. A
+hook on the plant's per-frame call runs the special update for the plants listed there when the
+game skipped it, with the target check (`Plant::FindTarget`) answering no meanwhile, so it only
+moves animations along and never fires.
+
 `src/game/game_keys.cpp` (keybinds `seed <n>` and `shovel`): the seed bank (`SeedBankNew`), its
 packets and the shovel (`ShovelUI`) belong to the game's newer UI, not to Sexy's widgets; their
 positions are relative to parents named by handles, laid out by anchors. Hooks on the bank's and

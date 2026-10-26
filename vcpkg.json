@@ -4,6 +4,7 @@
   "dependencies": [
     "boost-icl",
     "boost-variant",
+    "sdl2",
     "zlib"
   ]
 }

@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -31,8 +32,10 @@ struct Thunk {
 
 struct RuntimeOptions {
     std::filesystem::path lib_dir;          // where libPVZ2.so and friends live
-    std::string package = "com.ea.game.pvz2_row";
+    std::string package = "com.ea.game.pvz2_rfl";  // Reflourished's package name
     bool network = true;                    // false: sockets and DNS fail, the game plays offline
+    // Shims that live outside the core (window, GL, audio), registered after the core's own.
+    std::function<void(ShimRegistry&)> extra_shims;
 };
 
 // Owns everything the guest sees: memory, heap, loaded modules, threads and shims.
@@ -63,6 +66,11 @@ public:
     void bind_thread(std::shared_ptr<GuestThread> t);
     void unbind_thread();
     GuestThread* thread_by_handle(GuestAddr handle);
+    // One line per guest thread: the import it is in (if any) and its guest call stack, by
+    // following frame pointers.
+    std::vector<std::string> thread_report();
+    // "libPVZ2.so+0x1234", or the bare address outside every module.
+    std::string describe(GuestAddr addr) const;
 
     // Calls a guest function on the calling thread.
     std::uint64_t call(GuestAddr fn, const std::vector<std::uint64_t>& args = {});

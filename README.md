@@ -67,5 +67,6 @@ Options: `--log trace|debug|info|warn|error`, `--no-rflib` (vanilla code only),
 | `src/shims` | Host implementations of the Android system libraries the game imports |
 | `src/jni` | JavaVM and JNIEnv for native code, with logged default answers for Java calls |
 | `tests` | Host unit tests and `tests/guest/testlib.c`, an arm64 library run under the JIT |
+| `tools/pvz2conv` | C# tool that unpacks the game's .obb and converts PTX to PNG and RTON, PAM, POPFX to JSON (see its README.txt) |
 
 See [docs/runtime.md](docs/runtime.md) for how the pieces fit together.

@@ -490,20 +490,9 @@ void register_libc_misc(ShimRegistry& reg) {
         c.ret(0);
     });
 
-    // --- not available: networking, child processes, terminals -------------------------------
-    for (const char* name : {"socket", "socketpair"}) reg.add(name, [](CallContext& c) { c.fail(android::kEAFNOSUPPORT); });
-    for (const char* name : {"accept", "bind", "connect", "listen", "recv", "send", "sendto", "shutdown", "getpeername",
-                             "getsockname", "getsockopt", "setsockopt"})
-        reg.add(name, [](CallContext& c) { c.fail(android::kENOTSOCK); });
+    // --- not available: child processes, terminals (networking is in libc_net.cpp) ---------
     for (const char* name : {"fork", "execl", "execv", "waitpid", "system"}) reg.add(name, [](CallContext& c) { c.fail(android::kENOSYS); });
     for (const char* name : {"tcgetattr", "tcsetattr"}) reg.add(name, [](CallContext& c) { c.fail(25 /* ENOTTY */); });
-    reg.add("getaddrinfo", [](CallContext& c) { c.ret(8); });  // EAI_NONAME
-    reg.add("getnameinfo", [](CallContext& c) { c.ret(8); });
-    reg.add("freeaddrinfo", [](CallContext& c) {});
-    reg.add("gai_strerror", [](CallContext& c) { c.ret(intern_string(c.rt(), "no network in this port")); });
-    reg.add("inet_pton", [](CallContext& c) { c.ret(0); });
-    reg.add("inet_ntop", [](CallContext& c) { c.fail(android::kEAFNOSUPPORT, 0); });
-    reg.add("if_nametoindex", [](CallContext& c) { c.ret(0); });
 }
 
 }  // namespace rfu

@@ -43,6 +43,10 @@ char* fgets(char*, int, FILE*);
 int fclose(FILE*);
 int open(const char*, int, ...);
 int __cxa_atexit(void (*)(void*), void*, void*);
+int close(int);
+long read(int, void*, size_t);
+long write(int, const void*, size_t);
+int fcntl(int, int, ...);
 double sin(double);
 float sqrtf(float);
 extern void* __dso_handle;
@@ -206,4 +210,97 @@ int test_stack_guard(void) {
     // Compiled with -fstack-protector-all: reads the cookie from [tpidr_el0 + 0x28].
     char buf[64];
     return fill(buf, sizeof buf) == 'x' ? 0 : 1;
+}
+
+// --- sockets ------------------------------------------------------------------------------
+
+struct sockaddr_in {
+    uint16_t sin_family;
+    uint16_t sin_port;
+    uint32_t sin_addr;
+    char zero[8];
+};
+struct addrinfo {
+    int ai_flags, ai_family, ai_socktype, ai_protocol;
+    unsigned ai_addrlen;
+    char* ai_canonname;
+    void* ai_addr;
+    struct addrinfo* ai_next;
+};
+struct pollfd {
+    int fd;
+    short events, revents;
+};
+int socket(int, int, int);
+int bind(int, const void*, unsigned);
+int listen(int, int);
+int accept(int, void*, unsigned*);
+int connect(int, const void*, unsigned);
+int getsockname(int, void*, unsigned*);
+int getsockopt(int, int, int, void*, unsigned*);
+long send(int, const void*, size_t, int);
+long recv(int, void*, size_t, int);
+int poll(struct pollfd*, unsigned long, int);
+int getaddrinfo(const char*, const char*, const struct addrinfo*, struct addrinfo**);
+void freeaddrinfo(struct addrinfo*);
+int inet_pton(int, const char*, void*);
+const char* inet_ntop(int, const void*, char*, unsigned);
+
+// The way libcurl connects: a non-blocking connect, poll for writable, check SO_ERROR.
+int test_sockets(void) {
+    struct addrinfo hints = {0}, *res = 0;
+    hints.ai_family = 2;  // AF_INET
+    hints.ai_socktype = 1;
+    hints.ai_flags = 4;  // AI_NUMERICHOST
+    CHECK(1, getaddrinfo("127.0.0.1", "80", &hints, &res) == 0 && res);
+    CHECK(2, res->ai_family == 2 && res->ai_addrlen == 16 && ((struct sockaddr_in*)res->ai_addr)->sin_port == 0x5000);
+    freeaddrinfo(res);
+
+    struct sockaddr_in a = {0};
+    a.sin_family = 2;
+    CHECK(3, inet_pton(2, "127.0.0.1", &a.sin_addr) == 1 && a.sin_addr == 0x0100007f);
+    char text[16];
+    CHECK(4, inet_ntop(2, &a.sin_addr, text, sizeof text) && strcmp(text, "127.0.0.1") == 0);
+
+    int server = socket(2, 1, 0);
+    CHECK(5, server >= 0);
+    CHECK(6, bind(server, &a, sizeof a) == 0 && listen(server, 1) == 0);
+    unsigned len = sizeof a;
+    CHECK(7, getsockname(server, &a, &len) == 0 && len == 16 && a.sin_port != 0);
+
+    int client = socket(2, 1 | 04000, 0);  // SOCK_NONBLOCK
+    CHECK(8, client >= 0 && (fcntl(client, 3) & 04000));
+    int r = connect(client, &a, sizeof a);
+    CHECK(9, r == 0 || *__errno() == 115);  // EINPROGRESS
+    struct pollfd p = {client, 4, 0};       // POLLOUT
+    CHECK(10, poll(&p, 1, 5000) == 1 && (p.revents & 4));
+    int err = -1;
+    len = sizeof err;
+    CHECK(11, getsockopt(client, 1, 4, &err, &len) == 0 && err == 0);  // SOL_SOCKET, SO_ERROR
+
+    int conn = accept(server, 0, 0);
+    CHECK(12, conn >= 0);
+    CHECK(13, send(client, "ping", 4, 0x4000) == 4);  // MSG_NOSIGNAL
+    char buf[8] = {0};
+    struct pollfd q = {conn, 1, 0};  // POLLIN
+    CHECK(14, poll(&q, 1, 5000) == 1 && read(conn, buf, sizeof buf) == 4 && memcmp(buf, "ping", 4) == 0);
+    CHECK(15, write(conn, "pong", 4) == 4);
+    struct pollfd w = {client, 1, 0};
+    CHECK(16, poll(&w, 1, 5000) == 1 && recv(client, buf, sizeof buf, 0) == 4 && memcmp(buf, "pong", 4) == 0);
+    CHECK(17, recv(client, buf, sizeof buf, 0x40) == -1 && *__errno() == 11);  // MSG_DONTWAIT: EAGAIN
+
+    close(conn);
+    CHECK(18, poll(&w, 1, 5000) == 1 && recv(client, buf, sizeof buf, 0) == 0);  // peer closed
+    close(client);
+    close(server);
+    CHECK(19, recv(server, buf, 1, 0) == -1 && *__errno() == 9);  // EBADF
+    return 0;
+}
+
+// rfu --offline: what the game sees without a connection.
+int test_offline(void) {
+    struct addrinfo* res = 0;
+    CHECK(1, socket(2, 1, 0) == -1 && *__errno() == 97);  // EAFNOSUPPORT
+    CHECK(2, getaddrinfo("reflourished.ducnguyen.org", "443", 0, &res) == 8 && !res);  // EAI_NONAME
+    return 0;
 }

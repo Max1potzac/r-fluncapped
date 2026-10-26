@@ -48,6 +48,22 @@ statically initialised ones work.
   then patches libPVZ2's code. Patching code is followed by an instruction cache flush, which drops
   the JIT's translations of that range.
 
+## Network
+
+The game downloads its updates and live events itself: libPVZ2 links libcurl 7.61 and OpenSSL
+1.1.1 statically, and RFLib points the CDN client at `https://reflourished.ducnguyen.org/cdn`. So
+rfu only provides the BSD socket layer (`src/shims/libc_net.cpp`): `socket`, `connect`, `send`,
+`recv`, `getaddrinfo`, `poll`, `select` and friends map onto host sockets (Winsock on Windows).
+A socket is an fd in the same table as files, so `read`, `write`, `close` and `fcntl(O_NONBLOCK)`
+work on it. bionic's constants and structs differ from Windows' (`AF_INET6`, the poll bits,
+`SOL_SOCKET`, errno values, `struct addrinfo` field order), so every value is translated at the
+boundary. `--offline` makes `socket()` and `getaddrinfo()` fail as they would without a
+connection, and the game takes its offline path.
+
+Not known yet: where the game's OpenSSL looks for trusted root certificates. Its compiled-in
+default is a path from the build machine; if the game neither sets one nor turns verification
+off, rfu will need to mount a CA bundle there.
+
 ## Java
 
 There is no JVM. `src/jni` gives native code a JavaVM and JNIEnv whose functions work on a small

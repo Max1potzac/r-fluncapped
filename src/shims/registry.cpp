@@ -18,6 +18,7 @@ void register_all_shims(ShimRegistry& reg) {
     register_libc_stdio(reg);
     register_libc_math(reg);
     register_libc_misc(reg);
+    register_libc_net(reg);
     register_libc_pthread(reg);
     register_libdl(reg);
     register_libz(reg);

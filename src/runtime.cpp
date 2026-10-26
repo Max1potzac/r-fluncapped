@@ -48,6 +48,18 @@ Runtime::Runtime(RuntimeOptions options)
     if (options_.extra_shims) options_.extra_shims(shims_);
     vfs_.add_virtual("/proc/self/maps", [this] { return proc_maps(); });
     vfs_.add_virtual("/proc/self/cmdline", [this] { return options_.package + std::string(1, '\0'); });
+    vfs_.add_virtual("/proc/self/status", [this] {
+        return fmt::format("Name:\t{}\nState:\tR (running)\nTgid:\t4242\nPid:\t4242\nPPid:\t1\nTracerPid:\t0\n"
+                           "VmSize:\t{} kB\nVmRSS:\t{} kB\nThreads:\t1\n",
+                           options_.package.substr(0, 15), GuestMemory::kHeapSize >> 10, heap_.bytes_in_use() >> 10);
+    });
+    vfs_.add_virtual("/proc/self/statm", [this] {
+        std::uint64_t pages = heap_.bytes_in_use() / GuestMemory::kPageSize;
+        return fmt::format("{} {} 0 0 0 {} 0\n", GuestMemory::kHeapSize / GuestMemory::kPageSize, pages, pages);
+    });
+    // Where Android installs an app's libraries (the path /proc/self/maps and dladdr report):
+    // mods read files they keep next to their code from there.
+    if (!options_.lib_dir.empty()) vfs_.mount(fmt::format("/data/app/{}-1/lib/arm64", options_.package), options_.lib_dir);
 }
 
 Runtime::~Runtime() {

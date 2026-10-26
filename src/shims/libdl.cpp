@@ -90,6 +90,22 @@ void register_libdl(ShimRegistry& reg) {
         }
         c.ret(*addr);
     });
+    // dladdr(addr, Dl_info*): which module an address is in. Mods use it to find their own
+    // library file, and with it the files they keep next to it.
+    reg.add("dladdr", [](CallContext& c) {
+        GuestAddr addr = c.x(0), info = c.x(1);
+        for (const auto& m : c.rt().linker().modules()) {
+            if (addr < m->base() || addr >= m->end()) continue;
+            // struct Dl_info { const char* dli_fname; void* dli_fbase; const char* dli_sname; void* dli_saddr; }
+            std::string path = fmt::format("/data/app/{}-1/lib/arm64/{}", c.rt().options().package, m->name());
+            c.mem().write<GuestAddr>(info, intern_string(c.rt(), path));
+            c.mem().write<GuestAddr>(info + 8, m->base());
+            c.mem().write<GuestAddr>(info + 16, 0);
+            c.mem().write<GuestAddr>(info + 24, 0);
+            return c.ret(1);
+        }
+        c.ret(0);
+    });
     reg.add("dlclose", [](CallContext& c) { c.ret(0); });
     reg.add("dlerror", [](CallContext& c) {
         auto& h = c.rt().state<Handles>();

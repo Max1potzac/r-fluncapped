@@ -75,6 +75,7 @@ Options:
 | --- | --- |
 | `--data <dir>` | where the game keeps saves and downloads (default `rfu-data`) |
 | `--window <w>x<h>`, `--fullscreen` | window size (default 1280x720) or full screen |
+| `--log-file <file>` | write the log, and the game's own output, to a file |
 | `--assets high\|low` | the game's 1536 (default) or 768 asset set; low is lighter on slow GPUs |
 | `--resolution <w>x<h>` | the size the game draws at, scaled to fit the window (default: the desktop's shape, 720 px tall for low assets, else 1080 to 1440) |
 | `--angle` | draw through ANGLE: put `libEGL.dll` and `libGLESv2.dll` (from vcpkg's `angle` port, or a Chrome / Edge install) next to `rfu.exe`. Use it if your driver has no OpenGL ES profile |

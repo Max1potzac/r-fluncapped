@@ -140,7 +140,9 @@ call's Java arguments decoded from whichever of the three calling conventions na
   `src/platform/opensles.cpp` implements the engine, output mix and player objects with their
   vtables of thunks; each player is an SDL audio device whose callback copies the queued guest
   buffers out and, when one is used up, calls the game's buffer-queue callback right there, on a
-  guest thread bound to SDL's audio thread. Without an audio device the game runs silently.
+  guest thread bound to SDL's audio thread. The game's sound engine waits for its buffers to come
+  back and holds the frame loop up when they don't, so a machine with no sound card falls back to
+  SDL's "dummy" driver, which consumes them at the real rate, rather than to no device at all.
 - **Exit.** When the game stops, rfu ends the process without unwinding it, as Android does: the
   game's threads are still running and the runtime can't be torn down under them.
 

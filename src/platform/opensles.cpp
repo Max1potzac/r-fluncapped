@@ -6,6 +6,7 @@
 #include <SDL.h>
 
 #include <deque>
+#include <atomic>
 #include <map>
 #include <set>
 
@@ -59,6 +60,7 @@ struct SlState {
     std::map<ItfType, GuestAddr> vtables;
     std::set<SlObject*> players;
     bool audio_ok = false;
+    std::atomic<int> open_devices{0};
 };
 
 SlState& state(Runtime& rt) { return rt.state<SlState>(); }
@@ -149,10 +151,20 @@ bool open_device(SlObject* p) {
     want.callback = fill_audio;
     want.userdata = p;
     p->device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+    if (!p->device && s.open_devices == 0) {
+        // No sound card (or none free). The game's sound engine still waits for its buffers
+        // to be played, and stalls the game without that, so play them to SDL's silent
+        // driver, which takes them at the real rate.
+        log::warn("OpenSL ES: couldn't open an audio device ({}); the game plays silently", SDL_GetError());
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        SDL_SetHint(SDL_HINT_AUDIODRIVER, "dummy");
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) p->device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+    }
     if (!p->device) {
         log::warn("OpenSL ES: couldn't open an audio device: {}", SDL_GetError());
         return false;
     }
+    ++s.open_devices;
     p->spec = have;
     SDL_PauseAudioDevice(p->device, 0);
     return true;
@@ -198,8 +210,11 @@ void object_get_interface(CallContext& c) {
 void object_destroy(CallContext& c) {
     SlObject* o = object_of(c);
     if (!o) return;
-    if (o->device) SDL_CloseAudioDevice(o->device);
     auto& s = state(c.rt());
+    if (o->device) {
+        SDL_CloseAudioDevice(o->device);
+        --s.open_devices;
+    }
     std::lock_guard lock(s.mutex);
     for (auto& [type, itf] : o->interfaces) s.interfaces.erase(itf);
     s.players.erase(o);

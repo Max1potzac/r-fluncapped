@@ -78,7 +78,8 @@ RTON / PAM / POPFX
          field names as Sen / TwinStar: image (name, size, transform),
          sprite and main_sprite (frames with remove / append / change,
          label, stop, command). Reflourished cuts the trailing zero bytes
-         off some PAMs; those are read back as zeros. Coordinates are converted from 1/20 px to px
+         off some PAMs; those are read back as zeros. Others are zero-padded to
+         4 KB, which is ignored. Coordinates are converted from 1/20 px to px
          and matrices from 16.16 fixed point to decimals.
   POPFX  "xfcp" version 1, a compiled render effect (shader). Its layout was
          worked out from a single sample, so the output has the string table,

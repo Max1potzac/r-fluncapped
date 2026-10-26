@@ -57,7 +57,8 @@ static class Pam
 
         if (r.Pos > data.Length)
             warnings.Add($"file ends {r.Pos - data.Length} zero bytes early (trimmed by the packer), read as zeros");
-        else if (r.Pos < data.Length)
+        // other PAMs are zero-padded to a 4 KB boundary instead; only data is worth a warning
+        else if (r.Pos < data.Length && Array.FindIndex(data, r.Pos, b => b != 0) >= 0)
             warnings.Add($"{data.Length - r.Pos} trailing bytes after the animation were ignored");
     }
 

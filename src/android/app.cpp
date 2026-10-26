@@ -336,6 +336,7 @@ void App::save_screenshot(const fs::path& file) {
     static auto read_pixels = reinterpret_cast<ReadPixels>(SDL_GL_GetProcAddress("glReadPixels"));
     if (!read_pixels) return;
     int w = window->width(), h = window->height();
+    window->bind_surface();
     std::vector<std::uint8_t> rgba(static_cast<std::size_t>(w) * h * 4), flipped(rgba.size());
     read_pixels(0, 0, w, h, 0x1908, 0x1401, rgba.data());  // GL_RGBA, GL_UNSIGNED_BYTE
     std::size_t row = static_cast<std::size_t>(w) * 4;

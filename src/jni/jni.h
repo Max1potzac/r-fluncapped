@@ -34,6 +34,7 @@ struct Object {
     char element = 0;              // Array element type: Z B C S I J F D, or L for objects
     GuestAddr data = 0;            // Array storage (primitive arrays), ByteBuffer address
     std::vector<GuestAddr> elements = {};  // object arrays
+    std::map<std::string, std::uint64_t> fields = {};  // instance (or, on a Class, static) fields set so far
 };
 
 struct Member {
@@ -47,9 +48,27 @@ struct NativeMethod {
     GuestAddr fn;
 };
 
-// Answers a call to one Java method. Gets the shim context (x0 = env, x1 = object or
-// class, x2 = method id, then the Java arguments) and returns the raw return value.
-using MethodImpl = std::function<std::uint64_t(CallContext&, const Member&)>;
+class Jni;
+
+// One call from native code into a Java method, constructor or field read.
+struct JavaCall {
+    CallContext& c;
+    Jni& jni;
+    const Member& member;
+    GuestAddr self;                    // the object, or the class for static members
+    std::vector<std::uint64_t> args;   // Java arguments: ints and references as they are, float/double bits
+
+    std::string string_arg(std::size_t i) const;  // a java.lang.String argument ("" for null)
+    float float_arg(std::size_t i) const;
+    double double_arg(std::size_t i) const;
+};
+
+// Answers a call to one Java method and returns the raw return value (a reference, an
+// integer, or the bits of a float/double).
+using MethodImpl = std::function<std::uint64_t(JavaCall&)>;
+
+// The parameter types of a method signature: "(ILjava/lang/String;[B)V" -> I, Ljava/lang/String;, [B
+std::vector<std::string> parameter_types(const std::string& signature);
 
 class Jni {
 public:
@@ -71,11 +90,22 @@ public:
     // The neutral answer for a method or field of `signature`'s return type.
     std::uint64_t default_value(const std::string& signature);
 
+    // Fields: what Get<Type>Field returns until native code or the host sets them.
+    std::optional<std::uint64_t> field(GuestAddr object, const std::string& name);
+    void set_field(GuestAddr object, const std::string& name, std::uint64_t value);
+    std::string string_of(GuestAddr s);  // "" for null or a non-string
+    GuestAddr array_data(GuestAddr array);
+
+    // Replaces the logged default answer for every method (and constructor, "<init>") of
+    // `class_name` called `name`, whatever its signature.
     void implement(const std::string& class_name, const std::string& name, MethodImpl impl);
     const MethodImpl* implementation(const Member& m);
 
     void register_natives(const std::string& class_name, std::vector<NativeMethod> methods);
     std::optional<GuestAddr> native(const std::string& class_name, const std::string& name);
+    // Calls a native method the guest registered, as Java would: (env, this or class, args...).
+    std::uint64_t call_native(const std::string& class_name, const std::string& name, GuestAddr self,
+                              const std::vector<std::uint64_t>& args = {});
 
     Runtime& rt() { return rt_; }
 

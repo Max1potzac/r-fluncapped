@@ -73,7 +73,6 @@ void Cpu::restore(const State& s) {
 }
 
 std::uint64_t Cpu::call(GuestAddr fn, const std::vector<std::uint64_t>& args) {
-    if (args.size() > 8) throw std::invalid_argument("Cpu::call supports at most 8 arguments");
 
     std::optional<State> outer;
     GuestAddr sp = thread_.stack_hi;
@@ -83,7 +82,13 @@ std::uint64_t Cpu::call(GuestAddr fn, const std::vector<std::uint64_t>& args) {
         sp = jit_->GetSP() & ~0xFull;
     }
 
-    for (std::size_t i = 0; i < args.size(); ++i) jit_->SetRegister(i, args[i]);
+    // AAPCS64: the first eight integer arguments in x0-x7, the rest in 8-byte stack slots.
+    if (args.size() > 8) {
+        std::size_t slots = args.size() - 8;
+        sp = (sp - 8 * slots) & ~0xFull;
+        for (std::size_t i = 0; i < slots; ++i) rt_.mem().write<std::uint64_t>(sp + 8 * i, args[8 + i]);
+    }
+    for (std::size_t i = 0; i < args.size() && i < 8; ++i) jit_->SetRegister(i, args[i]);
     jit_->SetRegister(29, 0);
     jit_->SetRegister(30, rt_.return_thunk());
     jit_->SetSP(sp);

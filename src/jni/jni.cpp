@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <set>
 
 namespace rfu::jni {
@@ -112,24 +113,81 @@ void unimplemented(CallContext& c) {
     c.ret(0);
 }
 
+// Reads the Java arguments of a Call*Method / NewObject shim, whose fixed arguments end at
+// x(first): the plain variant passes them as C varargs (float promoted to double), the V
+// variant as a va_list, the A variant as an array of 8-byte jvalues.
+std::vector<std::uint64_t> java_args(CallContext& c, const std::string& signature, int first) {
+    std::string_view fn = c.thunk().name;
+    std::vector<std::uint64_t> out;
+    auto types = parameter_types(signature);
+    if (fn.ends_with("A")) {
+        GuestAddr jvalues = c.x(first);
+        for (std::size_t i = 0; i < types.size(); ++i) {
+            std::uint64_t v = c.mem().read<std::uint64_t>(jvalues + 8 * i);
+            switch (types[i][0]) {
+            case 'Z':
+            case 'B': v &= 0xFF; break;
+            case 'C':
+            case 'S': v &= 0xFFFF; break;
+            case 'I':
+            case 'F': v &= 0xFFFFFFFF; break;
+            default: break;
+            }
+            out.push_back(v);
+        }
+        return out;
+    }
+    std::unique_ptr<VarArgs> va;
+    if (fn.ends_with("V")) va = std::make_unique<VaListArgs>(c.mem(), c.x(first));
+    else va = std::make_unique<RegisterArgs>(c, first);
+    for (const auto& t : types) {
+        if (t[0] == 'F') out.push_back(std::bit_cast<std::uint32_t>(static_cast<float>(va->next_double())));
+        else if (t[0] == 'D') out.push_back(std::bit_cast<std::uint64_t>(va->next_double()));
+        else out.push_back(va->next_int());
+    }
+    return out;
+}
+
 void call_method(CallContext& c) {
-    auto m = J(c).member(c.x(2));
+    // Call<T>Method(env, obj, mid, ...), CallStatic<T>Method(env, cls, mid, ...),
+    // CallNonvirtual<T>Method(env, obj, cls, mid, ...).
+    bool nonvirtual = c.thunk().name.starts_with("CallNonvirtual");
+    int mid_reg = nonvirtual ? 3 : 2;
+    auto m = J(c).member(c.x(mid_reg));
     if (!m) {
-        log::warn("{} with an unknown method id {:#x}", c.thunk().name, c.x(2));
+        log::warn("{} with an unknown method id {:#x}", c.thunk().name, c.x(mid_reg));
         return c.ret(0);
     }
     std::string type = return_type(m->signature);
-    if (auto impl = J(c).implementation(*m)) return ret_value(c, type, (*impl)(c, *m));
-    log_once(J(c), c.x(2), *m, "method");
+    if (auto impl = J(c).implementation(*m)) {
+        JavaCall call{c, J(c), *m, c.x(1), java_args(c, m->signature, mid_reg + 1)};
+        return ret_value(c, type, (*impl)(call));
+    }
+    log_once(J(c), c.x(mid_reg), *m, "method");
     ret_value(c, type, J(c).default_value(m->signature));
 }
 
 void get_field(CallContext& c) {
+    // Get<T>Field(env, obj, fid), GetStatic<T>Field(env, cls, fid)
     auto m = J(c).member(c.x(2));
     if (!m) return c.ret(0);
-    if (auto impl = J(c).implementation(*m)) return ret_value(c, m->signature, (*impl)(c, *m));
+    if (auto v = J(c).field(c.x(1), m->name)) return ret_value(c, m->signature, *v);
+    if (auto impl = J(c).implementation(*m)) {
+        JavaCall call{c, J(c), *m, c.x(1), {}};
+        return ret_value(c, m->signature, (*impl)(call));
+    }
     log_once(J(c), c.x(2), *m, "field");
     ret_value(c, m->signature, J(c).default_value(")" + m->signature));
+}
+
+void set_field(CallContext& c) {
+    // Set<T>Field(env, obj, fid, value): the value is an ordinary (non-variadic) argument.
+    auto m = J(c).member(c.x(2));
+    if (!m) return;
+    std::uint64_t v = c.x(3);
+    if (m->signature == "F") v = std::bit_cast<std::uint32_t>(c.s(0));
+    else if (m->signature == "D") v = std::bit_cast<std::uint64_t>(c.d(0));
+    J(c).set_field(c.x(1), m->name, v);
 }
 
 void get_member_id(CallContext& c) {
@@ -145,7 +203,10 @@ void new_object(CallContext& c) {
     auto cls = J(c).object(c.x(1));
     std::string name = cls ? cls->class_name : "java/lang/Object";
     if (auto m = J(c).member(c.x(2)); m && c.thunk().name != "AllocObject") {
-        if (auto impl = J(c).implementation(*m)) return c.ret((*impl)(c, *m));
+        if (auto impl = J(c).implementation(*m)) {
+            JavaCall call{c, J(c), *m, c.x(1), java_args(c, m->signature, 3)};
+            return c.ret((*impl)(call));
+        }
         log_once(J(c), c.x(2), *m, "constructor");
     }
     c.ret(J(c).new_instance(name));
@@ -194,10 +255,7 @@ std::string from_utf16(const char16_t* s, std::size_t n) {
     return u32_to_utf8(w);
 }
 
-std::string string_of(CallContext& c, GuestAddr s) {
-    auto o = J(c).object(s);
-    return o ? o->text : std::string();
-}
+std::string string_of(CallContext& c, GuestAddr s) { return J(c).string_of(s); }
 
 void register_env(std::unordered_map<std::string, ShimFn>& f) {
     f["GetVersion"] = [](CallContext& c) { c.ret(kJniVersion16); };
@@ -334,10 +392,36 @@ void register_env(std::unordered_map<std::string, ShimFn>& f) {
     for (int i = 0; i < 9; ++i) {
         f[std::string("Get") + kTypes[i] + "Field"] = get_field;
         f[std::string("GetStatic") + kTypes[i] + "Field"] = get_field;
-        f[std::string("Set") + kTypes[i] + "Field"] = [](CallContext& c) {};
-        f[std::string("SetStatic") + kTypes[i] + "Field"] = [](CallContext& c) {};
+        f[std::string("Set") + kTypes[i] + "Field"] = set_field;
+        f[std::string("SetStatic") + kTypes[i] + "Field"] = set_field;
     }
 }
+
+}  // namespace
+
+std::vector<std::string> parameter_types(const std::string& signature) {
+    std::vector<std::string> out;
+    std::size_t i = signature.find('(');
+    if (i == std::string::npos) return out;
+    ++i;
+    while (i < signature.size() && signature[i] != ')') {
+        std::size_t start = i;
+        while (signature[i] == '[') ++i;
+        if (signature[i] == 'L') i = signature.find(';', i);
+        if (i == std::string::npos) break;
+        out.push_back(signature.substr(start, i - start + 1));
+        ++i;
+    }
+    return out;
+}
+
+std::string JavaCall::string_arg(std::size_t i) const { return i < args.size() ? jni.string_of(args[i]) : std::string(); }
+float JavaCall::float_arg(std::size_t i) const {
+    return i < args.size() ? std::bit_cast<float>(static_cast<std::uint32_t>(args[i])) : 0.0f;
+}
+double JavaCall::double_arg(std::size_t i) const { return i < args.size() ? std::bit_cast<double>(args[i]) : 0.0; }
+
+namespace {
 
 struct Holder {
     std::mutex mutex;
@@ -378,6 +462,24 @@ Jni::Jni(Runtime& rt) : rt_(rt) {
     rt.mem().write<GuestAddr>(vm_table + 7 * 8, rt.make_thunk("AttachCurrentThreadAsDaemon", attach));
     vm_ = rt.heap().alloc_zeroed(16);
     rt.mem().write<GuestAddr>(vm_, vm_table);
+
+    // The bits of java.lang every Android app relies on. Native code that runs on its own
+    // threads finds classes through a ClassLoader it saved earlier, so loadClass has to
+    // give back the real class.
+    auto load_class = [](JavaCall& j) -> std::uint64_t {
+        std::string name = j.string_arg(0);
+        std::replace(name.begin(), name.end(), '.', '/');
+        return j.jni.find_class(name);
+    };
+    implement("java/lang/ClassLoader", "loadClass", load_class);
+    implement("java/lang/Class", "forName", load_class);
+    implement("java/lang/Class", "getClassLoader", [](JavaCall& j) -> std::uint64_t { return j.jni.new_instance("java/lang/ClassLoader"); });
+    implement("java/lang/Class", "getName", [](JavaCall& j) -> std::uint64_t {
+        auto cls = j.jni.object(j.self);
+        std::string name = cls ? cls->class_name : "java.lang.Object";
+        std::replace(name.begin(), name.end(), '/', '.');
+        return j.jni.new_string(name);
+    });
 }
 
 GuestAddr Jni::env(GuestThread& thread) {
@@ -478,6 +580,33 @@ std::uint64_t Jni::default_value(const std::string& signature) {
     return 0;
 }
 
+std::optional<std::uint64_t> Jni::field(GuestAddr object, const std::string& name) {
+    std::lock_guard lock(mutex_);
+    auto it = objects_.find(object);
+    if (it == objects_.end()) return std::nullopt;
+    auto f = it->second.fields.find(name);
+    if (f == it->second.fields.end()) return std::nullopt;
+    return f->second;
+}
+
+void Jni::set_field(GuestAddr object, const std::string& name, std::uint64_t value) {
+    std::lock_guard lock(mutex_);
+    auto it = objects_.find(object);
+    if (it != objects_.end()) it->second.fields[name] = value;
+}
+
+std::string Jni::string_of(GuestAddr s) {
+    std::lock_guard lock(mutex_);
+    auto it = objects_.find(s);
+    return it == objects_.end() ? std::string() : it->second.text;
+}
+
+GuestAddr Jni::array_data(GuestAddr array) {
+    std::lock_guard lock(mutex_);
+    auto it = objects_.find(array);
+    return it == objects_.end() ? 0 : it->second.data;
+}
+
 void Jni::implement(const std::string& class_name, const std::string& name, MethodImpl impl) {
     std::lock_guard lock(mutex_);
     impls_[{class_name, name}] = std::move(impl);
@@ -489,8 +618,21 @@ const MethodImpl* Jni::implementation(const Member& m) {
     return it == impls_.end() ? nullptr : &it->second;
 }
 
+std::uint64_t Jni::call_native(const std::string& class_name, const std::string& name, GuestAddr self,
+                               const std::vector<std::uint64_t>& args) {
+    auto fn = native(class_name, name);
+    if (!fn) {
+        log::warn("java: no native {}.{} was registered", class_name, name);
+        return 0;
+    }
+    std::vector<std::uint64_t> all{env(rt_.current_thread()), self};
+    all.insert(all.end(), args.begin(), args.end());
+    return rt_.call(*fn, all);
+}
+
 void Jni::register_natives(const std::string& class_name, std::vector<NativeMethod> methods) {
     log::debug("RegisterNatives: {} methods on {}", methods.size(), class_name);
+    for (const auto& m : methods) log::debug("  {}{} = {:#x}", m.name, m.signature, m.fn);
     std::lock_guard lock(mutex_);
     auto& list = natives_[class_name];
     list.insert(list.end(), methods.begin(), methods.end());

@@ -45,6 +45,7 @@ Runtime::Runtime(RuntimeOptions options)
     mem_.write(GuestMemory::kThunkBase + 4, kBrk);
 
     register_all_shims(shims_);
+    if (options_.extra_shims) options_.extra_shims(shims_);
     vfs_.add_virtual("/proc/self/maps", [this] { return proc_maps(); });
     vfs_.add_virtual("/proc/self/cmdline", [this] { return options_.package + std::string(1, '\0'); });
 }
@@ -169,7 +170,60 @@ void Runtime::dispatch(std::uint32_t index, Cpu& cpu) {
     CallContext ctx(cpu, *this, *t);
     if (log::enabled(log::Level::Trace))
         log::trace("[t{}] {}({:#x}, {:#x}, {:#x}) from {:#x}", cpu.thread().id, t->name, ctx.x(0), ctx.x(1), ctx.x(2), ctx.x(30));
+    // Shims can call back into the guest and so nest; keep the outer import's state.
+    GuestThread& thread = cpu.thread();
+    const Thunk* outer = thread.in_import.load(std::memory_order_relaxed);
+    GuestAddr arg = thread.import_arg, lr = thread.import_lr, fp = thread.import_fp;
+    thread.import_arg = ctx.x(0);
+    thread.import_lr = ctx.x(30);
+    thread.import_fp = ctx.x(29);
+    thread.in_import = t;
+    struct Restore {
+        GuestThread& thread;
+        const Thunk* t;
+        GuestAddr arg, lr, fp;
+        ~Restore() {
+            thread.in_import = t;
+            thread.import_arg = arg;
+            thread.import_lr = lr;
+            thread.import_fp = fp;
+        }
+    } restore{thread, outer, arg, lr, fp};
     t->fn(ctx);
+}
+
+std::string Runtime::describe(GuestAddr addr) const {
+    if (const Module* m = linker_.module_at(addr)) return fmt::format("{}+{:#x}", m->name(), addr - m->base());
+    return fmt::format("{:#x}", addr);
+}
+
+std::vector<std::string> Runtime::thread_report() {
+    std::vector<std::shared_ptr<GuestThread>> threads;
+    {
+        std::lock_guard lock(thread_mutex_);
+        threads = threads_;
+    }
+    std::vector<std::string> lines;
+    for (const auto& t : threads) {
+        const Thunk* in = t->in_import.load();
+        if (!in) {
+            lines.push_back(fmt::format("thread {}: running guest code", t->id));
+            continue;
+        }
+        std::string line = fmt::format("thread {}: in {}({:#x}), called from {}", t->id, in->name, t->import_arg.load(),
+                                       describe(t->import_lr));
+        GuestAddr fp = t->import_fp;
+        for (int depth = 0; depth < 12 && fp >= t->stack_lo && fp + 16 <= t->stack_hi && fp % 8 == 0; ++depth) {
+            GuestAddr ret = mem_.read<std::uint64_t>(fp + 8);
+            GuestAddr next = mem_.read<std::uint64_t>(fp);
+            if (!ret) break;
+            line += " <- " + describe(ret);
+            if (next <= fp) break;
+            fp = next;
+        }
+        lines.push_back(std::move(line));
+    }
+    return lines;
 }
 
 // --- process lifetime ----------------------------------------------------------------------

@@ -6,6 +6,7 @@
 #include <dynarmic/interface/A64/config.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -41,6 +42,11 @@ struct GuestThread {
     std::uint64_t tpidr_el0 = 0;
     std::unique_ptr<Cpu> cpu;
     std::unordered_map<std::uint32_t, GuestAddr> specific;  // pthread_key -> value
+
+    // The import the thread is in right now, with its first argument and the guest's lr and
+    // fp at the call, so a hang can be traced to the guest code waiting (Runtime::thread_report).
+    std::atomic<const Thunk*> in_import{nullptr};
+    std::atomic<GuestAddr> import_arg{0}, import_lr{0}, import_fp{0};
 };
 
 // What a shim sees: the calling guest context's registers, following AAPCS64.
@@ -91,7 +97,7 @@ public:
     Cpu(Runtime& rt, GuestThread& thread, std::uint32_t processor_id);
     ~Cpu() override;
 
-    // Calls guest function `fn` with up to 8 integer arguments and returns x0. Safe to call
+    // Calls guest function `fn` with integer arguments and returns x0. Safe to call
     // from inside a shim (the interrupted guest state is saved and restored).
     std::uint64_t call(GuestAddr fn, const std::vector<std::uint64_t>& args);
 

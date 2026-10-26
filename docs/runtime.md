@@ -38,6 +38,11 @@ including the stack-protector cookie at offset 0x28) and its own dynarmic JIT. G
 condition variables and semaphores map to host primitives by address, created on first use, so
 statically initialised ones work.
 
+Each thread records the import it is inside (with its first argument and the guest's `lr` and
+`fp` at the call). If no frame finishes for 30 seconds, rfu logs every guest thread: the import it
+is blocked in, where it was called from, and the guest call stack found by following frame
+pointers (`libPVZ2.so+0x...`), which is usually enough to see two threads waiting on each other.
+
 ## Android ABI details that matter
 
 - `long` and pointers are 64-bit; `wchar_t` is 32-bit; `long double` is IEEE binary128.
@@ -67,7 +72,87 @@ off, rfu will need to mount a CA bundle there.
 ## Java
 
 There is no JVM. `src/jni` gives native code a JavaVM and JNIEnv whose functions work on a small
-object model (classes by name, strings, arrays, instances). Calls to Java methods are logged once
-and answered with a neutral value: 0, an empty string, or a new instance of the declared return
-type. `Jni::implement` replaces that answer for a specific method; this is where the game's Java
-side (assets, device info, the activity lifecycle) will be written.
+object model (classes by name, strings, arrays, instances with fields). Calls to Java methods are
+logged once and answered with a neutral value (0, an empty string, or a new instance of the
+declared return type) unless something implements them with `Jni::implement`, which receives the
+call's Java arguments decoded from whichever of the three calling conventions native code used
+(C varargs, `va_list` or a `jvalue` array).
+
+`src/android` is the game's Java side, written from its decompiled classes
+(`com.popcap.SexyAppFramework.*`, `com.popcap.PvZ2.PvZ2GameActivity`):
+
+- **Lifecycle.** `run_app` makes the same native calls the activity does, in the same order:
+  `Native_createNativeApplicationLifecycleObserver` (onCreate), `Native_GameAppInitialize` (which
+  registers the remaining natives), `applicationWillFinishLaunching`/`DidFinishLaunching`,
+  onResume, then the GL surface's `Native_onSurfaceCreated`/`Changed` and the focus logic of
+  `AndroidGameApp.TryGainFocus`. Closing the window runs onPause and onDestroy, where the game
+  saves.
+- **Render loop.** `AndroidRenderer.onDrawFrame`: `PumpMessageQueue`, clear, the frame limiter set
+  by `Graphics_SetFramerate`, `Native_onDrawFrame`, swap. Everything runs on the main thread, which
+  is both Android's UI thread and its GL thread; the game's own threads are guest threads.
+- **Input.** `AndroidUIEventManager` serialises touches, keys, text, the back button and gestures
+  into a direct ByteBuffer the game passes to `UI_ProcessEvents`: the event count at offset 0,
+  events from offset 16, each a type word followed by its fields (see `UiEvents` in
+  `src/android/app.cpp`). As on Android, keys only go through the soft keyboard's input
+  connection (Enter, Delete and digits as key events, other characters as committed text), and
+  touches are dropped until the game removes the splash screen.
+- **Storage.** `mount_storage` maps Android's paths onto the `--data` folder: `/data/data/<package>`
+  to `data/`, `/sdcard/Android/data/<package>` to `external/`, the rest of `/sdcard` to `sdcard/`,
+  and the OBB to `/sdcard/Android/obb/<package>/main.<version>.<package>.obb`.
+  `Activity.getPreferences()` is `data/shared_prefs/PvZ2GameActivity.prefs`.
+- **Web requests.** Besides its CDN client, the game makes some requests through Java
+  (`AndroidHttpTransaction`, over `HttpURLConnection`). `src/android/java_http.cpp` runs them on
+  four worker threads with the host's HTTP client (`src/platform/http.cpp`: WinHTTP on Windows,
+  libcurl elsewhere) and reports back through the same natives Java calls.
+
+## Graphics, sound and the window
+
+`src/platform` is the only part of rfu that knows about SDL2.
+
+- **OpenGL ES.** libPVZ2 imports 57 OpenGL ES 2.0 functions and nothing else (no buffer objects:
+  every vertex array is a client-side pointer into guest memory, which the host GL reads in
+  place). Each is a shim calling the host's ES implementation through `SDL_GL_GetProcAddress`, with
+  guest pointers turned into host ones; `glTexImage2D`'s ninth argument comes from the guest
+  stack. The context is an ES 2 context: on Windows from the driver's ES profile
+  (`WGL_EXT_create_context_es2_profile`, which NVIDIA, AMD and Intel drivers have) or, with
+  `--angle`, from ANGLE; on Linux from Mesa through EGL.
+- **Textures.** Reflourished's PTX textures are RGBA8888, RGBA4444, RGB565, ETC1 with a separate
+  alpha plane, and ETC2 RGBA8. When the driver doesn't list an ETC format as a compressed texture
+  format, `glCompressedTexImage2D` decodes it to RGBA8 (`src/platform/etc.cpp`, the same decoder as
+  pvz2conv) and uploads that instead; `glGetString(GL_EXTENSIONS)` and the compressed-format
+  queries always report ETC1 and ETC2, so the game picks the same textures as on a phone.
+- **Sound.** The game's sound engine (Wwise) plays PCM through an OpenSL ES buffer-queue player.
+  `src/platform/opensles.cpp` implements the engine, output mix and player objects with their
+  vtables of thunks; each player is an SDL audio device whose callback copies the queued guest
+  buffers out and, when one is used up, calls the game's buffer-queue callback right there, on a
+  guest thread bound to SDL's audio thread. Without an audio device the game runs silently.
+- **Exit.** When the game stops, rfu ends the process without unwinding it, as Android does: the
+  game's threads are still running and the runtime can't be torn down under them.
+
+## Testing with scripts
+
+`--script <file>` feeds input to the game at given frames, and takes screenshots, so a run can be
+repeated without a person at the mouse (and on a machine without one). Each line is
+`<frame> <action> [arguments]`, `#` starts a comment:
+
+| Action | What |
+| --- | --- |
+| `tap <x> <y>` | press and release (three frames later) at surface pixel x, y |
+| `drag <x1> <y1> <x2> <y2> [frames]` | press, move over `frames` frames (default 10), release |
+| `text <characters>` | type, as on the soft keyboard (digits as key presses) |
+| `key <android keycode>` | press and release a key: 66 Enter, 67 Delete, 7-16 digits |
+| `back` | Android's back button |
+| `screenshot <file.bmp>` | save the frame |
+| `quit` | close the window |
+
+For example, from a fresh `--data` folder on the 1.4.2 OBB at 1280x720, this reaches the intro:
+
+```
+800  tap 640 225     # the name box on the Welcome dialog
+860  text 25
+900  key 66          # Enter: accept
+960  tap 476 486     # "Skip base game content?": No
+1070 tap 640 656     # Play
+1300 screenshot intro.bmp
+1310 quit
+```

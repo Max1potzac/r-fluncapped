@@ -45,8 +45,38 @@ else()
     target_compile_options(rfu_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
 
+# The window, OpenGL ES, audio and the game's Java side: everything that needs SDL2.
+find_package(SDL2 CONFIG REQUIRED)
+add_library(rfu_app STATIC
+    src/platform/etc.cpp
+    src/platform/gles.cpp
+    src/platform/http.cpp
+    src/platform/opensles.cpp
+    src/platform/window.cpp
+    src/android/app.cpp
+    src/android/java_http.cpp
+)
+target_link_libraries(rfu_app PUBLIC rfu_core $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>)
+# The game's own (Java-side) web requests: WinHTTP on Windows, libcurl elsewhere.
+if (WIN32)
+    target_link_libraries(rfu_app PUBLIC winhttp)
+else()
+    find_package(CURL)
+    if (CURL_FOUND)
+        target_link_libraries(rfu_app PUBLIC CURL::libcurl)
+        target_compile_definitions(rfu_app PRIVATE RFU_HAVE_CURL)
+    else()
+        message(WARNING "libcurl not found: the game's own web requests will fail (its CDN client still works)")
+    endif()
+endif()
+if (MSVC)
+    target_compile_options(rfu_app PRIVATE /W4 /permissive- /utf-8 /wd4100)
+else()
+    target_compile_options(rfu_app PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
 add_executable(rfu src/main.cpp)
-target_link_libraries(rfu PRIVATE rfu_core)
+target_link_libraries(rfu PRIVATE rfu_app)
 
 if (RFU_BUILD_TESTS)
     enable_testing()

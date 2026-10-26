@@ -6,8 +6,9 @@ using System.Text.Json;
 namespace Pvz2Conv;
 
 /// Takes from the game's APK what rfu needs: the arm64 native libraries and
-/// the assets folder, plus the version from AndroidManifest.xml. The Java
-/// side (dex files, res/) isn't used by rfu and is left in the APK.
+/// the assets folder, plus the version from AndroidManifest.xml and the
+/// launcher icon (icon.png, for rfu's window and the launcher). The rest of
+/// the Java side (dex files, res/) isn't used by rfu and is left in the APK.
 sealed class Apk
 {
     public const string LibDir = "lib/arm64-v8a/";
@@ -64,7 +65,7 @@ sealed class Apk
         if (!abis.Contains("arm64-v8a"))
         {
             _log($"FAIL no arm64-v8a libraries (this APK has {(abis.Count == 0 ? "none" : string.Join(", ", abis))}); rfu needs the 64-bit build");
-            WriteManifest(outDir, info, abis, [], []);
+            WriteManifest(outDir, info, abis, [], [], null);
             return false;
         }
 
@@ -88,12 +89,19 @@ sealed class Apk
             }
         }
 
+        string? icon = FindIcon(zip);
+        if (icon != null)
+        {
+            Extract(zip.GetEntry(icon)!, Path.Combine(outDir, "icon.png"));
+            _log($"ok   icon.png (from {icon})");
+        }
+
         foreach (var l in libs) _log($"ok   {LibDir}{l.Name} ({l.Size:N0} bytes)");
         _log($"ok   {assets.Count} files in assets/{(dex > 0 ? $" ({dex} .dex left out)" : "")}");
         var missing = Required.Where(r => !libs.Any(l => l.Name == r)).ToList();
         if (missing.Count > 0) _log($"FAIL rfu needs {string.Join(", ", missing)}, which this APK doesn't have");
 
-        WriteManifest(outDir, info, abis, libs, assets);
+        WriteManifest(outDir, info, abis, libs, assets, icon);
         _log($"output: {outDir}");
         _log($"     run the game with: rfu --lib-dir \"{Path.Combine(outDir, "lib", "arm64-v8a")}\"");
         return missing.Count == 0;
@@ -113,6 +121,26 @@ sealed class Apk
             Get("uses-sdk", "minSdkVersion"), Get("uses-sdk", "targetSdkVersion"));
     }
 
+    // The launcher icon, without reading resources.arsc: the sharpest PNG among
+    // the mipmap (else drawable) images named like an icon, leaving out the
+    // adaptive icon's separate layers. Reflourished: res/mipmap-xxxhdpi/pvz2_icon.png.
+    static string? FindIcon(ZipArchive zip)
+    {
+        string[] densities = ["xxxhdpi", "xxhdpi", "xhdpi", "hdpi", "mdpi", "ldpi"];
+        int Rank(string dir) { int i = Array.FindIndex(densities, d => dir.EndsWith("-" + d)); return i < 0 ? densities.Length : i; }
+        return zip.Entries
+            .Where(e => e.FullName.StartsWith("res/") && e.FullName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) && e.FullName.Count(c => c == '/') == 2)
+            .Select(e => (Entry: e, Dir: e.FullName.Split('/')[1], Name: Path.GetFileNameWithoutExtension(e.Name).ToLowerInvariant()))
+            .Where(x => (x.Dir.StartsWith("mipmap") || x.Dir.StartsWith("drawable")) && (x.Name.Contains("icon") || x.Name.Contains("launcher")))
+            .Where(x => !x.Name.EndsWith("_background") && !x.Name.EndsWith("_foreground") && !x.Name.EndsWith("_round") && !x.Name.EndsWith("_monochrome"))
+            .Where(x => !x.Name.StartsWith("abc_") && !x.Name.StartsWith("applovin") && !x.Name.StartsWith("common_") && !x.Name.StartsWith("notification"))
+            .OrderBy(x => x.Dir.StartsWith("mipmap") ? 0 : 1)
+            .ThenBy(x => Rank(x.Dir))
+            .ThenByDescending(x => x.Entry.Length)
+            .Select(x => x.Entry.FullName)
+            .FirstOrDefault();
+    }
+
     // Writes the entry and returns its SHA-256.
     static string Extract(ZipArchiveEntry e, string dest)
     {
@@ -130,7 +158,7 @@ sealed class Apk
     static string SafeRelative(string name) =>
         Path.Combine(name.Split('/').Where(p => p is not ("" or "." or "..")).ToArray());
 
-    void WriteManifest(string outDir, Info info, List<string> abis, List<(string Name, long Size, string Sha256)> libs, List<(string Path, long Size)> assets)
+    void WriteManifest(string outDir, Info info, List<string> abis, List<(string Name, long Size, string Sha256)> libs, List<(string Path, long Size)> assets, string? icon)
     {
         Directory.CreateDirectory(outDir);
         using var fs = File.Create(Path.Combine(outDir, "_apk_manifest.json"));
@@ -143,6 +171,7 @@ sealed class Apk
         w.WriteString("min_sdk", info.MinSdk);
         w.WriteString("target_sdk", info.TargetSdk);
         w.WriteString("obb", obbName);
+        w.WriteString("icon", icon);
         w.WriteStartArray("abis");
         foreach (var a in abis) w.WriteStringValue(a);
         w.WriteEndArray();

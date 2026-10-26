@@ -8,6 +8,8 @@ HOW TO USE
     lib\arm64-v8a\           the native libraries; point rfu at this folder
                               with  rfu --lib-dir <...>\lib\arm64-v8a
     assets\                  the APK's assets, if any (.dex files left out)
+    icon.png                 the game's launcher icon (for rfu's window and
+                             the launcher)
     _apk_manifest.json       package, version, the OBB name it expects and
                              the SHA-256 of every library
   The Java side (classes.dex, res\) isn't used by rfu and stays in the APK, so
@@ -31,6 +33,10 @@ HOW TO USE
   You can also drop RTON / PAM / POPFX files or folders, as before: each file
   gets a JSON file next to it, and a folder is searched recursively.
 
+  JSON BACK TO RTON: drop a .json (one that came from an RTON, from pvz2conv
+  or Sen) and you get the .rton next to it, for the game to read. For a
+  folder, add --to-rton. .pam.json and .popfx.json aren't converted back.
+
   A console window shows progress; press Enter to close it at the end.
   _pvz2conv_log.txt is written into the output folder with everything that
   happened, and an OBB also gets _obb_manifest.json: every composite group,
@@ -52,6 +58,7 @@ OPTIONS (command prompt)
   --list               OBB: list the groups, extract nothing
   --no-convert         OBB: extract the files as they are
   --skip-existing      don't overwrite JSON that's already there
+  --to-rton            folders: convert *.json back to RTON
   --no-pause           don't wait for Enter (for scripts and the launcher)
 
 OBB / RSB
@@ -92,6 +99,10 @@ RTON / PAM / POPFX
          varints, a string cache (0x90/0x91, 0x92/0x93) and RTID references,
          written as "RTID(uid@Sheet)" the way other community tools do.
          Encrypted RTON (starts with 10 00) is detected and skipped for now.
+         Back to RTON: strings through the string cache, RTID(...) as RTIDs,
+         whole numbers as varints, decimals as float32 when nothing is lost.
+         RTON -> JSON -> RTON -> JSON gives the same JSON (checked on
+         Reflourished's LawnStrings); the RTON bytes can differ.
   PAM    PopAnim, magic 54 19 F0 BA, versions 1 to 6. Written with the same
          field names as Sen / TwinStar: image (name, size, transform),
          sprite and main_sprite (frames with remove / append / change,

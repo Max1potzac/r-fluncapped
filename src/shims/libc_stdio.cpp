@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <map>
 #include <random>
+#include <set>
 #include <unordered_map>
 
 namespace fs = std::filesystem;
@@ -173,7 +174,9 @@ int open_path(Runtime& rt, const std::string& path, int flags) {
         f->data = (*gen)();
         return files(rt).add(std::move(f));
     }
-    auto host = rt.vfs().to_host(path);
+    // Reads see the overlays (mods); anything that writes goes to the game's own files.
+    bool read_only = (flags & android::kO_ACCMODE) == android::kO_RDONLY && !(flags & (android::kO_CREAT | android::kO_TRUNC));
+    auto host = read_only ? rt.vfs().to_host_read(path) : rt.vfs().to_host(path);
     if (!host) return -android::kENOENT;
     std::error_code ec;
     bool exists = fs::exists(*host, ec);
@@ -250,7 +253,7 @@ int fill_stat(Runtime& rt, const std::string& path, GuestAddr st) {
         mode = android::kS_IFREG | 0444;
         size = (*gen)().size();
     } else {
-        auto host = rt.vfs().to_host(path);
+        auto host = rt.vfs().to_host_read(path);
         if (!host) return -android::kENOENT;
         std::error_code ec;
         auto status = fs::status(*host, ec);
@@ -408,7 +411,7 @@ void register_libc_stdio(ShimRegistry& reg) {
     reg.add("access", [](CallContext& c) {
         std::string path = guest_path(c, 0);
         if (c.rt().vfs().virtual_file(path)) return c.ret(0);
-        auto host = c.rt().vfs().to_host(path);
+        auto host = c.rt().vfs().to_host_read(path);
         std::error_code ec;
         if (!host || !fs::exists(*host, ec)) return c.fail(android::kENOENT);
         c.ret(0);
@@ -518,11 +521,15 @@ void register_libc_stdio(ShimRegistry& reg) {
 
     // --- directories -----------------------------------------------------------------------
     reg.add("opendir", [](CallContext& c) {
-        auto host = c.rt().vfs().to_host(guest_path(c, 0));
-        std::error_code ec;
-        if (!host || !fs::is_directory(*host, ec)) return c.fail(android::kENOENT, 0);
+        // The game's directory with the overlays' files added (each name once).
+        auto layers = c.rt().vfs().layers(guest_path(c, 0));
+        if (layers.empty()) return c.fail(android::kENOENT, 0);
         std::vector<std::string> names{".", ".."};
-        for (const auto& e : fs::directory_iterator(*host, ec)) names.push_back(path_to_utf8(e.path().filename()));
+        std::set<std::string> seen;
+        std::error_code ec;
+        for (const auto& layer : layers)
+            for (const auto& e : fs::directory_iterator(layer, ec))
+                if (auto name = path_to_utf8(e.path().filename()); seen.insert(name).second) names.push_back(std::move(name));
         GuestAddr dir = c.rt().heap().alloc_zeroed(280);  // holds the struct dirent readdir returns
         auto& f = files(c.rt());
         std::lock_guard lock(f.mutex);

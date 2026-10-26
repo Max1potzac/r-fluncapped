@@ -48,6 +48,8 @@ void Vfs::mount(std::string guest, std::filesystem::path host) {
     std::sort(mounts_.begin(), mounts_.end(), [](const Mount& a, const Mount& b) { return a.guest.size() > b.guest.size(); });
 }
 
+void Vfs::overlay(std::string guest, std::filesystem::path host) { overlays_.push_back({normalise(guest), std::move(host)}); }
+
 void Vfs::add_virtual(std::string guest, Generator gen) { virtual_.emplace_back(normalise(guest), std::move(gen)); }
 
 std::string Vfs::absolute(const std::string& guest_path) const {
@@ -65,6 +67,42 @@ std::optional<std::filesystem::path> Vfs::to_host(const std::string& guest_path)
         return host;
     }
     return std::nullopt;
+}
+
+namespace {
+
+// `host` under an overlay for guest `path`, if the overlay covers it.
+std::optional<std::filesystem::path> under(const std::string& path, const std::string& guest, const std::filesystem::path& host) {
+    if (!has_prefix(path, guest)) return std::nullopt;
+    std::string rest = path.substr(guest == "/" ? 0 : guest.size());
+    if (rest.empty() || rest == "/") return host;
+    return host / path_from_utf8(rest.substr(1));
+}
+
+}  // namespace
+
+std::optional<std::filesystem::path> Vfs::to_host_read(const std::string& guest_path) const {
+    std::string path = absolute(guest_path);
+    auto base = to_host(path);
+    std::error_code ec;
+    for (auto it = overlays_.rbegin(); it != overlays_.rend(); ++it) {
+        auto host = under(path, it->guest, it->host);
+        if (!host || !std::filesystem::exists(*host, ec)) continue;
+        // A directory the game has too stays the game's (its listing merges the layers).
+        if (std::filesystem::is_directory(*host, ec) && base && std::filesystem::is_directory(*base, ec)) break;
+        return host;
+    }
+    return base;
+}
+
+std::vector<std::filesystem::path> Vfs::layers(const std::string& guest_path) const {
+    std::string path = absolute(guest_path);
+    std::vector<std::filesystem::path> out;
+    std::error_code ec;
+    if (auto base = to_host(path); base && std::filesystem::is_directory(*base, ec)) out.push_back(*base);
+    for (const auto& o : overlays_)
+        if (auto host = under(path, o.guest, o.host); host && std::filesystem::is_directory(*host, ec)) out.push_back(*host);
+    return out;
 }
 
 std::optional<std::string> Vfs::to_guest(const std::filesystem::path& host_path) const {

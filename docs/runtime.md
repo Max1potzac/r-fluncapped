@@ -53,6 +53,25 @@ pointers (`libPVZ2.so+0x...`), which is usually enough to see two threads waitin
   then patches libPVZ2's code. Patching code is followed by an instruction cache flush, which drops
   the JIT's translations of that range.
 
+## Overlays (custom content)
+
+`--overlay <guest>=<host>` lays a host folder over a guest one, read-only (`Vfs::overlay`). A
+read (`open` without write flags, `stat`, `access`, `gzopen` for reading) takes the file from the
+topmost overlay that has it, else from the mount underneath; anything that writes goes to the
+mount. `opendir` lists the mount's directory with every overlay's files added, each name once. So
+custom levels and strings can sit over the CDN folder (`No_Backup/CDN.<version>`) without
+changing it: the game's CDN download rewrites the folder underneath, and the overlay still wins.
+The launcher builds one overlay for the CDN folder and one for the external files folder from the
+mods switched on, converting JSON to RTON where the game's file is RTON and merging LawnStrings.
+
+## Code patches
+
+`--patch <file>` applies small changes to a loaded library after every initializer has run, so
+after RFLib's own patches: lines of `<library>+<offset> <bytes> [was <bytes>]`. Every line is
+checked first (the offset inside one of the library's segments, the "was" bytes there), and the
+file is applied whole or not at all, so a patch written for another build changes nothing. Each
+change is followed by `Runtime::invalidate_code`, as a guest's own instruction cache flush is.
+
 ## Network
 
 The game fetches its CDN content (`https://reflourished.ducnguyen.org/cdn/1.4.2.main.tar`, the
@@ -96,6 +115,9 @@ call's Java arguments decoded from whichever of the three calling conventions na
 - **Render loop.** `AndroidRenderer.onDrawFrame`: `PumpMessageQueue`, clear, the frame limiter set
   by `Graphics_SetFramerate`, `Native_onDrawFrame`, swap. Everything runs on the main thread, which
   is both Android's UI thread and its GL thread; the game's own threads are guest threads.
+- **Keybinds.** `--keybinds` maps keys to a touch at a point of the game's surface (pointer
+  ids from 100, held while the key is) or to the back button. `Window::poll` turns them into the
+  same input as the mouse; they're off while the game's keyboard is up.
 - **Input.** `AndroidUIEventManager` serialises touches, keys, text, the back button and gestures
   into a direct ByteBuffer the game passes to `UI_ProcessEvents`: the event count at offset 0,
   events from offset 16, each a type word followed by its fields (see `UiEvents` in

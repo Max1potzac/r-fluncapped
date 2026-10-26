@@ -6,3 +6,5 @@ CMakeUserPresets.json
 *.so
 *.obb
 *.apk
+bin/
+obj/

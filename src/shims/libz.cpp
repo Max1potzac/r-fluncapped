@@ -6,6 +6,7 @@
 
 #include <zlib.h>
 
+#include <cstring>
 #include <unordered_map>
 
 namespace rfu {
@@ -139,7 +140,9 @@ void register_libz(ShimRegistry& reg) {
     });
 
     reg.add("gzopen", [](CallContext& c) {
-        auto host = c.rt().vfs().to_host(c.rt().vfs().absolute(c.str(0)));
+        bool reading = std::strchr(c.str(1), 'r') != nullptr;
+        auto path = c.rt().vfs().absolute(c.str(0));
+        auto host = reading ? c.rt().vfs().to_host_read(path) : c.rt().vfs().to_host(path);
         if (!host) return c.fail(android::kENOENT, 0);
 #ifdef _WIN32
         gzFile f = gzopen_w(host->c_str(), c.str(1));

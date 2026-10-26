@@ -2,7 +2,10 @@
 
 // The game's window: an SDL2 window with an OpenGL ES 2 context, and its input.
 
+#include "platform/keybinds.h"
+
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <variant>
 #include <vector>
@@ -22,6 +25,8 @@ struct WindowOptions {
     // 0x0: the desktop's shape, 720 pixels tall for low_assets, else 1080 to 1440.
     int game_width = 0, game_height = 0;
     bool low_assets = false;
+    std::vector<KeyBind> keybinds;
+    std::filesystem::path icon;  // a PNG for the window's (and taskbar's) icon
 };
 
 // Input, in the shape the game's Java side reports it.
@@ -77,6 +82,7 @@ public:
 
 private:
     void create_surface();
+    void set_icon(const std::filesystem::path& file);
     void drawable_size(int& w, int& h) const;
     // Window points to the game's surface pixels, through the letterbox swap() draws.
     void to_surface(float wx, float wy, float& x, float& y) const;
@@ -86,6 +92,8 @@ private:
     unsigned fbo_ = 0;  // 0: the game draws straight to the window, which then has the game's size
     void* context_ = nullptr;
     bool mouse_down_ = false;
+    bool text_input_ = false;
+    std::vector<std::pair<int, KeyBind>> binds_;  // by SDL key code
 };
 
 }  // namespace rfu::platform

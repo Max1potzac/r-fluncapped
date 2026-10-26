@@ -16,6 +16,11 @@
 #include <fmt/ranges.h>
 
 #include <cstdio>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -40,6 +45,7 @@ void usage() {
                  "  --no-rflib               don't load libRFLib.so (run vanilla code only)\n"
                  "  --offline                no network: the game skips its CDN update and plays offline\n"
                  "  --log <level>            trace, debug, info (default), warn, error\n"
+                 "  --log-file <file>        write the log (and the game's own output) to a file\n"
                  "  --init-only              stop after initialisation and list unimplemented imports\n"
                  "  --frames <n>             quit after n frames (for testing)\n"
                  "  --screenshot <file.bmp>  with --frames: save the last frame\n"
@@ -95,6 +101,7 @@ int main(int argc, char** argv) {
     bool load_rflib = true;
     std::string dump_patches;
     bool init_only = false;
+    std::string log_file;
     rfu::android::AppOptions app;
     app.data_dir = "rfu-data";
     try {
@@ -155,6 +162,8 @@ int main(int argc, char** argv) {
                 app.screenshot = rfu::path_from_utf8(value());
             } else if (arg == "--no-rflib") {
                 load_rflib = false;
+            } else if (arg == "--log-file") {
+                log_file = value();
             } else if (arg == "--log") {
                 rfu::log::set_level(parse_level(value()));
             } else if (arg == "--help" || arg == "-h") {
@@ -172,6 +181,29 @@ int main(int argc, char** argv) {
         std::cerr << "rfu: " << e.what() << "\n";
         usage();
         return 2;
+    }
+
+    if (!log_file.empty()) {
+        // Both streams into one file: rfu logs to stderr, the game prints to stdout.
+#ifdef _WIN32
+        FILE* f = _wfreopen(rfu::path_from_utf8(log_file).c_str(), L"w", stderr);
+        if (f) _dup2(_fileno(stderr), _fileno(stdout));
+#else
+        FILE* f = std::freopen(log_file.c_str(), "w", stderr);
+        if (f) dup2(fileno(stderr), fileno(stdout));
+#endif
+        if (!f) {
+            std::cerr << "rfu: can't write " << log_file << "\n";
+            return 2;
+        }
+        // Line by line, so a crash loses nothing (MSVC has no line buffering: unbuffered there).
+#ifdef _WIN32
+        std::setvbuf(stderr, nullptr, _IONBF, 0);
+        std::setvbuf(stdout, nullptr, _IONBF, 0);
+#else
+        std::setvbuf(stderr, nullptr, _IOLBF, 4096);
+        std::setvbuf(stdout, nullptr, _IOLBF, 4096);
+#endif
     }
 
     options.extra_shims = [](rfu::ShimRegistry& reg) {

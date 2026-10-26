@@ -357,6 +357,13 @@ void App::load_script(const fs::path& file, std::uint64_t now) {
             ls >> code;
             script.emplace(frame, Scripted{platform::Input{platform::KeyInput{code, code == 66 ? 10u : 0u, true, 0}}, {}});
             script.emplace(frame + 1, Scripted{platform::Input{platform::KeyInput{code, code == 66 ? 10u : 0u, false, 0}}, {}});
+        } else if (verb == "seed" || verb == "shovel") {
+            // A game keybind pressed for three frames: "seed <n>" or "shovel".
+            int slot = 0;
+            if (verb == "seed") ls >> slot;
+            auto action = verb == "seed" ? platform::KeyBind::Action::Seed : platform::KeyBind::Action::Shovel;
+            script.emplace(frame, Scripted{platform::Input{platform::GameKeyInput{action, slot, true}}, {}});
+            script.emplace(frame + 3, Scripted{platform::Input{platform::GameKeyInput{action, slot, false}}, {}});
         } else if (verb == "screenshot" || verb == "quit" || verb == "peek") {
             std::string rest;
             std::getline(ls >> std::ws, rest);
@@ -579,6 +586,8 @@ void App::handle(const platform::Input& input) {
                 events.back();
             } else if constexpr (std::is_same_v<T, platform::TouchInput>) {
                 if (app_has_focus && !splash_showing) events.touch(in);
+            } else if constexpr (std::is_same_v<T, platform::GameKeyInput>) {
+                if (options.game_keys && app_has_focus && !splash_showing) options.game_keys(in);
             } else if constexpr (std::is_same_v<T, platform::KeyInput>) {
                 // Keys only reach the game through the soft keyboard's InputConnection
                 // (EditInputConnection.sendKeyEvent), which passes on Enter, Delete and the

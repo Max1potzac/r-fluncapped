@@ -58,7 +58,13 @@ struct FocusInput {
     bool focused;
 };
 struct QuitInput {};
-using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput>;
+// A keybind for something of the game's own (KeyBind::Action::Seed or Shovel) going down or up.
+struct GameKeyInput {
+    KeyBind::Action action;
+    int slot;
+    bool down;
+};
+using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput, GameKeyInput>;
 
 class Window {
 public:

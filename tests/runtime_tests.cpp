@@ -92,6 +92,12 @@ void test_keybinds() {
     EXPECT(binds[1].key == "Space" && !binds[1].x_fraction && binds[1].surface_x(1920) == 1180);
     EXPECT(binds[2].key == "Left Shift" && binds[2].action == rfu::platform::KeyBind::Action::Back);
     EXPECT(!errors.empty() && errors[0].rfind("line 5:", 0) == 0);
+
+    errors.clear();
+    binds = rfu::platform::parse_keybinds("3 seed 3\nD shovel\n4 seed\n5 seed 0\n", errors);
+    EXPECT(binds.size() == 2 && errors.size() == 2);
+    EXPECT(binds[0].action == rfu::platform::KeyBind::Action::Seed && binds[0].slot == 3);
+    EXPECT(binds[1].key == "D" && binds[1].action == rfu::platform::KeyBind::Action::Shovel);
 }
 
 void test_patches() {

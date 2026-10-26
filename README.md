@@ -103,7 +103,7 @@ Options:
 | `--mount <guest path>=<host dir>` | make a folder visible to the game |
 | `--overlay <guest path>=<host dir>` | lay a folder over one of the game's, read-only: custom levels, strings and other content without changing the game's files (later ones win) |
 | `--hover` | collect sun, coins and plant food by moving the mouse over them, no click needed |
-| `--keybinds <file>` | keys that act as a finger on a spot of the screen, or as the back button (see `src/platform/keybinds.h`) |
+| `--keybinds <file>` | keys for seed packets and the shovel, a finger on a spot of the screen, or the back button (see `src/platform/keybinds.h`) |
 | `--patch <file>` | code patches to apply after the libraries load, checked against the bytes they expect (see `src/core/patches.h`) |
 | `--icon <file.png>`, `--title <text>` | the window's icon (pvz2conv takes the game's out of the APK) and title |
 | `--version-name <x.y.z>` | the APK's version name, which the game reports (default 1.4.0) |

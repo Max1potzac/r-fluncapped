@@ -50,8 +50,16 @@ std::vector<KeyBind> parse_keybinds(const std::string& text, std::vector<std::st
             }
         } else if (action == "back") {
             bind.action = KeyBind::Action::Back;
+        } else if (action == "seed") {
+            bind.action = KeyBind::Action::Seed;
+            if (!(words >> bind.slot) || bind.slot < 1) {
+                fail("seed wants the packet's number, from 1");
+                continue;
+            }
+        } else if (action == "shovel") {
+            bind.action = KeyBind::Action::Shovel;
         } else {
-            fail("unknown action " + action + " (tap or back)");
+            fail("unknown action " + action + " (tap, back, seed or shovel)");
             continue;
         }
         std::string extra;

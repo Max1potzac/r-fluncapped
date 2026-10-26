@@ -6,7 +6,10 @@
 //   <key> tap <x> <y>     touch (x, y) while the key is held; a number is pixels of the game's
 //                         surface (--resolution), a number with % a fraction of its size
 //   <key> back            Android's back button
+//   <key> seed <n>        the n-th seed packet of the seed bank, counted from 1 at the top
+//   <key> shovel          the shovel
 //
+// seed and shovel find the packet or the shovel wherever the level put it (src/game/game_keys.h).
 // <key> is SDL's name for it (A, 1, Space, F1, Left Shift, Keypad 1...), with _ for a space.
 // '#' starts a comment. Binds are off while the game shows its keyboard, so typing still works.
 
@@ -16,11 +19,12 @@
 namespace rfu::platform {
 
 struct KeyBind {
-    enum class Action { Tap, Back };
+    enum class Action { Tap, Back, Seed, Shovel };
     std::string key;
     Action action = Action::Tap;
     float x = 0, y = 0;
     bool x_fraction = false, y_fraction = false;  // x, y are fractions (0-1) of the surface
+    int slot = 0;  // Seed: the packet, from 1
 
     // The point on a surface of the given size.
     float surface_x(int width) const { return x_fraction ? x * width : x; }

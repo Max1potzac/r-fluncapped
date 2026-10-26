@@ -76,9 +76,14 @@ CUSTOM CONTENT (mods\<name>\)
 
 KEYBINDS (keybinds.txt)
   Tick "Keybinds" and press "Edit keybinds". One key per line:
+    1 seed 1            1 picks the first seed packet (top of the seed bank)
+    D shovel            D picks up the shovel; D again puts it back
     1 tap 5% 18%        hold 1 = a finger at 5% across, 18% down
     Space tap 640 360   in pixels of the game's screen (its resolution)
     Backspace back      Android's back button
+  seed and shovel find the packet or the shovel wherever the level puts
+  them; a new keybinds.txt starts with 1-9 for the packets and D for the
+  shovel (an older one keeps what it has: add those lines to it).
   Key names are SDL's (A, 1, Space, F1, Left_Shift, Keypad_1). Keybinds are
   off while the game shows its keyboard, so typing a name still works.
 

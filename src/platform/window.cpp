@@ -358,6 +358,8 @@ std::vector<Input> Window::poll() {
                     const KeyBind& b = bind->second;
                     if (b.action == KeyBind::Action::Back) {
                         if (down) out.push_back(BackInput{});
+                    } else if (b.action == KeyBind::Action::Seed || b.action == KeyBind::Action::Shovel) {
+                        out.push_back(GameKeyInput{b.action, b.slot, down});
                     } else {
                         // Pointer ids from 100, clear of the mouse (1) and fingers (2 and up).
                         int id = 100 + static_cast<int>(bind - binds_.begin());

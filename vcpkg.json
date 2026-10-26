@@ -1,0 +1,9 @@
+{
+  "name": "r-fluncapped",
+  "version-string": "0.0.0",
+  "dependencies": [
+    "boost-icl",
+    "boost-variant",
+    "zlib"
+  ]
+}

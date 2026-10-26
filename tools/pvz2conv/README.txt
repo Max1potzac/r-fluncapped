@@ -1,8 +1,24 @@
-pvz2conv - PvZ2 OBB unpacker and RTON / PAM / POPFX / PTX converter
-====================================================================
+pvz2conv - PvZ2 APK / OBB unpacker and RTON / PAM / POPFX / PTX converter
+==========================================================================
 
 HOW TO USE
-  Drag the game's .obb onto pvz2conv.exe. It is unpacked into a folder named
+  Drag the game's .apk and .obb onto pvz2conv.exe (together or one at a time).
+
+  The .apk gives "<apk name>_extracted" with:
+    lib\arm64-v8a\           the native libraries; point rfu at this folder
+                              with  rfu --lib-dir <...>\lib\arm64-v8a
+    assets\                  the APK's assets, if any (.dex files left out)
+    _apk_manifest.json       package, version, the OBB name it expects and
+                             the SHA-256 of every library
+  The Java side (classes.dex, res\) isn't used by rfu and stays in the APK, so
+  once this has run the APK itself isn't needed. A file that is really an APK
+  is recognised whatever its extension (.zip too). An XAPK / APKS bundle isn't
+  unpacked: take the base .apk and the .obb out of it first. A 32-bit-only APK
+  or one missing libPVZ2 / libRFLib / libc++_shared / libNimble is reported as
+  a failure. When an APK and an OBB are dropped together, pvz2conv checks the
+  OBB is the one the APK asks for (main.<version code>.<package>.obb).
+
+  The .obb is unpacked into a folder named
   "<obb name>_extracted" next to it, in the game's own folder layout
   (ATLASES, IMAGES, PACKAGES, SOUNDBANKS ...), and converted on the way:
     ATLASES\X.PTX              ->  ATLASES\X.png
@@ -24,8 +40,10 @@ HOW TO USE
   group that fails is reported and skipped; it never stops the run.
 
 OPTIONS (command prompt)
-  pvz2conv.exe <.obb, file or folder> ...
-  --out D:\dump        write everything under this folder
+  pvz2conv.exe <.apk, .obb, file or folder> ...
+  --out D:\dump        write everything under this folder (an .apk and an
+                       .obb can share one: lib\ and assets\ sit beside the
+                       game's own folders)
   --converted-only     don't keep the original of a file that converted
                        (for an OBB the PTX / RTON / PAM / POPFX is never
                        written; for loose files the original is deleted).

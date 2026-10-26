@@ -15,6 +15,7 @@ add_library(rfu_core STATIC
     src/core/module.cpp
     src/core/linker.cpp
     src/core/log.cpp
+    src/core/hooks.cpp
     src/core/patches.cpp
     src/core/vfs.cpp
     src/cpu/cpu.cpp

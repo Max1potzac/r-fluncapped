@@ -171,6 +171,13 @@ GuestAddr Runtime::missing_thunk(const std::string& name) {
     return addr;
 }
 
+GuestAddr Runtime::make_hook_thunk(std::string name, std::function<void(CallContext&)> fn) {
+    std::lock_guard lock(thunk_mutex_);
+    GuestAddr addr = make_thunk(std::move(name), nullptr);
+    thunks_[(addr - thunk_addr(0)) / 8].hook = std::move(fn);
+    return addr;
+}
+
 const Thunk* Runtime::thunk(std::uint32_t index) const {
     return index < thunk_count_.load() ? &thunks_[index] : nullptr;
 }
@@ -201,7 +208,10 @@ void Runtime::dispatch(std::uint32_t index, Cpu& cpu) {
             thread.import_fp = fp;
         }
     } restore{thread, outer, arg, lr, fp};
-    t->fn(ctx);
+    if (t->hook)
+        t->hook(ctx);
+    else
+        t->fn(ctx);
 }
 
 std::string Runtime::describe(GuestAddr addr) const {

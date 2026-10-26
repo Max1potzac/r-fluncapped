@@ -2,6 +2,7 @@
 //
 //   rfu_tests <dir containing libtest.so>
 
+#include "core/hooks.h"
 #include "core/log.h"
 #include "core/patches.h"
 #include "core/vfs.h"
@@ -163,6 +164,36 @@ void test_guest(const std::filesystem::path& dir) {
     EXPECT(rt.call(*lib.find_export("destroyed_value")) == 7);
 }
 
+void test_hooks(const std::filesystem::path& dir) {
+    // b, bl and adrp move with their targets; cbz can't move yet.
+    auto b = rfu::relocate_instruction(0x14000010, 0x1000);  // b #0x40
+    EXPECT(b.size() == 4 && b[2] == 0x1040);
+    auto bl = rfu::relocate_instruction(0x94000010, 0x1000);  // bl #0x40: lr = 0x1004, then jump
+    EXPECT(bl.size() == 8 && bl[2] == 0x1004 && bl[6] == 0x1040);
+    EXPECT(rfu::relocate_instruction(0xB4000040, 0x1000).empty());  // cbz x0
+    auto stp = rfu::relocate_instruction(0xA9BF7BFD, 0x1000);  // stp x29, x30, [sp, #-16]!
+    EXPECT(stp.size() == 5 && stp[0] == 0xA9BF7BFD && stp[3] == 0x1004);
+
+    rfu::RuntimeOptions options;
+    options.lib_dir = dir;
+    rfu::Runtime rt(options);
+    auto& lib = rt.linker().load(dir / "libtest.so");
+    rt.run_initializers();
+    auto target = lib.find_export("hook_target"), caller = lib.find_export("call_hook_target");
+    EXPECT(target && caller);
+    if (!target || !caller) return;
+    EXPECT(rt.call(*caller, {5}) == 1016);
+    std::uint64_t seen = 0;
+    bool skip = false;
+    rfu::hook(rt, *target, "hook_target", [&](rfu::CallContext& c) {
+        seen = c.x(0);
+        if (skip) rfu::return_now(c, 7);
+    });
+    EXPECT(rt.call(*caller, {5}) == 1016 && seen == 5);  // watched, then ran as before
+    skip = true;
+    EXPECT(rt.call(*caller, {6}) == 1007 && seen == 6);  // replaced
+}
+
 void test_guest_offline(const std::filesystem::path& dir) {
     rfu::RuntimeOptions options;
     options.lib_dir = dir;
@@ -187,6 +218,7 @@ int main(int argc, char** argv) {
         {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}};
     if (argc > 1) {
         tests.emplace_back("guest", [&] { test_guest(argv[1]); });
+        tests.emplace_back("hooks", [&] { test_hooks(argv[1]); });
         tests.emplace_back("guest offline", [&] { test_guest_offline(argv[1]); });
     }
     else std::cerr << "no guest library directory given; skipping guest tests\n";

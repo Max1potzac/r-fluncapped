@@ -304,3 +304,8 @@ int test_offline(void) {
     CHECK(2, getaddrinfo("reflourished.ducnguyen.org", "443", 0, &res) == 8 && !res);  // EAI_NONAME
     return 0;
 }
+
+// core/hooks.h: the test hooks hook_target, watching it and then replacing it.
+int hook_bias = 1;
+__attribute__((noinline)) int hook_target(int a) { return a * 3 + hook_bias; }
+int call_hook_target(int a) { return hook_target(a) + 1000; }

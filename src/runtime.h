@@ -27,6 +27,7 @@ namespace rfu {
 struct Thunk {
     std::string name;
     ShimFn fn;
+    std::function<void(CallContext&)> hook;  // set instead of fn for core/hooks.h
     std::atomic<std::uint64_t> calls{0};
 };
 
@@ -78,6 +79,7 @@ public:
     // --- thunks ------------------------------------------------------------------------
     GuestAddr return_thunk() const { return GuestMemory::kThunkBase; }
     GuestAddr make_thunk(std::string name, ShimFn fn);
+    GuestAddr make_hook_thunk(std::string name, std::function<void(CallContext&)> fn);
     // Address a guest import named `name` should bind to: a shim's thunk or data block, or
     // nullopt when no shim exists.
     std::optional<GuestAddr> resolve_shim(const std::string& name);

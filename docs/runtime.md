@@ -72,6 +72,21 @@ checked first (the offset inside one of the library's segments, the "was" bytes 
 file is applied whole or not at all, so a patch written for another build changes nothing. Each
 change is followed by `Runtime::invalidate_code`, as a guest's own instruction cache flush is.
 
+## Hooks and the game's own code
+
+`core/hooks.h` runs host code when the guest reaches an address: the instruction there becomes an
+`svc` to the hook, and the hook carries on with that instruction, moved to a small trampoline (or
+returns from the guest function itself). libPVZ2's game code has no symbols, so rfu finds classes
+by their RTTI names (`core/rtti.h`): `--trace-class <name>` hooks every virtual function of a class
+and logs calls on its objects, with touches, which is how the fixes in `src/game` were found.
+
+`src/game/hover.cpp` (`--hover`): the window sends the mouse's moves with no button down as moves of
+their own pointer, and a hook on the game's WidgetManager hands them to the lawn under the cursor,
+the way it hands a sliding finger's. Collectables pick up a finger sliding over them, so sun, coins
+and plant food are collected by moving the mouse over them. The addresses are checked against the
+code expected there (the libPVZ2 build Reflourished 1.4.2 and AltverZ share); on another build the
+fix stays off.
+
 ## Network
 
 The game fetches its CDN content (`https://reflourished.ducnguyen.org/cdn/1.4.2.main.tar`, the
@@ -181,8 +196,13 @@ repeated without a person at the mouse (and on a machine without one). Each line
 | `text <characters>` | type, as on the soft keyboard (digits as key presses) |
 | `key <android keycode>` | press and release a key: 66 Enter, 67 Delete, 7-16 digits |
 | `back` | Android's back button |
+| `hover <x1> <y1> <x2> <y2> [frames]` | the mouse moving with no button down, as with `--hover` |
 | `screenshot <file.bmp>` | save the frame |
+| `peek <hex address> <bytes>` | log guest memory as words and floats |
 | `quit` | close the window |
+
+rfu keeps reading the file while the game runs, so lines appended to it drive the game live; a
+frame written `+N` is N frames from when the line is read (each line needs its newline).
 
 For example, from a fresh `--data` folder on the 1.4.2 OBB with `--resolution 1280x720`, this reaches the intro:
 

@@ -102,6 +102,7 @@ Options:
 | `--log trace\|debug\|info\|warn\|error` | how much to log (default info) |
 | `--mount <guest path>=<host dir>` | make a folder visible to the game |
 | `--overlay <guest path>=<host dir>` | lay a folder over one of the game's, read-only: custom levels, strings and other content without changing the game's files (later ones win) |
+| `--hover` | collect sun, coins and plant food by moving the mouse over them, no click needed |
 | `--keybinds <file>` | keys that act as a finger on a spot of the screen, or as the back button (see `src/platform/keybinds.h`) |
 | `--patch <file>` | code patches to apply after the libraries load, checked against the bytes they expect (see `src/core/patches.h`) |
 | `--icon <file.png>`, `--title <text>` | the window's icon (pvz2conv takes the game's out of the APK) and title |
@@ -109,6 +110,7 @@ Options:
 | `--init-only` | stop after loading and initialising the libraries, and list unimplemented imports |
 | `--script <file>`, `--frames <n>`, `--screenshot <file.bmp>` | scripted input and screenshots, for testing (see [docs/runtime.md](docs/runtime.md)) |
 | `--dump-patches <file>` | write the libPVZ2.so offsets RFLib patched |
+| `--trace-class <name>` | log calls to a libPVZ2 class's virtual functions, to study the game's code (see [docs/runtime.md](docs/runtime.md)) |
 
 ## Layout
 

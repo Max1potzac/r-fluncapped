@@ -20,6 +20,7 @@ public sealed class GameSettings
     public bool Offline { get; set; }
 
     // code injections
+    public bool HoverCollect { get; set; } = true;     // sun, coins and plant food picked up by moving the mouse over them
     public bool Keybinds { get; set; }
     public List<string> Patches { get; set; } = [];     // file names in patches/ that are switched on
 

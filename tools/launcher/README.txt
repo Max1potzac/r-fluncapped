@@ -18,7 +18,9 @@ SETTING UP
 THE MENU
   Display           assets (high 1536 / low 768), the resolution the game
                     draws at, window size, full screen, VSync, ANGLE.
-  Code injections   switch on keybinds, and each code patch in patches\.
+  Code injections   hover to collect (on by default: moving the mouse over sun,
+                    coins and plant food picks them up), keybinds, and each
+                    code patch in patches\.
                     Offline skips the CDN and the update check. A mod's own
                     libraries (Reflourished's libRFLib, AltverZ's libSnowie)
                     are part of the game and always load; the menu lists them.

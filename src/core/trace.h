@@ -4,7 +4,8 @@
 // learn what the game's unnamed code does: run with it, do something in the game (tap a
 // sun), and the log shows which functions ran around that time. Only calls on objects of the
 // class itself count, and each function is logged on its 1st, 2nd, 3rd, 10th, 100th... call,
-// so per-frame ones don't flood the log.
+// so per-frame ones don't flood the log. With RFU_TRACE_X1=1 in the environment each logged call
+// also shows the 64 bytes its second argument points at (a touch, a point...).
 
 #include <string>
 

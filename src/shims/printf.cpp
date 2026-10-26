@@ -3,6 +3,7 @@
 #include "cpu/cpu.h"
 #include "shims/abi.h"
 
+#include <algorithm>
 #include <fmt/format.h>
 
 #include <cmath>

@@ -7,6 +7,7 @@
 #include "core/log.h"
 #include "shims/common.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>

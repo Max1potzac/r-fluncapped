@@ -4,6 +4,7 @@
 #include "runtime.h"
 #include "shims/common.h"
 
+#include <algorithm>
 #include <array>
 #include <set>
 

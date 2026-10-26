@@ -2,6 +2,7 @@
 
 #include "core/log.h"
 
+#include <algorithm>
 #include <dynarmic/interface/exclusive_monitor.h>
 
 #include <random>

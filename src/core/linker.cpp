@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "runtime.h"
 
+#include <algorithm>
 #include <deque>
 #include <functional>
 

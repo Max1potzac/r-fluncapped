@@ -14,9 +14,16 @@ static class Pam
     public static bool LooksLike(byte[] data) =>
         data.Length >= 8 && BitConverter.ToUInt32(data, 0) == Magic;
 
+    // Reflourished's packer cuts the trailing zero bytes off some PAMs (the
+    // last frame's colour alpha or coordinate ends early), so the file is read
+    // as if those zeros were still there.
+    const int TrimmedZeros = 8;
+
     public static void ToJson(byte[] data, Utf8JsonWriter w, List<string> warnings)
     {
-        var r = new BinReader(data);
+        var padded = new byte[data.Length + TrimmedZeros];
+        data.CopyTo(padded, 0);
+        var r = new BinReader(padded);
         if (r.U32() != Magic) throw new FormatException("missing PAM signature (54 19 F0 BA)");
         int version = (int)r.U32();
         if (version < 1 || version > 6)
@@ -48,7 +55,10 @@ static class Pam
 
         w.WriteEndObject();
 
-        if (!r.AtEnd) warnings.Add($"{r.Remaining} trailing bytes after the animation were ignored");
+        if (r.Pos > data.Length)
+            warnings.Add($"file ends {r.Pos - data.Length} zero bytes early (trimmed by the packer), read as zeros");
+        else if (r.Pos < data.Length)
+            warnings.Add($"{data.Length - r.Pos} trailing bytes after the animation were ignored");
     }
 
     static void ReadImage(BinReader r, Utf8JsonWriter w, int version)

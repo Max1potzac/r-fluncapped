@@ -49,9 +49,14 @@ OBB / RSB
       uses zstd, and pads small compressed blocks to 4 KB so they look stored.
     * Name tables: mod repackers leave pointers the game never follows. A
       pointer is only taken when it lands exactly where the alternative
-      branch must begin, so no duplicate files under glued folder names.
+      branch must begin, or when it repeats one an enclosing character
+      already owns (Reflourished's PACKAGES and StreamingWave tables), so
+      no duplicate files under glued folder names.
     * A file that sits in several groups is written once.
-    * Paths longer than 260 characters are written anyway.
+    * Paths longer than 260 characters are written anyway. A single name
+      longer than 120 characters is shortened (start, ~, a hash, extension)
+      and the log says which; a file that can't be written is logged and
+      the rest of its group carries on.
 
 PTX
   A PTX has no header; its size and format come from the RSB, so PNGs are
@@ -72,7 +77,8 @@ RTON / PAM / POPFX
   PAM    PopAnim, magic 54 19 F0 BA, versions 1 to 6. Written with the same
          field names as Sen / TwinStar: image (name, size, transform),
          sprite and main_sprite (frames with remove / append / change,
-         label, stop, command). Coordinates are converted from 1/20 px to px
+         label, stop, command). Reflourished cuts the trailing zero bytes
+         off some PAMs; those are read back as zeros. Coordinates are converted from 1/20 px to px
          and matrices from 16.16 fixed point to decimals.
   POPFX  "xfcp" version 1, a compiled render effect (shader). Its layout was
          worked out from a single sample, so the output has the string table,

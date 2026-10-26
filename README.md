@@ -33,12 +33,24 @@ main menu and its intro, and takes mouse, touch and keyboard input. In detail, `
 You need CMake 3.24+, a C++20 compiler, Boost headers (icl, variant), zlib and SDL2. dynarmic and
 its bundled dependencies are fetched by CMake.
 
-**Windows** (Visual Studio 2022 with vcpkg, which installs Boost, zlib and SDL2 from `vcpkg.json`):
+**Windows**: Visual Studio 2022 (the "Desktop development with C++" workload) and a clone of
+vcpkg, which installs Boost, zlib and SDL2 from `vcpkg.json`. Once:
 
 ```
-cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake
+git clone https://github.com/microsoft/vcpkg C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat
+```
+
+Then, in a "Developer PowerShell for VS 2022" in this folder:
+
+```
+cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 cmake --build build --config Release
 ```
+
+Name your clone's toolchain file, not `$env:VCPKG_ROOT`'s: in a Developer prompt that points at
+the vcpkg bundled with Visual Studio, which refuses a manifest without a baseline. `rfu.exe` and
+its DLLs end up in `build\Release`; copy them next to the launcher.
 
 **Linux**:
 

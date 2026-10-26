@@ -44,3 +44,20 @@ jobs:
           path: |
             build/Release/rfu.exe
             build/Release/*.dll
+
+  pvz2conv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish tools/pvz2conv -c Release -o tools/pvz2conv/publish
+      - name: Upload pvz2conv.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvz2conv-windows-x64
+          path: |
+            tools/pvz2conv/publish/pvz2conv.exe
+            tools/pvz2conv/README.txt

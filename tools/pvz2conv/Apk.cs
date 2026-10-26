@@ -13,8 +13,12 @@ sealed class Apk
 {
     public const string LibDir = "lib/arm64-v8a/";
 
-    // what rfu loads; the rest (crashlytics) is extracted but optional
-    static readonly string[] Required = ["libPVZ2.so", "libRFLib.so", "libc++_shared.so", "libNimble.so"];
+    // what rfu needs: the game and what it links. Anything else but Crashlytics is the mod's own
+    // code (Reflourished's libRFLib, AltverZ's libSnowie), which rfu loads after it.
+    static readonly string[] Required = ["libPVZ2.so", "libc++_shared.so", "libNimble.so"];
+
+    static bool IsModLibrary(string name) =>
+        !Required.Contains(name) && !name.StartsWith("libcrashlytics", StringComparison.Ordinal) && name.EndsWith(".so");
 
     readonly Action<string> _log;
     readonly string? _outDir;
@@ -100,6 +104,8 @@ sealed class Apk
         _log($"ok   {assets.Count} files in assets/{(dex > 0 ? $" ({dex} .dex left out)" : "")}");
         var missing = Required.Where(r => !libs.Any(l => l.Name == r)).ToList();
         if (missing.Count > 0) _log($"FAIL rfu needs {string.Join(", ", missing)}, which this APK doesn't have");
+        var modLibs = libs.Where(l => IsModLibrary(l.Name)).Select(l => l.Name).ToList();
+        _log(modLibs.Count > 0 ? $"     the mod's own code: {string.Join(", ", modLibs)} (rfu loads it after libPVZ2)" : "     no mod libraries: the game's own code only");
 
         WriteManifest(outDir, info, abis, libs, assets, icon);
         _log($"output: {outDir}");
@@ -174,6 +180,9 @@ sealed class Apk
         w.WriteString("icon", icon);
         w.WriteStartArray("abis");
         foreach (var a in abis) w.WriteStringValue(a);
+        w.WriteEndArray();
+        w.WriteStartArray("mod_libraries");
+        foreach (var l in libs.Where(l => IsModLibrary(l.Name))) w.WriteStringValue(l.Name);
         w.WriteEndArray();
         w.WriteStartArray("libraries");
         foreach (var l in libs)

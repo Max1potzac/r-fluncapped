@@ -94,6 +94,12 @@ void GameFolderTest()
     g.EnsureKeybindsFile();
     Expect(File.ReadAllText(g.KeybindsPath).Contains("tap"), "keybinds sample");
 
+    Expect(g.ModLibraries.Count == 0, "no mod libraries listed");
+    File.WriteAllText(Path.Combine(g.Dir, "_apk_manifest.json"),
+        """{"package":"com.ea.game.pvz2_rfl","version_name":"1.4.2","version_code":"675","obb":"main.675.com.ea.game.pvz2_rfl.obb","mod_libraries":["libSnowie.so"]}""");
+    g.Refresh();
+    Expect(g.ModLibraries.SequenceEqual(["libSnowie.so"]), "mod libraries from the manifest");
+
     var other = Path.Combine(root, "games", "AltverZ");
     Directory.CreateDirectory(other);
     var alt = GameFolder.Open(other);
@@ -253,7 +259,6 @@ void RfuCommandTest()
     g.Settings.Assets = "low";
     g.Settings.Resolution = "1280x720";
     g.Settings.Offline = true;
-    g.Settings.LoadRfLib = false;
     g.Settings.Keybinds = true;
     g.EnsureKeybindsFile();
     Directory.CreateDirectory(g.PatchesDir);
@@ -261,9 +266,10 @@ void RfuCommandTest()
     g.Settings.Patches = ["a.patch", "gone.patch"];
     var args = RfuCommand.Build(g, [new Mods.Overlay("/x", "/host/x")]);
     string line = string.Join(" ", args);
-    foreach (var want in new[] { "--assets low", "--resolution 1280x720", "--offline", "--no-rflib", "--package com.ea.game.pvz2_rfl",
+    foreach (var want in new[] { "--assets low", "--resolution 1280x720", "--offline", "--package com.ea.game.pvz2_rfl",
                                  "--version-code 675", "--version-name 1.4.2", "--overlay /x=/host/x", "--keybinds" })
         Expect(line.Contains(want), $"rfu gets {want}: {line}");
     Expect(args.Count(a => a == "--patch") == 1, "only patches that exist");
+    Expect(!args.Contains("--no-mod-libs"), "mod libraries always load");
     Expect(RfuCommand.IsSize("1920x1080") && !RfuCommand.IsSize("big") && !RfuCommand.IsSize("10x10"), "sizes");
 }

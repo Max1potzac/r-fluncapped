@@ -19,8 +19,9 @@ THE MENU
   Display           assets (high 1536 / low 768), the resolution the game
                     draws at, window size, full screen, VSync, ANGLE.
   Code injections   switch on keybinds, and each code patch in patches\.
-                    "Load libRFLib" switches Reflourished's own code off for
-                    a vanilla run. Offline skips the CDN and the update check.
+                    Offline skips the CDN and the update check. A mod's own
+                    libraries (Reflourished's libRFLib, AltverZ's libSnowie)
+                    are part of the game and always load; the menu lists them.
   Custom content    the mods in mods\, ticked ones in load order (the lowest
                     wins where two change the same file). Up / Down reorder.
   Play              see below. "Unpack resources" unpacks the OBB into

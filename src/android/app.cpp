@@ -375,11 +375,15 @@ void App::load_script(const fs::path& file, std::uint64_t now) {
             };
             for (int i = 0; i < frames; ++i) add(frame + i, drag.frame());
             add(frame + frames, drag.release());
-        } else if (verb == "seed" || verb == "shovel") {
-            // A game keybind pressed for three frames: "seed <n>" or "shovel".
-            int slot = 0;
-            if (verb == "seed") ls >> slot;
-            auto action = verb == "seed" ? platform::KeyBind::Action::Seed : platform::KeyBind::Action::Shovel;
+        } else if (verb == "seed" || verb == "shovel" || verb == "plantfood" || verb == "fastforward" || verb == "pause") {
+            // A game keybind pressed for three frames: "seed <n>", "shovel", "plantfood"...
+            std::string rest;
+            std::getline(ls, rest);
+            std::vector<std::string> errors;
+            auto binds = platform::parse_keybinds("K " + verb + rest, errors);
+            if (binds.empty()) throw std::runtime_error(fmt::format("{}:{}: {}", path_to_utf8(file), line_no, errors.at(0)));
+            int slot = binds[0].slot;
+            auto action = binds[0].action;
             script.emplace(frame, Scripted{platform::Input{platform::GameKeyInput{action, slot, true}}, {}});
             script.emplace(frame + 3, Scripted{platform::Input{platform::GameKeyInput{action, slot, false}}, {}});
         } else if (verb == "screenshot" || verb == "quit" || verb == "peek") {

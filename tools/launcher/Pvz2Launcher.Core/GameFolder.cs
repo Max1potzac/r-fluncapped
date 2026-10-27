@@ -113,11 +113,14 @@ public sealed class GameFolder
             # Keybinds: a key acts as a finger on a spot of the screen while you hold it.
             #   <key> seed <n>       the n-th seed packet, counted from 1 at the top of the seed bank
             #   <key> shovel         the shovel (press it again to put the shovel back)
+            #   <key> plantfood      the plant food button (then click a plant)
+            #   <key> fastforward    the fast-forward button (on and off)
+            #   <key> pause          the pause button (again to carry on)
             #   <key> scroll <dir>   scrolls what's under the mouse left, right, up or down while held;
             #                        add a speed (pixels a frame, or 3% of the screen's height) to change it
             #   <key> tap <x> <y>    x and y in pixels of the game's screen, or in percent (50% 50% is the middle)
             #   <key> back           Android's back button
-            # seed and shovel find the packet or the shovel wherever the level puts them.
+            # seed and the buttons are found wherever the level puts them.
             # The mouse wheel scrolls too (with Shift held, sideways).
             # Key names are SDL's (A, 1, Space, F1, Left_Shift, Keypad_1); write _ for a space.
             # Escape is always the back button and F11 always switches full screen.
@@ -133,6 +136,9 @@ public sealed class GameFolder
             8 seed 8
             9 seed 9
             D shovel
+            F plantfood
+            V fastforward
+            P pause
             Left scroll left
             Right scroll right
             Up scroll up

@@ -389,7 +389,7 @@ std::vector<Input> Window::poll() {
                     const KeyBind& b = bind->second;
                     if (b.action == KeyBind::Action::Back) {
                         if (down) out.push_back(BackInput{});
-                    } else if (b.action == KeyBind::Action::Seed || b.action == KeyBind::Action::Shovel) {
+                    } else if (is_game_action(b.action)) {
                         out.push_back(GameKeyInput{b.action, b.slot, down});
                     } else if (b.action == KeyBind::Action::Scroll) {
                         // The finger moves once a frame, below; letting go lifts it.

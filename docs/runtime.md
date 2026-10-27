@@ -95,12 +95,13 @@ hook on the plant's per-frame call runs the special update for the plants listed
 game skipped it, with the target check (`Plant::FindTarget`) answering no meanwhile, so it only
 moves animations along and never fires.
 
-`src/game/game_keys.cpp` (keybinds `seed <n>` and `shovel`): the seed bank (`SeedBankNew`), its
-packets and the shovel (`ShovelUI`) belong to the game's newer UI, not to Sexy's widgets; their
+`src/game/game_keys.cpp` (keybinds `seed <n>`, `shovel`, `plantfood`, `fastforward`, `pause`): the
+seed bank (`SeedBankNew`), its packets and the buttons (`ShovelUI`, `PlantfoodUI`,
+`FastForwardButton`, `PauseButton`) belong to the game's newer UI, not to Sexy's widgets; their
 positions are relative to parents named by handles, laid out by anchors. Hooks on the bank's and
-the shovel's per-frame update keep the live instances. A key resolves the bank's children through
+the buttons' per-frame updates keep the live instances. A key resolves the bank's children through
 the game's handle registry, asks the game for each packet's rectangle on screen, and sends a touch
-at the middle of the chosen one (or the shovel) into `LawnApp`'s TouchBegan, then TouchEnded when
+at the middle of the chosen one (or the button) into `LawnApp`'s TouchBegan, then TouchEnded when
 the key comes up, from the main thread between frames, as `UI_ProcessEvents` would.
 
 ## Network
@@ -148,7 +149,7 @@ call's Java arguments decoded from whichever of the three calling conventions na
   is both Android's UI thread and its GL thread; the game's own threads are guest threads.
 - **Keybinds.** `--keybinds` maps keys to a touch at a point of the game's surface (pointer
   ids from 100, held while the key is), to the back button, to a seed packet or the shovel
-  (`GameKeyInput`, handled by `src/game/game_keys.cpp`), or to scrolling: a finger that goes down
+  (`GameKeyInput`, also plant food, fast-forward and pause; handled by `src/game/game_keys.cpp`), or to scrolling: a finger that goes down
   under the mouse and drags a little each frame while the key is held (`ScrollDrag`). The mouse
   wheel makes the same drags, a few frames a notch (pointer 97). `Window::poll` turns them into the
   same input as the mouse; they're off while the game's keyboard is up.
@@ -218,7 +219,7 @@ repeated without a person at the mouse (and on a machine without one). Each line
 | `hover <x1> <y1> <x2> <y2> [frames]` | the mouse moving with no button down, as with `--hover` |
 | `screenshot <file.bmp>` | save the frame |
 | `peek <hex address> <bytes>` | log guest memory as words and floats |
-| `seed <n>`, `shovel` | a seed packet's or the shovel's keybind, held for three frames |
+| `seed <n>`, `shovel`, `plantfood`, `fastforward`, `pause` | a game keybind, held for three frames |
 | `scroll <dir> <frames> [speed] [x y]` | a scroll keybind held for `frames` frames, the mouse at (x, y) (the middle by default) |
 | `quit` | close the window |
 

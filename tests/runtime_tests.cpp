@@ -100,6 +100,14 @@ void test_keybinds() {
     EXPECT(binds[1].key == "D" && binds[1].action == rfu::platform::KeyBind::Action::Shovel);
 
     errors.clear();
+    binds = rfu::platform::parse_keybinds("F plantfood\nV fastforward\nP pause\n", errors);
+    EXPECT(binds.size() == 3 && errors.empty());
+    EXPECT(binds[0].action == rfu::platform::KeyBind::Action::PlantFood && binds[1].action == rfu::platform::KeyBind::Action::FastForward &&
+           binds[2].action == rfu::platform::KeyBind::Action::Pause);
+    EXPECT(rfu::platform::is_game_action(binds[2].action) && !rfu::platform::is_game_action(rfu::platform::KeyBind::Action::Scroll));
+    EXPECT(std::string(rfu::platform::action_name(binds[0].action)) == "plantfood");
+
+    errors.clear();
     binds = rfu::platform::parse_keybinds("Right scroll right\nUp scroll up 10\nX scroll sideways\n", errors);
     EXPECT(binds.size() == 2 && errors.size() == 1);
     EXPECT(binds[0].dir_x == 1 && binds[0].speed_fraction && binds[1].dir_y == -1 && !binds[1].speed_fraction);

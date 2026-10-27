@@ -93,6 +93,7 @@ void GameFolderTest()
 
     g.EnsureKeybindsFile();
     Expect(File.ReadAllText(g.KeybindsPath).Contains("tap"), "keybinds sample");
+    Expect(File.ReadAllText(g.KeybindsPath).Contains("1 seed 1") && File.ReadAllText(g.KeybindsPath).Contains("D shovel") && File.ReadAllText(g.KeybindsPath).Contains("Right scroll right"), "keybinds sample: seeds, shovel and scrolling on");
 
     Expect(g.ModLibraries.Count == 0, "no mod libraries listed");
     File.WriteAllText(Path.Combine(g.Dir, "_apk_manifest.json"),
@@ -267,9 +268,13 @@ void RfuCommandTest()
     var args = RfuCommand.Build(g, [new Mods.Overlay("/x", "/host/x")]);
     string line = string.Join(" ", args);
     foreach (var want in new[] { "--assets low", "--resolution 1280x720", "--offline", "--package com.ea.game.pvz2_rfl",
-                                 "--version-code 675", "--version-name 1.4.2", "--overlay /x=/host/x", "--keybinds" })
+                                 "--version-code 675", "--version-name 1.4.2", "--overlay /x=/host/x", "--keybinds", "--hover", "--fix-animations" })
         Expect(line.Contains(want), $"rfu gets {want}: {line}");
     Expect(args.Count(a => a == "--patch") == 1, "only patches that exist");
     Expect(!args.Contains("--no-mod-libs"), "mod libraries always load");
+    g.Settings.HoverCollect = false;
+    Expect(!RfuCommand.Build(g, []).Contains("--hover"), "hover to collect can be switched off");
+    g.Settings.FixAnimations = false;
+    Expect(!RfuCommand.Build(g, []).Contains("--fix-animations"), "the animations fix can be switched off");
     Expect(RfuCommand.IsSize("1920x1080") && !RfuCommand.IsSize("big") && !RfuCommand.IsSize("10x10"), "sizes");
 }

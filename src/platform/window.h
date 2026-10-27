@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -26,10 +27,17 @@ struct WindowOptions {
     int game_width = 0, game_height = 0;
     bool low_assets = false;
     std::vector<KeyBind> keybinds;
+    bool hover = false;  // send the mouse's moves with no button down too (kHoverPointer)
     std::filesystem::path icon;  // a PNG for the window's (and taskbar's) icon
 };
 
 // Input, in the shape the game's Java side reports it.
+// The pointer id of the mouse moving with no button down (WindowOptions::hover): the game
+// sees a finger sliding over the screen, which collects sun, coins and plant food it passes.
+constexpr int kHoverPointer = 99;
+// The pointer id of the mouse wheel: each notch is a short drag under the cursor (Shift: sideways).
+constexpr int kWheelPointer = 97;
+
 struct TouchInput {
     enum Phase { Began = 0, Moved = 1, Stationary = 2, Ended = 3, Cancelled = 4 } phase;
     int id;          // 1-based pointer id
@@ -53,7 +61,13 @@ struct FocusInput {
     bool focused;
 };
 struct QuitInput {};
-using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput>;
+// A keybind for something of the game's own (KeyBind::Action::Seed or Shovel) going down or up.
+struct GameKeyInput {
+    KeyBind::Action action;
+    int slot;
+    bool down;
+};
+using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput, GameKeyInput>;
 
 class Window {
 public:
@@ -86,6 +100,8 @@ private:
     void drawable_size(int& w, int& h) const;
     // Window points to the game's surface pixels, through the letterbox swap() draws.
     void to_surface(float wx, float wy, float& x, float& y) const;
+    // Where the mouse is, in the game's surface pixels.
+    void mouse_on_surface(float& x, float& y) const;
 
     SDL_Window* window_ = nullptr;
     int game_w_ = 0, game_h_ = 0;
@@ -93,7 +109,11 @@ private:
     void* context_ = nullptr;
     bool mouse_down_ = false;
     bool text_input_ = false;
+    bool hover_ = false;
     std::vector<std::pair<int, KeyBind>> binds_;  // by SDL key code
+    std::vector<std::pair<int, ScrollDrag>> scrolls_;  // scroll keys held, by their pointer id
+    std::optional<ScrollDrag> wheel_;  // the mouse wheel's drag (kWheelPointer)
+    int wheel_frames_ = 0, wheel_dir_x_ = 0, wheel_dir_y_ = 0;
 };
 
 }  // namespace rfu::platform

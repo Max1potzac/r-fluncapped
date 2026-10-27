@@ -18,7 +18,11 @@ SETTING UP
 THE MENU
   Display           assets (high 1536 / low 768), the resolution the game
                     draws at, window size, full screen, VSync, ANGLE.
-  Code injections   switch on keybinds, and each code patch in patches\.
+  Code injections   hover to collect (on by default: moving the mouse over sun,
+                    coins and plant food picks them up), the frozen animations
+                    fix (on by default: a Citron that finishes charging before
+                    the first wave or after the last zombie goes on to its
+                    charged idle), keybinds, and each code patch in patches\.
                     Offline skips the CDN and the update check. A mod's own
                     libraries (Reflourished's libRFLib, AltverZ's libSnowie)
                     are part of the game and always load; the menu lists them.
@@ -74,9 +78,17 @@ CUSTOM CONTENT (mods\<name>\)
 
 KEYBINDS (keybinds.txt)
   Tick "Keybinds" and press "Edit keybinds". One key per line:
+    1 seed 1            1 picks the first seed packet (top of the seed bank)
+    D shovel            D picks up the shovel; D again puts it back
+    Right scroll right  hold Right to scroll what's under the mouse (the
+                        world map, the almanac); "scroll right 3%" is faster
     1 tap 5% 18%        hold 1 = a finger at 5% across, 18% down
     Space tap 640 360   in pixels of the game's screen (its resolution)
     Backspace back      Android's back button
+  seed and shovel find the packet or the shovel wherever the level puts
+  them. A new keybinds.txt starts with 1-9 for the packets, D for the
+  shovel and the arrow keys for scrolling (an older one keeps what it has:
+  add those lines to it). The mouse wheel scrolls too, sideways with Shift.
   Key names are SDL's (A, 1, Space, F1, Left_Shift, Keypad_1). Keybinds are
   off while the game shows its keyboard, so typing a name still works.
 

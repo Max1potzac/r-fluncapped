@@ -15,7 +15,10 @@ add_library(rfu_core STATIC
     src/core/module.cpp
     src/core/linker.cpp
     src/core/log.cpp
+    src/core/hooks.cpp
     src/core/patches.cpp
+    src/core/rtti.cpp
+    src/core/trace.cpp
     src/core/vfs.cpp
     src/cpu/cpu.cpp
     src/jni/jni.cpp
@@ -31,6 +34,9 @@ add_library(rfu_core STATIC
     src/shims/libdl.cpp
     src/shims/libz.cpp
     src/runtime.cpp
+    src/game/anim_fix.cpp
+    src/game/game_keys.cpp
+    src/game/hover.cpp
     # SDL-free parts of src/platform, here so the tests reach them
     src/platform/keybinds.cpp
     src/platform/png.cpp

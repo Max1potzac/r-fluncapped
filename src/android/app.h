@@ -11,6 +11,7 @@
 #include "platform/window.h"
 
 #include <filesystem>
+#include <functional>
 #include <string>
 
 namespace rfu {
@@ -28,6 +29,7 @@ struct AppOptions {
     int max_frames = 0;              // stop after this many frames (0: run until the window closes)
     std::filesystem::path screenshot;  // with max_frames: save the last frame here as a .bmp
     std::filesystem::path script;      // scripted input for testing: "<frame> <action> <args>" lines
+    std::function<void(const platform::GameKeyInput&)> game_keys;  // seed and shovel keybinds (game/game_keys.h)
 };
 
 // Guest paths of the game's storage, as Android would give them.

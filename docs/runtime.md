@@ -72,6 +72,37 @@ checked first (the offset inside one of the library's segments, the "was" bytes 
 file is applied whole or not at all, so a patch written for another build changes nothing. Each
 change is followed by `Runtime::invalidate_code`, as a guest's own instruction cache flush is.
 
+## Hooks and the game's own code
+
+`core/hooks.h` runs host code when the guest reaches an address: the instruction there becomes an
+`svc` to the hook, and the hook carries on with that instruction, moved to a small trampoline (or
+returns from the guest function itself). libPVZ2's game code has no symbols, so rfu finds classes
+by their RTTI names (`core/rtti.h`): `--trace-class <name>` hooks every virtual function of a class
+and logs calls on its objects, with touches, which is how the fixes in `src/game` were found.
+
+`src/game/hover.cpp` (`--hover`): the window sends the mouse's moves with no button down as moves of
+their own pointer, and a hook on the game's WidgetManager hands them to the lawn under the cursor,
+the way it hands a sliding finger's. Collectables pick up a finger sliding over them, so sun, coins
+and plant food are collected by moving the mouse over them. The addresses are checked against the
+code expected there (the libPVZ2 build Reflourished 1.4.2 and AltverZ share); on another build the
+fix stays off.
+
+`src/game/anim_fix.cpp` (`--fix-animations`): a plant moves from one animation to the next (a
+Citron's charging to its charged idle) in its PlantFramework's special update, which runs from
+`Plant::Update`; the game calls that only while the board is running, so before a Last Stand's
+first wave and after the last zombie the plant stays on the last frame of what it was playing. A
+hook on the plant's per-frame call runs the special update for the plants listed there when the
+game skipped it, with the target check (`Plant::FindTarget`) answering no meanwhile, so it only
+moves animations along and never fires.
+
+`src/game/game_keys.cpp` (keybinds `seed <n>` and `shovel`): the seed bank (`SeedBankNew`), its
+packets and the shovel (`ShovelUI`) belong to the game's newer UI, not to Sexy's widgets; their
+positions are relative to parents named by handles, laid out by anchors. Hooks on the bank's and
+the shovel's per-frame update keep the live instances. A key resolves the bank's children through
+the game's handle registry, asks the game for each packet's rectangle on screen, and sends a touch
+at the middle of the chosen one (or the shovel) into `LawnApp`'s TouchBegan, then TouchEnded when
+the key comes up, from the main thread between frames, as `UI_ProcessEvents` would.
+
 ## Network
 
 The game fetches its CDN content (`https://reflourished.ducnguyen.org/cdn/1.4.2.main.tar`, the
@@ -116,7 +147,10 @@ call's Java arguments decoded from whichever of the three calling conventions na
   by `Graphics_SetFramerate`, `Native_onDrawFrame`, swap. Everything runs on the main thread, which
   is both Android's UI thread and its GL thread; the game's own threads are guest threads.
 - **Keybinds.** `--keybinds` maps keys to a touch at a point of the game's surface (pointer
-  ids from 100, held while the key is) or to the back button. `Window::poll` turns them into the
+  ids from 100, held while the key is), to the back button, to a seed packet or the shovel
+  (`GameKeyInput`, handled by `src/game/game_keys.cpp`), or to scrolling: a finger that goes down
+  under the mouse and drags a little each frame while the key is held (`ScrollDrag`). The mouse
+  wheel makes the same drags, a few frames a notch (pointer 97). `Window::poll` turns them into the
   same input as the mouse; they're off while the game's keyboard is up.
 - **Input.** `AndroidUIEventManager` serialises touches, keys, text, the back button and gestures
   into a direct ByteBuffer the game passes to `UI_ProcessEvents`: the event count at offset 0,
@@ -181,8 +215,15 @@ repeated without a person at the mouse (and on a machine without one). Each line
 | `text <characters>` | type, as on the soft keyboard (digits as key presses) |
 | `key <android keycode>` | press and release a key: 66 Enter, 67 Delete, 7-16 digits |
 | `back` | Android's back button |
+| `hover <x1> <y1> <x2> <y2> [frames]` | the mouse moving with no button down, as with `--hover` |
 | `screenshot <file.bmp>` | save the frame |
+| `peek <hex address> <bytes>` | log guest memory as words and floats |
+| `seed <n>`, `shovel` | a seed packet's or the shovel's keybind, held for three frames |
+| `scroll <dir> <frames> [speed] [x y]` | a scroll keybind held for `frames` frames, the mouse at (x, y) (the middle by default) |
 | `quit` | close the window |
+
+rfu keeps reading the file while the game runs, so lines appended to it drive the game live; a
+frame written `+N` is N frames from when the line is read (each line needs its newline).
 
 For example, from a fresh `--data` folder on the 1.4.2 OBB with `--resolution 1280x720`, this reaches the intro:
 

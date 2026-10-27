@@ -12,6 +12,7 @@
 #include <SDL_opengles2.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace rfu::platform {
@@ -138,6 +139,7 @@ Window::Window(const WindowOptions& options) {
         else binds_.emplace_back(key, bind);
     }
     if (!binds_.empty()) log::info("{} keybinds", binds_.size());
+    hover_ = options.hover;
 
     game_w_ = options.game_width;
     game_h_ = options.game_height;
@@ -283,6 +285,12 @@ void Window::set_text_input(bool on) {
     else SDL_StopTextInput();
 }
 
+void Window::mouse_on_surface(float& x, float& y) const {
+    int mx = 0, my = 0;
+    SDL_GetMouseState(&mx, &my);
+    to_surface(static_cast<float>(mx), static_cast<float>(my), x, y);
+}
+
 std::vector<Input> Window::poll() {
     std::vector<Input> out;
     // Mouse coordinates are in window points; the game wants pixels of its surface.
@@ -322,9 +330,34 @@ std::vector<Input> Window::poll() {
             }
             break;
         case SDL_MOUSEMOTION:
-            if (ev.motion.which == SDL_TOUCH_MOUSEID || !mouse_down_) break;
-            touch(TouchInput::Moved, 1, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
+            if (ev.motion.which == SDL_TOUCH_MOUSEID) break;
+            if (mouse_down_) touch(TouchInput::Moved, 1, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
+            else if (hover_) touch(TouchInput::Moved, kHoverPointer, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
             break;
+        case SDL_MOUSEWHEEL: {
+            if (ev.wheel.which == SDL_TOUCH_MOUSEID || mouse_down_ || (ev.wheel.y == 0 && ev.wheel.x == 0)) break;
+            int notches = ev.wheel.y ? ev.wheel.y : ev.wheel.x;
+            if (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) notches = -notches;
+            bool sideways = ev.wheel.y == 0 || (SDL_GetModState() & KMOD_SHIFT);
+            // Wheel up (away from you) scrolls up, or left with Shift.
+            int dx = sideways ? (notches > 0 ? -1 : 1) : 0, dy = sideways ? 0 : (notches > 0 ? -1 : 1);
+            if (wheel_ && (dx != wheel_dir_x_ || dy != wheel_dir_y_)) {
+                for (const auto& step : wheel_->release()) out.push_back(TouchInput{TouchInput::Ended, kWheelPointer, step.x, step.y});
+                wheel_.reset();
+            }
+            if (!wheel_) {
+                KeyBind bind;
+                bind.action = KeyBind::Action::Scroll;
+                bind.dir_x = wheel_dir_x_ = dx;
+                bind.dir_y = wheel_dir_y_ = dy;
+                float x, y;
+                mouse_on_surface(x, y);
+                wheel_.emplace(bind, game_w_, game_h_, x, y);
+                wheel_frames_ = 0;
+            }
+            wheel_frames_ += 6 * std::abs(notches);
+            break;
+        }
         case SDL_FINGERDOWN:
         case SDL_FINGERMOTION:
         case SDL_FINGERUP: {
@@ -356,6 +389,21 @@ std::vector<Input> Window::poll() {
                     const KeyBind& b = bind->second;
                     if (b.action == KeyBind::Action::Back) {
                         if (down) out.push_back(BackInput{});
+                    } else if (b.action == KeyBind::Action::Seed || b.action == KeyBind::Action::Shovel) {
+                        out.push_back(GameKeyInput{b.action, b.slot, down});
+                    } else if (b.action == KeyBind::Action::Scroll) {
+                        // The finger moves once a frame, below; letting go lifts it.
+                        int id = 100 + static_cast<int>(bind - binds_.begin());
+                        auto held = std::find_if(scrolls_.begin(), scrolls_.end(), [&](const auto& s) { return s.first == id; });
+                        if (down && held == scrolls_.end()) {
+                            float x, y;
+                            mouse_on_surface(x, y);
+                            scrolls_.emplace_back(id, ScrollDrag(b, game_w_, game_h_, x, y));
+                        }
+                        if (!down && held != scrolls_.end()) {
+                            for (const auto& step : held->second.release()) out.push_back(TouchInput{TouchInput::Ended, id, step.x, step.y});
+                            scrolls_.erase(held);
+                        }
                     } else {
                         // Pointer ids from 100, clear of the mouse (1) and fingers (2 and up).
                         int id = 100 + static_cast<int>(bind - binds_.begin());
@@ -377,6 +425,19 @@ std::vector<Input> Window::poll() {
         case SDL_TEXTINPUT: out.push_back(TextInput{TextInput::Commit, ev.text.text}); break;
         default: break;
         }
+    }
+    for (auto& [id, drag] : scrolls_)
+        for (const auto& step : drag.frame()) {
+            auto phase = step.phase == ScrollDrag::Step::Down ? TouchInput::Began : step.phase == ScrollDrag::Step::Move ? TouchInput::Moved : TouchInput::Ended;
+            out.push_back(TouchInput{phase, id, step.x, step.y});
+        }
+    if (wheel_) {
+        auto steps = wheel_frames_-- > 0 ? wheel_->frame() : wheel_->release();
+        for (const auto& step : steps) {
+            auto phase = step.phase == ScrollDrag::Step::Down ? TouchInput::Began : step.phase == ScrollDrag::Step::Move ? TouchInput::Moved : TouchInput::Ended;
+            out.push_back(TouchInput{phase, kWheelPointer, step.x, step.y});
+        }
+        if (wheel_frames_ < 0) wheel_.reset();
     }
     return out;
 }

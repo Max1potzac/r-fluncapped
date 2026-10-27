@@ -8,13 +8,16 @@
 //   <key> back            Android's back button
 //   <key> seed <n>        the n-th seed packet of the seed bank, counted from 1 at the top
 //   <key> shovel          the shovel
+//   <key> plantfood       the plant food button (then click a plant)
+//   <key> fastforward     the fast-forward button
+//   <key> pause           the pause button
 //   <key> scroll <dir> [speed]
 //                         scrolls what's under the mouse left, right, up or down while the key is
 //                         held (the world map, the almanac's lists...): a finger dragging the other
 //                         way, `speed` pixels a frame, or with % a fraction of the surface's height
 //                         (default 2%)
 //
-// seed and shovel find the packet or the shovel wherever the level put it (src/game/game_keys.h).
+// seed and the buttons are found wherever the level put them (src/game/game_keys.h).
 // <key> is SDL's name for it (A, 1, Space, F1, Left Shift, Keypad 1...), with _ for a space.
 // '#' starts a comment. Binds are off while the game shows its keyboard, so typing still works.
 
@@ -24,7 +27,7 @@
 namespace rfu::platform {
 
 struct KeyBind {
-    enum class Action { Tap, Back, Seed, Shovel, Scroll };
+    enum class Action { Tap, Back, Seed, Shovel, PlantFood, FastForward, Pause, Scroll };
     std::string key;
     Action action = Action::Tap;
     float x = 0, y = 0;
@@ -38,6 +41,11 @@ struct KeyBind {
     float surface_x(int width) const { return x_fraction ? x * width : x; }
     float surface_y(int height) const { return y_fraction ? y * height : y; }
 };
+
+// Seed and the buttons: the actions src/game/game_keys.cpp carries out (GameKeyInput).
+bool is_game_action(KeyBind::Action action);
+// The action's word in a keybinds file ("seed", "plantfood"...).
+const char* action_name(KeyBind::Action action);
 
 // A scroll keybind's finger: down at a point (the mouse's), then each frame `speed` pixels
 // against the bind's direction; near the edge it lifts and goes down at the point again. A

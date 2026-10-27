@@ -25,6 +25,25 @@ bool parse_coord(const std::string& s, float& value, bool& fraction) {
 
 }  // namespace
 
+bool is_game_action(KeyBind::Action action) {
+    using A = KeyBind::Action;
+    return action == A::Seed || action == A::Shovel || action == A::PlantFood || action == A::FastForward || action == A::Pause;
+}
+
+const char* action_name(KeyBind::Action action) {
+    switch (action) {
+    case KeyBind::Action::Tap: return "tap";
+    case KeyBind::Action::Back: return "back";
+    case KeyBind::Action::Seed: return "seed";
+    case KeyBind::Action::Shovel: return "shovel";
+    case KeyBind::Action::PlantFood: return "plantfood";
+    case KeyBind::Action::FastForward: return "fastforward";
+    case KeyBind::Action::Pause: return "pause";
+    case KeyBind::Action::Scroll: return "scroll";
+    }
+    return "?";
+}
+
 ScrollDrag::ScrollDrag(const KeyBind& bind, int width, int height, float x, float y)
     : w_(width), h_(height), start_x_(std::clamp(x, w_ * 0.1f, w_ * 0.9f)), start_y_(std::clamp(y, h_ * 0.1f, h_ * 0.9f)) {
     float speed = bind.speed_fraction ? bind.speed * height : bind.speed;
@@ -94,6 +113,12 @@ std::vector<KeyBind> parse_keybinds(const std::string& text, std::vector<std::st
             }
         } else if (action == "shovel") {
             bind.action = KeyBind::Action::Shovel;
+        } else if (action == "plantfood") {
+            bind.action = KeyBind::Action::PlantFood;
+        } else if (action == "fastforward") {
+            bind.action = KeyBind::Action::FastForward;
+        } else if (action == "pause") {
+            bind.action = KeyBind::Action::Pause;
         } else if (action == "scroll") {
             bind.action = KeyBind::Action::Scroll;
             std::string dir, speed;
@@ -111,7 +136,7 @@ std::vector<KeyBind> parse_keybinds(const std::string& text, std::vector<std::st
                 continue;
             }
         } else {
-            fail("unknown action " + action + " (tap, back, seed, shovel or scroll)");
+            fail("unknown action " + action + " (tap, back, seed, shovel, plantfood, fastforward, pause or scroll)");
             continue;
         }
         std::string extra;

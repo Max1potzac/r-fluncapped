@@ -13,6 +13,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace rfu {
@@ -54,6 +55,19 @@ struct Seen {
 
 std::int64_t now_ticks() { return std::chrono::steady_clock::now().time_since_epoch().count(); }
 
+// The single buttons a game key presses, by their UI classes.
+struct ButtonClass {
+    platform::KeyBind::Action action;
+    const char* name;
+};
+constexpr ButtonClass kButtons[] = {
+    {platform::KeyBind::Action::Shovel, "ShovelUI"},
+    {platform::KeyBind::Action::PlantFood, "PlantfoodUI"},
+    {platform::KeyBind::Action::FastForward, "FastForwardButton"},
+    {platform::KeyBind::Action::Pause, "PauseButton"},
+};
+constexpr std::size_t kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
+
 class GameKeys : public std::enable_shared_from_this<GameKeys> {
 public:
     GameKeys(Runtime& rt, const Module& pvz2) : rt_(rt), base_(pvz2.base()) {}
@@ -64,11 +78,15 @@ public:
                 if (rt_.mem().read<std::uint32_t>(base_ + k->offset + 4 * i) != k->code[i]) return false;
         auto bank = find_vtable(rt_.mem(), pvz2, "SeedBankNew");
         auto packet = find_vtable(rt_.mem(), pvz2, "SeedPacket");
-        auto shovel = find_vtable(rt_.mem(), pvz2, "ShovelUI");
-        if (!bank || !packet || !shovel || bank->functions.size() <= kUpdateSlot || shovel->functions.size() <= kUpdateSlot) return false;
+        if (!bank || !packet || bank->functions.size() <= kUpdateSlot) return false;
         bank_vtable_ = bank->address;
         packet_vtable_ = packet->address;
-        shovel_vtable_ = shovel->address;
+        std::array<std::optional<VTable>, kButtonCount> buttons;
+        for (std::size_t i = 0; i < kButtonCount; ++i) {
+            buttons[i] = find_vtable(rt_.mem(), pvz2, kButtons[i].name);
+            if (!buttons[i] || buttons[i]->functions.size() <= kUpdateSlot) return false;
+            button_vtables_[i] = buttons[i]->address;
+        }
 
         // Scratch memory: the touch, a Rect, a handle's reference, and two stubs that call a
         // function returning through x8 (which Runtime::call can't set) with x8 = the last argument.
@@ -82,7 +100,8 @@ public:
         write_stub(ref_stub_, 0xAA0203E8, base_ + kHandleRef.offset);    // mov x8, x2
 
         watch(bank->functions[kUpdateSlot], bank_vtable_, bank_, "game keys: seed bank");
-        watch(shovel->functions[kUpdateSlot], shovel_vtable_, shovel_, "game keys: shovel");
+        for (std::size_t i = 0; i < kButtonCount; ++i)
+            watch(buttons[i]->functions[kUpdateSlot], button_vtables_[i], buttons_[i], std::string("game keys: ") + kButtons[i].name);
         return true;
     }
 
@@ -94,13 +113,13 @@ public:
         }
         if (pressed_) send(3);  // another game key still down: lift that finger first
         pressed_ = false;
-        auto target = k.action == platform::KeyBind::Action::Shovel ? shovel_rect() : packet_rect(k.slot);
+        auto target = k.action == platform::KeyBind::Action::Seed ? packet_rect(k.slot) : button_rect(k.action);
         if (!target) return;
         GuestAddr app = rt_.mem().read<std::uint64_t>(base_ + kApp);
         if (!app) return;
         GuestAddr wm = rt_.mem().read<std::uint64_t>(app + kWidgetManager);
         if (!wm || rt_.mem().read<std::uint64_t>(wm + kCaptured)) return;  // a finger or the mouse is down already
-        log::debug("game keys: {} at {}, {} ({}x{})", k.action == platform::KeyBind::Action::Shovel ? "shovel" : "seed", target->x, target->y, target->w, target->h);
+        log::debug("game keys: {} at {}, {} ({}x{})", platform::action_name(k.action), target->x, target->y, target->w, target->h);
         x_ = target->x + target->w / 2;
         y_ = target->y + target->h / 2;
         pressed_ = true;
@@ -115,7 +134,7 @@ private:
         rt_.invalidate_code(at, 0x18);
     }
 
-    void watch(GuestAddr update, GuestAddr vtable, Seen& seen, const char* name) {
+    void watch(GuestAddr update, GuestAddr vtable, Seen& seen, const std::string& name) {
         hook(rt_, update, name, [self = shared_from_this(), vtable, &seen](CallContext& c) {
             auto& rt = self->rt_;
             GuestAddr object = c.x(0);
@@ -153,10 +172,13 @@ private:
         return object;
     }
 
-    std::optional<Rect> shovel_rect() {
-        GuestAddr shovel = live(shovel_, shovel_vtable_);
-        if (!shovel) return std::nullopt;
-        Rect r = screen_rect(shovel);
+    std::optional<Rect> button_rect(platform::KeyBind::Action action) {
+        std::size_t i = 0;
+        while (i < kButtonCount && kButtons[i].action != action) ++i;
+        if (i == kButtonCount) return std::nullopt;
+        GuestAddr button = live(buttons_[i], button_vtables_[i]);
+        if (!button) return std::nullopt;
+        Rect r = screen_rect(button);
         if (r.w <= 0 || r.h <= 0) return std::nullopt;
         return r;
     }
@@ -199,9 +221,11 @@ private:
 
     Runtime& rt_;
     GuestAddr base_;
-    GuestAddr bank_vtable_ = 0, packet_vtable_ = 0, shovel_vtable_ = 0;
+    GuestAddr bank_vtable_ = 0, packet_vtable_ = 0;
+    std::array<GuestAddr, kButtonCount> button_vtables_{};
     GuestAddr scratch_ = 0, touch_ = 0, rect_ = 0, ref_ = 0, rect_stub_ = 0, ref_stub_ = 0;
-    Seen bank_, shovel_;
+    Seen bank_;
+    std::array<Seen, kButtonCount> buttons_;
     bool pressed_ = false;
     std::int32_t x_ = 0, y_ = 0;
 };
@@ -211,10 +235,10 @@ private:
 std::function<void(const platform::GameKeyInput&)> install_game_keys(Runtime& rt, const Module& pvz2) {
     auto keys = std::make_shared<GameKeys>(rt, pvz2);
     if (!keys->install(pvz2)) {
-        log::warn("game keys (seed, shovel): this libPVZ2.so is a build they don't know; left off");
+        log::warn("game keys (seed, shovel, plant food...): this libPVZ2.so is a build they don't know; left off");
         return {};
     }
-    log::info("game keys (seed, shovel): on");
+    log::info("game keys (seed, shovel, plant food...): on");
     return [keys](const platform::GameKeyInput& k) { keys->key(k); };
 }
 

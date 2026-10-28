@@ -48,8 +48,8 @@ bool is_game_action(KeyBind::Action action);
 const char* action_name(KeyBind::Action action);
 
 // A scroll keybind's finger: down at a point (the mouse's), then each frame `speed` pixels
-// against the bind's direction; near the edge it lifts and goes down at the point again. A
-// point with little room left the way the finger goes moves back only until a third is free.
+// against the bind's direction; at the edge it lifts and goes down at the point again. A
+// point right at the edge moves back just far enough for a short stroke.
 class ScrollDrag {
 public:
     struct Step {

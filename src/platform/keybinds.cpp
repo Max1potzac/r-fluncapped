@@ -44,18 +44,24 @@ const char* action_name(KeyBind::Action action) {
     return "?";
 }
 
+namespace {
+// The finger lifts this close to the edge, and needs this much room before it to start.
+constexpr float kEdge = 0.02f;
+constexpr float kRoom = 0.12f;
+}  // namespace
+
 ScrollDrag::ScrollDrag(const KeyBind& bind, int width, int height, float x, float y)
-    : w_(width), h_(height), start_x_(std::clamp(x, w_ * 0.1f, w_ * 0.9f)), start_y_(std::clamp(y, h_ * 0.1f, h_ * 0.9f)) {
+    : w_(width), h_(height), start_x_(std::clamp(x, w_ * 0.05f, w_ * 0.95f)), start_y_(std::clamp(y, h_ * 0.05f, h_ * 0.95f)) {
     float speed = bind.speed_fraction ? bind.speed * height : bind.speed;
     dx_ = -bind.dir_x * speed;
     dy_ = -bind.dir_y * speed;
-    // The finger needs room to travel: at least a third of the surface before the edge.
-    // Move the start back only as far as that needs, so it stays in the panel under the
-    // mouse (a page can hold several scrolling panels, like the almanac's zombie page).
-    if (dx_ < 0) start_x_ = std::max(start_x_, w_ * 0.1f + w_ / 3.0f);
-    if (dx_ > 0) start_x_ = std::min(start_x_, w_ * 0.9f - w_ / 3.0f);
-    if (dy_ < 0) start_y_ = std::max(start_y_, h_ * 0.1f + h_ / 3.0f);
-    if (dy_ > 0) start_y_ = std::min(start_y_, h_ * 0.9f - h_ / 3.0f);
+    // Start at the mouse, so the drag lands in the panel under it (a page can hold several
+    // scrolling panels, like the almanac's zombie page, whose list is a strip at the bottom).
+    // Only a point right at the edge moves back, just far enough for a short stroke.
+    if (dx_ < 0) start_x_ = std::max(start_x_, w_ * (kEdge + kRoom));
+    if (dx_ > 0) start_x_ = std::min(start_x_, w_ * (1 - kEdge - kRoom));
+    if (dy_ < 0) start_y_ = std::max(start_y_, h_ * (kEdge + kRoom));
+    if (dy_ > 0) start_y_ = std::min(start_y_, h_ * (1 - kEdge - kRoom));
 }
 
 std::vector<ScrollDrag::Step> ScrollDrag::frame() {
@@ -67,8 +73,8 @@ std::vector<ScrollDrag::Step> ScrollDrag::frame() {
     }
     x_ += dx_;
     y_ += dy_;
-    // Within a tenth of the edge: lift here; the next frame starts over.
-    if (x_ < w_ * 0.1f || x_ > w_ * 0.9f || y_ < h_ * 0.1f || y_ > h_ * 0.9f) {
+    // At the edge: lift here; the next frame starts over.
+    if (x_ < w_ * kEdge || x_ > w_ * (1 - kEdge) || y_ < h_ * kEdge || y_ > h_ * (1 - kEdge)) {
         down_ = false;
         return {{Step::Move, x_, y_}, {Step::Up, x_, y_}};
     }

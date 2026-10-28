@@ -120,16 +120,19 @@ void test_keybinds() {
     EXPECT(steps.size() == 1 && steps[0].phase == rfu::platform::ScrollDrag::Step::Move && steps[0].x == 490);
     int frames = 0;
     while (frames < 100 && drag.frame().back().phase != rfu::platform::ScrollDrag::Step::Up) ++frames;
-    EXPECT(frames == 39);  // 490 down to 100, ten pixels a frame
+    EXPECT(frames == 47);  // 490 down to 20, ten pixels a frame
     EXPECT(drag.frame()[0].phase == rfu::platform::ScrollDrag::Step::Down && drag.release().size() == 1 && drag.release().empty());
-    // From a point with no room to the left, it moves right only until a third of the width is free.
-    rfu::platform::ScrollDrag edge(binds[0], 1000, 500, 150, 400);
+    // From a point with no room to the left, it moves right just far enough for a short stroke.
+    rfu::platform::ScrollDrag edge(binds[0], 1000, 500, 50, 400);
     steps = edge.frame();
-    EXPECT(std::abs(steps[0].x - (100 + 1000 / 3.0f)) < 0.01f && steps[0].y == 400);
-    // Scrolling up drags down; from low on the screen it moves up only as far as it needs.
-    rfu::platform::ScrollDrag low(binds[1], 1000, 500, 300, 480);
+    EXPECT(std::abs(steps[0].x - 140) < 0.01f && steps[0].y == 400);
+    // Scrolling up drags down, from the mouse even low on the screen (the almanac's zombie list).
+    rfu::platform::ScrollDrag low(binds[1], 1000, 720, 300, 600);
     steps = low.frame();
-    EXPECT(steps[0].x == 300 && std::abs(steps[0].y - (450 - 500 / 3.0f)) < 0.01f);
+    EXPECT(steps[0].x == 300 && steps[0].y == 600);
+    EXPECT(low.frame()[0].y > steps[0].y);
+    rfu::platform::ScrollDrag bottom(binds[1], 1000, 500, 300, 495);
+    EXPECT(std::abs(bottom.frame()[0].y - 430) < 0.01f);
     EXPECT(low.frame()[0].y > steps[0].y);
 }
 

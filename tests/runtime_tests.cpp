@@ -2,6 +2,7 @@
 //
 //   rfu_tests <dir containing libtest.so>
 
+#include <cmath>
 #include "core/hooks.h"
 #include "core/log.h"
 #include "core/patches.h"
@@ -121,10 +122,15 @@ void test_keybinds() {
     while (frames < 100 && drag.frame().back().phase != rfu::platform::ScrollDrag::Step::Up) ++frames;
     EXPECT(frames == 39);  // 490 down to 100, ten pixels a frame
     EXPECT(drag.frame()[0].phase == rfu::platform::ScrollDrag::Step::Down && drag.release().size() == 1 && drag.release().empty());
-    // From a point with no room to the left, it starts from the middle across, at the point's height.
+    // From a point with no room to the left, it moves right only until a third of the width is free.
     rfu::platform::ScrollDrag edge(binds[0], 1000, 500, 150, 400);
     steps = edge.frame();
-    EXPECT(steps[0].x == 500 && steps[0].y == 400);
+    EXPECT(std::abs(steps[0].x - (100 + 1000 / 3.0f)) < 0.01f && steps[0].y == 400);
+    // Scrolling up drags down; from low on the screen it moves up only as far as it needs.
+    rfu::platform::ScrollDrag low(binds[1], 1000, 500, 300, 480);
+    steps = low.frame();
+    EXPECT(steps[0].x == 300 && std::abs(steps[0].y - (450 - 500 / 3.0f)) < 0.01f);
+    EXPECT(low.frame()[0].y > steps[0].y);
 }
 
 void test_patches() {

@@ -50,10 +50,12 @@ ScrollDrag::ScrollDrag(const KeyBind& bind, int width, int height, float x, floa
     dx_ = -bind.dir_x * speed;
     dy_ = -bind.dir_y * speed;
     // The finger needs room to travel: at least a third of the surface before the edge.
-    float room_x = dx_ < 0 ? start_x_ - w_ * 0.1f : w_ * 0.9f - start_x_;
-    float room_y = dy_ < 0 ? start_y_ - h_ * 0.1f : h_ * 0.9f - start_y_;
-    if (dx_ != 0 && room_x < w_ / 3.0f) start_x_ = w_ / 2.0f;
-    if (dy_ != 0 && room_y < h_ / 3.0f) start_y_ = h_ / 2.0f;
+    // Move the start back only as far as that needs, so it stays in the panel under the
+    // mouse (a page can hold several scrolling panels, like the almanac's zombie page).
+    if (dx_ < 0) start_x_ = std::max(start_x_, w_ * 0.1f + w_ / 3.0f);
+    if (dx_ > 0) start_x_ = std::min(start_x_, w_ * 0.9f - w_ / 3.0f);
+    if (dy_ < 0) start_y_ = std::max(start_y_, h_ * 0.1f + h_ / 3.0f);
+    if (dy_ > 0) start_y_ = std::min(start_y_, h_ * 0.9f - h_ / 3.0f);
 }
 
 std::vector<ScrollDrag::Step> ScrollDrag::frame() {

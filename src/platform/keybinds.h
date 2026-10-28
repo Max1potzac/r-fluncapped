@@ -49,7 +49,7 @@ const char* action_name(KeyBind::Action action);
 
 // A scroll keybind's finger: down at a point (the mouse's), then each frame `speed` pixels
 // against the bind's direction; near the edge it lifts and goes down at the point again. A
-// point with little room left the way the finger goes starts from the middle on that axis.
+// point with little room left the way the finger goes moves back only until a third is free.
 class ScrollDrag {
 public:
     struct Step {

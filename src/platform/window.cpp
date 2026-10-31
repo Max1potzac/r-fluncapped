@@ -50,6 +50,50 @@ int android_keycode(SDL_Keycode k) {
     }
 }
 
+PadType pad_type(SDL_GameController* pad) {
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+    switch (SDL_GameControllerGetType(pad)) {
+    case SDL_CONTROLLER_TYPE_PS3:
+    case SDL_CONTROLLER_TYPE_PS4:
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    case SDL_CONTROLLER_TYPE_PS5:
+#endif
+        return PadType::PlayStation;
+    case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+#if SDL_VERSION_ATLEAST(2, 24, 0)
+    case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+    case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+    case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+#endif
+        return PadType::Switch;
+    default: return PadType::Xbox;
+    }
+#else
+    (void)pad;
+    return PadType::Xbox;
+#endif
+}
+
+std::optional<PadButton> pad_button(Uint8 b) {
+    switch (b) {
+    case SDL_CONTROLLER_BUTTON_A: return PadButton::A;
+    case SDL_CONTROLLER_BUTTON_B: return PadButton::B;
+    case SDL_CONTROLLER_BUTTON_X: return PadButton::X;
+    case SDL_CONTROLLER_BUTTON_Y: return PadButton::Y;
+    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return PadButton::LB;
+    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return PadButton::RB;
+    case SDL_CONTROLLER_BUTTON_LEFTSTICK: return PadButton::L3;
+    case SDL_CONTROLLER_BUTTON_RIGHTSTICK: return PadButton::R3;
+    case SDL_CONTROLLER_BUTTON_START: return PadButton::Start;
+    case SDL_CONTROLLER_BUTTON_BACK: return PadButton::Back;
+    case SDL_CONTROLLER_BUTTON_DPAD_UP: return PadButton::Up;
+    case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return PadButton::Down;
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return PadButton::Left;
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return PadButton::Right;
+    default: return std::nullopt;
+    }
+}
+
 [[noreturn]] void sdl_fail(const char* what) { throw std::runtime_error(std::string(what) + ": " + SDL_GetError()); }
 
 constexpr GLenum kReadFramebuffer = 0x8CA8, kRgba8 = 0x8058, kDepth24Stencil8 = 0x88F0;
@@ -142,6 +186,10 @@ Window::Window(const WindowOptions& options) {
     }
     if (!binds_.empty()) log::info("{} keybinds", binds_.size());
     hover_ = options.hover;
+    if (options.controller) {
+        if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) log::warn("game controllers: {}", SDL_GetError());
+        else log::info("game controllers: on");  // each one comes as SDL_CONTROLLERDEVICEADDED
+    }
 
     game_w_ = options.game_width;
     game_h_ = options.game_height;
@@ -200,9 +248,10 @@ void Window::create_surface() {
 }
 
 Window::~Window() {
+    for (auto& [id, pad] : pads_) SDL_GameControllerClose(static_cast<SDL_GameController*>(pad));
     if (context_) SDL_GL_DeleteContext(context_);
     if (window_) SDL_DestroyWindow(window_);
-    SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER);
 }
 
 void Window::drawable_size(int& w, int& h) const {
@@ -269,8 +318,17 @@ void Window::swap() {
     if (scissor) gl.Enable(GL_SCISSOR_TEST);
 }
 
-void Window::draw_hints(const std::vector<HintLabel>& labels) {
-    if (labels.empty() || !gl.Scissor) return;
+void Window::draw_hints(const HintOverlay& overlay) {
+    if (overlay.empty() || !gl.Scissor) return;
+    std::vector<HintFill> fills;
+    for (const auto& box : overlay.boxes) {
+        auto f = layout_box(box, game_h_);
+        fills.insert(fills.end(), f.begin(), f.end());
+    }
+    for (const auto& label : overlay.labels) {
+        auto f = layout_hint(label, game_w_, game_h_);
+        fills.insert(fills.end(), f.begin(), f.end());
+    }
     // Scissored clears onto the game's surface; only the state they touch is put back.
     GLint bound = 0, box[4];
     gl.GetIntegerv(GL_FRAMEBUFFER_BINDING, &bound);
@@ -283,22 +341,14 @@ void Window::draw_hints(const std::vector<HintLabel>& labels) {
     gl.Enable(GL_SCISSOR_TEST);
     gl.ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
 
-    HintFill::Color color{};
-    bool first = true;
-    for (const auto& label : labels) {
-        for (const auto& f : layout_hint(label, game_w_, game_h_)) {
-            if (first || f.color != color) {
-                switch (f.color) {
-                case HintFill::Color::Border: gl.ClearColor(0.96f, 0.80f, 0.25f, 1); break;
-                case HintFill::Color::Back: gl.ClearColor(0.16f, 0.10f, 0.05f, 1); break;
-                case HintFill::Color::Text: gl.ClearColor(1, 1, 1, 1); break;
-                }
-                color = f.color;
-                first = false;
-            }
-            gl.Scissor(f.x, game_h_ - f.y - f.h, f.w, f.h);  // GL counts from the bottom
-            gl.Clear(GL_COLOR_BUFFER_BIT);
+    std::uint32_t color = 0xFFFFFFFF;  // none yet
+    for (const auto& f : fills) {
+        if (f.rgb != color) {
+            gl.ClearColor(((f.rgb >> 16) & 0xFF) / 255.0f, ((f.rgb >> 8) & 0xFF) / 255.0f, (f.rgb & 0xFF) / 255.0f, 1);
+            color = f.rgb;
         }
+        gl.Scissor(f.x, game_h_ - f.y - f.h, f.w, f.h);  // GL counts from the bottom
+        gl.Clear(GL_COLOR_BUFFER_BIT);
     }
 
     gl.BindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(bound));
@@ -327,6 +377,40 @@ void Window::set_text_input(bool on) {
     else SDL_StopTextInput();
 }
 
+// A stick past halfway is its direction held; back under a third, let go (so it doesn't flicker at
+// the line). A trigger is LT or RT the same way.
+void Window::pad_axis(std::vector<Input>& out, std::int32_t which, int axis, int value) {
+    auto it = std::find_if(pads_.begin(), pads_.end(), [&](const auto& p) { return p.first == which; });
+    if (it == pads_.end()) return;
+    PadType type = pad_type(static_cast<SDL_GameController*>(it->second));
+    auto set = [&](PadButton b, bool on) {
+        auto held = std::find(pad_held_.begin(), pad_held_.end(), b);
+        if (on == (held != pad_held_.end())) return;
+        if (on) pad_held_.push_back(b);
+        else pad_held_.erase(held);
+        out.push_back(PadInput{b, on, type});
+    };
+    auto side = [&](PadButton neg, PadButton pos) {
+        bool neg_held = std::find(pad_held_.begin(), pad_held_.end(), neg) != pad_held_.end();
+        bool pos_held = std::find(pad_held_.begin(), pad_held_.end(), pos) != pad_held_.end();
+        set(neg, value < (neg_held ? -11000 : -16384));
+        set(pos, value > (pos_held ? 11000 : 16384));
+    };
+    switch (axis) {
+    case SDL_CONTROLLER_AXIS_LEFTX: side(PadButton::Left, PadButton::Right); break;
+    case SDL_CONTROLLER_AXIS_LEFTY: side(PadButton::Up, PadButton::Down); break;
+    case SDL_CONTROLLER_AXIS_RIGHTX: side(PadButton::RLeft, PadButton::RRight); break;
+    case SDL_CONTROLLER_AXIS_RIGHTY: side(PadButton::RUp, PadButton::RDown); break;
+    case SDL_CONTROLLER_AXIS_TRIGGERLEFT:
+    case SDL_CONTROLLER_AXIS_TRIGGERRIGHT: {
+        PadButton b = axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT ? PadButton::LT : PadButton::RT;
+        bool held = std::find(pad_held_.begin(), pad_held_.end(), b) != pad_held_.end();
+        set(b, value > (held ? 11000 : 16384));
+        break;
+    }
+    }
+}
+
 void Window::mouse_on_surface(float& x, float& y) const {
     int mx = 0, my = 0;
     SDL_GetMouseState(&mx, &my);
@@ -345,6 +429,32 @@ std::vector<Input> Window::poll() {
     while (SDL_PollEvent(&ev)) {
         switch (ev.type) {
         case SDL_QUIT: out.push_back(QuitInput{}); break;
+        case SDL_CONTROLLERDEVICEADDED:
+            if (SDL_GameController* pad = SDL_GameControllerOpen(ev.cdevice.which)) {
+                SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad));
+                pads_.emplace_back(id, pad);
+                static const char* kTypes[] = {"Xbox", "PlayStation", "Switch"};
+                log::info("game controller: {} ({} buttons)", SDL_GameControllerName(pad) ? SDL_GameControllerName(pad) : "?",
+                          kTypes[static_cast<int>(pad_type(pad))]);
+            }
+            break;
+        case SDL_CONTROLLERDEVICEREMOVED: {
+            auto it = std::find_if(pads_.begin(), pads_.end(), [&](const auto& p) { return p.first == ev.cdevice.which; });
+            if (it != pads_.end()) {
+                SDL_GameControllerClose(static_cast<SDL_GameController*>(it->second));
+                pads_.erase(it);
+            }
+            break;
+        }
+        case SDL_CONTROLLERBUTTONDOWN:
+        case SDL_CONTROLLERBUTTONUP: {
+            auto it = std::find_if(pads_.begin(), pads_.end(), [&](const auto& p) { return p.first == ev.cbutton.which; });
+            auto b = pad_button(ev.cbutton.button);
+            if (it != pads_.end() && b)
+                out.push_back(PadInput{*b, ev.type == SDL_CONTROLLERBUTTONDOWN, pad_type(static_cast<SDL_GameController*>(it->second))});
+            break;
+        }
+        case SDL_CONTROLLERAXISMOTION: pad_axis(out, ev.caxis.which, ev.caxis.axis, ev.caxis.value); break;
         case SDL_WINDOWEVENT:
             // With its own surface the game keeps its size; only a game drawing straight to
             // the window has to follow it.

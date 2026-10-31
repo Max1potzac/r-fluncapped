@@ -46,6 +46,7 @@ sealed class MainForm : Form, ILaunchUi
     const string AnimationsItem = "Fix frozen plant animations (Citron)";
     const string KeybindsItem = "Keybinds (keybinds.txt)";
     const string KeyHintsItem = "Show keybind hints (keys on seed packets and buttons)";
+    const string ControllerItem = "Controller support (Xbox, PlayStation, Switch)";
 
     public MainForm(string launcherDir)
     {
@@ -232,6 +233,7 @@ sealed class MainForm : Form, ILaunchUi
             _injections.Items.Add(AnimationsItem, s.FixAnimations);
             _injections.Items.Add(KeybindsItem, s.Keybinds);
             _injections.Items.Add(KeyHintsItem, s.KeyHints);
+            _injections.Items.Add(ControllerItem, s.Controller);
             foreach (var p in game.PatchFiles())
                 _injections.Items.Add(new PatchItem(p), s.Patches.Contains(p.FileName, StringComparer.OrdinalIgnoreCase));
 
@@ -273,6 +275,7 @@ sealed class MainForm : Form, ILaunchUi
                 case AnimationsItem: s.FixAnimations = on; break;
                 case KeybindsItem: s.Keybinds = on; break;
                 case KeyHintsItem: s.KeyHints = on; break;
+                case ControllerItem: s.Controller = on; break;
                 case PatchItem p when on: s.Patches.Add(p.Patch.FileName); break;
             }
         }

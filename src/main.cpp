@@ -52,6 +52,7 @@ void usage() {
                  "  --mount <guest>=<host>   make a host directory visible to the game\n"
                  "  --overlay <guest>=<host> lay a host directory over a guest one, read-only (mods); later ones win\n"
                  "  --keybinds <file>        keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling or spots of the screen (see src/platform/keybinds.h)\n"
+                 "  --key-hints              show each keybind's key on the seed packet or button it presses\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
                  "  --fix-animations         unfreeze plants stuck on an animation while the level isn't running\n"
@@ -138,6 +139,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> patch_files;
     bool load_mod_libs = true;
     bool fix_animations = false;
+    bool key_hints = false;
     std::string dump_patches;
     std::vector<std::string> trace_classes;
     bool init_only = false;
@@ -183,6 +185,8 @@ int main(int argc, char** argv) {
                 app.window.hover = true;
             } else if (arg == "--fix-animations") {
                 fix_animations = true;
+            } else if (arg == "--key-hints") {
+                key_hints = true;
             } else if (arg == "--trace-class") {
                 trace_classes.push_back(value());
             } else if (arg == "--dump-patches") {
@@ -346,7 +350,11 @@ int main(int argc, char** argv) {
         bool game_keybinds = !app.script.empty() || std::any_of(app.window.keybinds.begin(), app.window.keybinds.end(), [](const auto& b) {
             return rfu::platform::is_game_action(b.action);
         });
-        if (game_keybinds) app.game_keys = rfu::install_game_keys(rt, pvz2);
+        if (game_keybinds) {
+            auto keys = rfu::install_game_keys(rt, pvz2, key_hints ? app.window.keybinds : std::vector<rfu::platform::KeyBind>{});
+            app.game_keys = keys.key;
+            app.key_hints = keys.hints;
+        }
         for (const auto& name : trace_classes) rfu::trace_class(rt, pvz2, name);
 
         const auto& missing = rt.linker().missing();

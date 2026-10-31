@@ -41,6 +41,8 @@ constexpr Known kRefFree{0x14d9154, {0xA9BF7BFD, 0x910003FD, 0xAA1F03E1}};
 constexpr std::size_t kUpdateSlot = 13;  // the UI objects' per-frame update, in the vtable
 constexpr std::uint64_t kChildren = 0x78;  // UI object: std::vector of its children's handles
 constexpr std::uint64_t kCaptured = 0xd0, kWidgetManager = 0x380;  // WidgetManager in LawnApp, its captured widget
+// LawnApp: the size the UI is laid out at (1365x768 on a 1280x720 surface), and the surface's.
+constexpr std::uint64_t kLogicalSize = 0xf4, kSurfaceSize = 0x744;
 constexpr int kPointer = 98;  // the touch's id, clear of the mouse (1), hover (99) and tap keybinds (100 and up)
 constexpr auto kStale = std::chrono::seconds(1);  // an instance not updated for this long is gone
 
@@ -68,9 +70,24 @@ constexpr ButtonClass kButtons[] = {
 };
 constexpr std::size_t kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
 
+// A keybind hint: the bind's key, shown on the packet or button it presses.
+struct HintBind {
+    platform::KeyBind::Action action;
+    int slot;
+    std::string text;
+};
+
 class GameKeys : public std::enable_shared_from_this<GameKeys> {
 public:
-    GameKeys(Runtime& rt, const Module& pvz2) : rt_(rt), base_(pvz2.base()) {}
+    GameKeys(Runtime& rt, const Module& pvz2, const std::vector<platform::KeyBind>& hint_binds) : rt_(rt), base_(pvz2.base()) {
+        for (const auto& b : hint_binds) {
+            if (!platform::is_game_action(b.action)) continue;
+            // A second key for the same thing isn't shown.
+            bool dup = std::any_of(hints_.begin(), hints_.end(), [&](const HintBind& h) { return h.action == b.action && h.slot == b.slot; });
+            std::string text = platform::hint_text(b.key);
+            if (!dup && !text.empty()) hints_.push_back({b.action, b.slot, text});
+        }
+    }
 
     bool install(const Module& pvz2) {
         for (const Known* k : {&kAppTouchBegan, &kAppTouchEnded, &kScreenRect, &kRegistry, &kHandleRef, &kRefIsNull, &kRefType, &kTypeTable, &kRefResolve, &kRefFree})
@@ -124,6 +141,33 @@ public:
         y_ = target->y + target->h / 2;
         pressed_ = true;
         send(0);
+    }
+
+    // The hints for what's on screen now: seed keys at their packets' top left corners, the
+    // buttons' keys at their bottom right ones.
+    std::vector<platform::HintLabel> hints() {
+        std::vector<platform::HintLabel> out;
+        // The rectangles are in the UI's units; the hints are drawn in the surface's pixels.
+        GuestAddr app = rt_.mem().read<std::uint64_t>(base_ + kApp);
+        if (!app) return out;
+        auto& mem = rt_.mem();
+        std::int32_t lw = mem.read<std::int32_t>(app + kLogicalSize), lh = mem.read<std::int32_t>(app + kLogicalSize + 4);
+        std::int32_t sw = mem.read<std::int32_t>(app + kSurfaceSize), sh = mem.read<std::int32_t>(app + kSurfaceSize + 4);
+        if (lw <= 0 || lh <= 0 || sw <= 0 || sh <= 0) return out;
+        auto px = [&](std::int32_t x) { return static_cast<int>(static_cast<std::int64_t>(x) * sw / lw); };
+        auto py = [&](std::int32_t y) { return static_cast<int>(static_cast<std::int64_t>(y) * sh / lh); };
+        std::optional<std::vector<Rect>> packets;
+        for (const auto& h : hints_) {
+            if (h.action == platform::KeyBind::Action::Seed) {
+                if (!packets) packets = packet_rects();
+                if (h.slot < 1 || static_cast<std::size_t>(h.slot) > packets->size()) continue;
+                const Rect& r = (*packets)[h.slot - 1];
+                out.push_back({h.text, px(r.x), py(r.y), platform::HintLabel::Anchor::TopLeft});
+            } else if (auto r = button_rect(h.action)) {
+                out.push_back({h.text, px(r->x + r->w), py(r->y + r->h), platform::HintLabel::Anchor::BottomRight});
+            }
+        }
+        return out;
     }
 
 private:
@@ -183,22 +227,28 @@ private:
         return r;
     }
 
-    // The slot-th packet (from 1), top to bottom, then left to right.
-    std::optional<Rect> packet_rect(int slot) {
+    // The seed bank's packets, top to bottom, then left to right.
+    std::vector<Rect> packet_rects() {
+        std::vector<Rect> packets;
         GuestAddr bank = live(bank_, bank_vtable_);
-        if (!bank) return std::nullopt;
+        if (!bank) return packets;
         auto& mem = rt_.mem();
         GuestAddr begin = mem.read<std::uint64_t>(bank + kChildren), end = mem.read<std::uint64_t>(bank + kChildren + 8);
-        if (end < begin || end - begin > 64 * 8) return std::nullopt;
-        std::vector<Rect> packets;
+        if (end < begin || end - begin > 64 * 8) return packets;
         for (GuestAddr h = begin; h < end; h += 8) {
             GuestAddr packet = resolve(h);
             if (!packet || mem.read<std::uint64_t>(packet) != packet_vtable_) continue;
             Rect r = screen_rect(packet);
             if (r.w > 0 && r.h > 0) packets.push_back(r);
         }
-        if (slot < 1 || static_cast<std::size_t>(slot) > packets.size()) return std::nullopt;
         std::stable_sort(packets.begin(), packets.end(), [](const Rect& a, const Rect& b) { return a.y != b.y ? a.y < b.y : a.x < b.x; });
+        return packets;
+    }
+
+    // The slot-th packet (from 1).
+    std::optional<Rect> packet_rect(int slot) {
+        auto packets = packet_rects();
+        if (slot < 1 || static_cast<std::size_t>(slot) > packets.size()) return std::nullopt;
         return packets[slot - 1];
     }
 
@@ -226,20 +276,24 @@ private:
     GuestAddr scratch_ = 0, touch_ = 0, rect_ = 0, ref_ = 0, rect_stub_ = 0, ref_stub_ = 0;
     Seen bank_;
     std::array<Seen, kButtonCount> buttons_;
+    std::vector<HintBind> hints_;
     bool pressed_ = false;
     std::int32_t x_ = 0, y_ = 0;
 };
 
 }  // namespace
 
-std::function<void(const platform::GameKeyInput&)> install_game_keys(Runtime& rt, const Module& pvz2) {
-    auto keys = std::make_shared<GameKeys>(rt, pvz2);
+GameKeyHandlers install_game_keys(Runtime& rt, const Module& pvz2, const std::vector<platform::KeyBind>& hint_binds) {
+    auto keys = std::make_shared<GameKeys>(rt, pvz2, hint_binds);
     if (!keys->install(pvz2)) {
         log::warn("game keys (seed, shovel, plant food...): this libPVZ2.so is a build they don't know; left off");
         return {};
     }
-    log::info("game keys (seed, shovel, plant food...): on");
-    return [keys](const platform::GameKeyInput& k) { keys->key(k); };
+    log::info("game keys (seed, shovel, plant food...): on{}", hint_binds.empty() ? "" : ", with hints");
+    GameKeyHandlers handlers;
+    handlers.key = [keys](const platform::GameKeyInput& k) { keys->key(k); };
+    if (!hint_binds.empty()) handlers.hints = [keys] { return keys->hints(); };
+    return handlers;
 }
 
 }  // namespace rfu

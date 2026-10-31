@@ -2,6 +2,7 @@
 
 // The game's window: an SDL2 window with an OpenGL ES 2 context, and its input.
 
+#include "platform/key_hints.h"
 #include "platform/keybinds.h"
 
 #include <cstdint>
@@ -84,6 +85,8 @@ public:
     void make_current();
     // Shows the game's surface, scaled to fit the window, and gets ready for the next frame.
     void swap();
+    // Draws keybind hints over the frame the game just drew, before swap().
+    void draw_hints(const std::vector<HintLabel>& labels);
     // Binds the game's surface (for reading it back).
     void bind_surface();
 

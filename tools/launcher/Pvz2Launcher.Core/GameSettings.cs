@@ -23,6 +23,7 @@ public sealed class GameSettings
     public bool HoverCollect { get; set; } = true;     // sun, coins and plant food picked up by moving the mouse over them
     public bool FixAnimations { get; set; } = true;    // plants that freeze on an animation while the level isn't running
     public bool Keybinds { get; set; }
+    public bool KeyHints { get; set; } = true;         // with keybinds: each key shown on the packet or button it presses
     public List<string> Patches { get; set; } = [];     // file names in patches/ that are switched on
 
     // custom content: folder names in mods/ that are switched on, in load order (the last wins)

@@ -38,6 +38,7 @@ add_library(rfu_core STATIC
     src/game/game_keys.cpp
     src/game/hover.cpp
     # SDL-free parts of src/platform, here so the tests reach them
+    src/platform/key_hints.cpp
     src/platform/keybinds.cpp
     src/platform/png.cpp
 )

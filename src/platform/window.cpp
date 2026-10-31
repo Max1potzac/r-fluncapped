@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "platform/gles.h"
+#include "platform/key_hints.h"
 #include "platform/png.h"
 
 #define SDL_MAIN_HANDLED
@@ -71,6 +72,7 @@ struct Present {
     PFNGLCLEARCOLORPROC ClearColor;
     PFNGLCOLORMASKPROC ColorMask;
     PFNGLCLEARPROC Clear;
+    PFNGLSCISSORPROC Scissor;
     void(GL_APIENTRY* BlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
 } gl;
 
@@ -164,6 +166,7 @@ void Window::create_surface() {
     load(gl.ClearColor, "glClearColor");
     load(gl.ColorMask, "glColorMask");
     load(gl.Clear, "glClear");
+    load(gl.Scissor, "glScissor");
     for (const char* name : {"glBlitFramebuffer", "glBlitFramebufferANGLE", "glBlitFramebufferNV"}) {
         load(gl.BlitFramebuffer, name);
         if (gl.BlitFramebuffer) break;
@@ -264,6 +267,45 @@ void Window::swap() {
     gl.ClearColor(clear[0], clear[1], clear[2], clear[3]);
     gl.ColorMask(mask[0], mask[1], mask[2], mask[3]);
     if (scissor) gl.Enable(GL_SCISSOR_TEST);
+}
+
+void Window::draw_hints(const std::vector<HintLabel>& labels) {
+    if (labels.empty() || !gl.Scissor) return;
+    // Scissored clears onto the game's surface; only the state they touch is put back.
+    GLint bound = 0, box[4];
+    gl.GetIntegerv(GL_FRAMEBUFFER_BINDING, &bound);
+    gl.GetIntegerv(GL_SCISSOR_BOX, box);
+    GLboolean scissor = gl.IsEnabled(GL_SCISSOR_TEST), mask[4];
+    GLfloat clear[4];
+    gl.GetBooleanv(GL_COLOR_WRITEMASK, mask);
+    gl.GetFloatv(GL_COLOR_CLEAR_VALUE, clear);
+    gl.BindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    gl.Enable(GL_SCISSOR_TEST);
+    gl.ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+
+    HintFill::Color color{};
+    bool first = true;
+    for (const auto& label : labels) {
+        for (const auto& f : layout_hint(label, game_w_, game_h_)) {
+            if (first || f.color != color) {
+                switch (f.color) {
+                case HintFill::Color::Border: gl.ClearColor(0.96f, 0.80f, 0.25f, 1); break;
+                case HintFill::Color::Back: gl.ClearColor(0.16f, 0.10f, 0.05f, 1); break;
+                case HintFill::Color::Text: gl.ClearColor(1, 1, 1, 1); break;
+                }
+                color = f.color;
+                first = false;
+            }
+            gl.Scissor(f.x, game_h_ - f.y - f.h, f.w, f.h);  // GL counts from the bottom
+            gl.Clear(GL_COLOR_BUFFER_BIT);
+        }
+    }
+
+    gl.BindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(bound));
+    gl.Scissor(box[0], box[1], box[2], box[3]);
+    gl.ClearColor(clear[0], clear[1], clear[2], clear[3]);
+    gl.ColorMask(mask[0], mask[1], mask[2], mask[3]);
+    if (!scissor) gl.Disable(GL_SCISSOR_TEST);
 }
 
 void Window::set_icon(const std::filesystem::path& file) {

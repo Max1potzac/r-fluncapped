@@ -386,6 +386,22 @@ void App::load_script(const fs::path& file, std::uint64_t now) {
             auto action = binds[0].action;
             script.emplace(frame, Scripted{platform::Input{platform::GameKeyInput{action, slot, true}}, {}});
             script.emplace(frame + 3, Scripted{platform::Input{platform::GameKeyInput{action, slot, false}}, {}});
+        } else if (verb == "pad") {
+            // A controller button held for some frames: "pad <button> [frames] [xbox|ps|switch]".
+            static const std::pair<const char*, platform::PadButton> kButtons[] = {
+                {"a", platform::PadButton::A}, {"b", platform::PadButton::B}, {"x", platform::PadButton::X}, {"y", platform::PadButton::Y},
+                {"lb", platform::PadButton::LB}, {"rb", platform::PadButton::RB}, {"lt", platform::PadButton::LT}, {"rt", platform::PadButton::RT},
+                {"l3", platform::PadButton::L3}, {"r3", platform::PadButton::R3}, {"start", platform::PadButton::Start}, {"back", platform::PadButton::Back},
+                {"up", platform::PadButton::Up}, {"down", platform::PadButton::Down}, {"left", platform::PadButton::Left}, {"right", platform::PadButton::Right},
+                {"rup", platform::PadButton::RUp}, {"rdown", platform::PadButton::RDown}, {"rleft", platform::PadButton::RLeft}, {"rright", platform::PadButton::RRight}};
+            std::string name, frames_text, type_name;
+            ls >> name >> frames_text >> type_name;
+            int frames = frames_text.empty() ? 3 : std::stoi(frames_text);
+            auto b = std::find_if(std::begin(kButtons), std::end(kButtons), [&](const auto& k) { return name == k.first; });
+            if (b == std::end(kButtons)) throw std::runtime_error(fmt::format("{}:{}: no pad button {}", path_to_utf8(file), line_no, name));
+            auto type = type_name == "ps" ? platform::PadType::PlayStation : type_name == "switch" ? platform::PadType::Switch : platform::PadType::Xbox;
+            script.emplace(frame, Scripted{platform::Input{platform::PadInput{b->second, true, type}}, {}});
+            script.emplace(frame + std::max(frames, 1), Scripted{platform::Input{platform::PadInput{b->second, false, type}}, {}});
         } else if (verb == "screenshot" || verb == "quit" || verb == "peek") {
             std::string rest;
             std::getline(ls >> std::ws, rest);
@@ -610,6 +626,8 @@ void App::handle(const platform::Input& input) {
                 if (app_has_focus && !splash_showing) events.touch(in);
             } else if constexpr (std::is_same_v<T, platform::GameKeyInput>) {
                 if (options.game_keys && app_has_focus && !splash_showing) options.game_keys(in);
+            } else if constexpr (std::is_same_v<T, platform::PadInput>) {
+                if (options.game_pad && app_has_focus && !splash_showing) options.game_pad(in);
             } else if constexpr (std::is_same_v<T, platform::KeyInput>) {
                 // Keys only reach the game through the soft keyboard's InputConnection
                 // (EditInputConnection.sendKeyEvent), which passes on Enter, Delete and the
@@ -710,6 +728,7 @@ int App::run() {
         }
         if (quit) break;
         call(kSurfaceView, "PumpMessageQueue", gl_view);
+        if (options.game_frame && !splash_showing) options.game_frame();
         clear(0x4000);  // GL_COLOR_BUFFER_BIT, as the Java renderer does before every frame
         if (focus_state) {
             auto frame_time = std::chrono::milliseconds(1000 / framerate);
@@ -717,7 +736,7 @@ int App::run() {
             if (elapsed < frame_time) std::this_thread::sleep_for(frame_time - elapsed);
             last_frame = clock::now();
             call(kSurfaceView, "Native_onDrawFrame", gl_view);
-            if (options.key_hints && !splash_showing) window->draw_hints(options.key_hints());
+            if (options.overlay && !splash_showing) window->draw_hints(options.overlay());
         }
         ++frames;
         ++frames_since_report;

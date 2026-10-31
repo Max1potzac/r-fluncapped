@@ -146,9 +146,9 @@ void test_key_hints() {
     EXPECT(rfu::platform::hint_text("F12") == "F12" && rfu::platform::hint_text("Application") == "APPL");
     // "1" at 720: 2-pixel font pixels, a border one of them thick, then the back, then the glyph's runs.
     auto fills = rfu::platform::layout_hint({"1", 10, 20, HintLabel::Anchor::TopLeft}, 1280, 720);
-    EXPECT(fills.size() == 9 && fills[0].color == HintFill::Color::Border && fills[1].color == HintFill::Color::Back);
+    EXPECT(fills.size() == 9 && fills[0].rgb == rfu::platform::kHintBorder && fills[1].rgb == rfu::platform::kHintBack);
     EXPECT(fills[0].x == 10 && fills[0].y == 20 && fills[0].w == 22 && fills[0].h == 26);
-    EXPECT(fills[2].color == HintFill::Color::Text && fills[2].x == 10 + 6 + 4 && fills[2].y == 26 && fills[2].w == 2);
+    EXPECT(fills[2].rgb == 0xFFFFFF && fills[2].x == 10 + 6 + 4 && fills[2].y == 26 && fills[2].w == 2);
     EXPECT(fills.back().w == 6);  // the foot: 01110
     // At a corner of the surface the badge stays on it.
     fills = rfu::platform::layout_hint({"D", 1300, 730, HintLabel::Anchor::BottomRight}, 1280, 720);

@@ -268,7 +268,7 @@ void RfuCommandTest()
     var args = RfuCommand.Build(g, [new Mods.Overlay("/x", "/host/x")]);
     string line = string.Join(" ", args);
     foreach (var want in new[] { "--assets low", "--resolution 1280x720", "--offline", "--package com.ea.game.pvz2_rfl",
-                                 "--version-code 675", "--version-name 1.4.2", "--overlay /x=/host/x", "--keybinds", "--key-hints", "--hover", "--fix-animations" })
+                                 "--version-code 675", "--version-name 1.4.2", "--overlay /x=/host/x", "--keybinds", "--key-hints", "--controller", "--hover", "--fix-animations" })
         Expect(line.Contains(want), $"rfu gets {want}: {line}");
     Expect(args.Count(a => a == "--patch") == 1, "only patches that exist");
     Expect(!args.Contains("--no-mod-libs"), "mod libraries always load");
@@ -280,6 +280,9 @@ void RfuCommandTest()
     Expect(!RfuCommand.Build(g, []).Contains("--key-hints"), "keybind hints can be switched off");
     g.Settings.KeyHints = true;
     g.Settings.Keybinds = false;
-    Expect(!RfuCommand.Build(g, []).Contains("--key-hints"), "no hints without keybinds");
+    Expect(RfuCommand.Build(g, []).Contains("--key-hints"), "controller hints without keybinds");
+    g.Settings.Controller = false;
+    var noPad = RfuCommand.Build(g, []);
+    Expect(!noPad.Contains("--controller") && !noPad.Contains("--key-hints"), "the controller can be switched off, and hints with it and keybinds");
     Expect(RfuCommand.IsSize("1920x1080") && !RfuCommand.IsSize("big") && !RfuCommand.IsSize("10x10"), "sizes");
 }

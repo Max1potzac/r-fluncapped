@@ -52,7 +52,8 @@ void usage() {
                  "  --mount <guest>=<host>   make a host directory visible to the game\n"
                  "  --overlay <guest>=<host> lay a host directory over a guest one, read-only (mods); later ones win\n"
                  "  --keybinds <file>        keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling or spots of the screen (see src/platform/keybinds.h)\n"
-                 "  --key-hints              show each keybind's key on the seed packet or button it presses\n"
+                 "  --key-hints              show each keybind's key (or controller button) on the seed packet or button it presses\n"
+                 "  --controller             play the lawn with a game controller, PvZ1 console style (see src/game/game_keys.h)\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
                  "  --fix-animations         unfreeze plants stuck on an animation while the level isn't running\n"
@@ -187,6 +188,8 @@ int main(int argc, char** argv) {
                 fix_animations = true;
             } else if (arg == "--key-hints") {
                 key_hints = true;
+            } else if (arg == "--controller") {
+                app.window.controller = true;
             } else if (arg == "--trace-class") {
                 trace_classes.push_back(value());
             } else if (arg == "--dump-patches") {
@@ -350,10 +353,16 @@ int main(int argc, char** argv) {
         bool game_keybinds = !app.script.empty() || std::any_of(app.window.keybinds.begin(), app.window.keybinds.end(), [](const auto& b) {
             return rfu::platform::is_game_action(b.action);
         });
-        if (game_keybinds) {
-            auto keys = rfu::install_game_keys(rt, pvz2, key_hints ? app.window.keybinds : std::vector<rfu::platform::KeyBind>{});
+        if (game_keybinds || app.window.controller) {
+            rfu::GameKeyOptions options;
+            if (key_hints) options.hint_binds = app.window.keybinds;
+            options.controller = app.window.controller;
+            options.pad_hints = key_hints;
+            auto keys = rfu::install_game_keys(rt, pvz2, options);
             app.game_keys = keys.key;
-            app.key_hints = keys.hints;
+            app.game_pad = keys.pad;
+            app.game_frame = keys.frame;
+            app.overlay = keys.overlay;
         }
         for (const auto& name : trace_classes) rfu::trace_class(rt, pvz2, name);
 

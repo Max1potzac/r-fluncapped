@@ -30,6 +30,7 @@ struct WindowOptions {
     std::vector<KeyBind> keybinds;
     bool hover = false;  // send the mouse's moves with no button down too (kHoverPointer)
     std::filesystem::path icon;  // a PNG for the window's (and taskbar's) icon
+    bool controller = false;  // read game controllers (PadInput)
 };
 
 // Input, in the shape the game's Java side reports it.
@@ -68,7 +69,17 @@ struct GameKeyInput {
     int slot;
     bool down;
 };
-using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput, GameKeyInput>;
+// A game controller's button going down or up. The sticks and triggers come as buttons too: the
+// left stick as the d-pad, the right one as RUp..RRight, a trigger past halfway as LT or RT.
+// Buttons are by position (A is the bottom face button, whatever it's labelled).
+enum class PadButton { A, B, X, Y, LB, RB, LT, RT, L3, R3, Start, Back, Up, Down, Left, Right, RUp, RDown, RLeft, RRight };
+enum class PadType { Xbox, PlayStation, Switch };  // which labels its buttons have; Xbox when unknown
+struct PadInput {
+    PadButton button;
+    bool down;
+    PadType type;
+};
+using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput, GameKeyInput, PadInput>;
 
 class Window {
 public:
@@ -86,7 +97,7 @@ public:
     // Shows the game's surface, scaled to fit the window, and gets ready for the next frame.
     void swap();
     // Draws keybind hints over the frame the game just drew, before swap().
-    void draw_hints(const std::vector<HintLabel>& labels);
+    void draw_hints(const HintOverlay& overlay);
     // Binds the game's surface (for reading it back).
     void bind_surface();
 
@@ -115,6 +126,10 @@ private:
     bool hover_ = false;
     std::vector<std::pair<int, KeyBind>> binds_;  // by SDL key code
     std::vector<std::pair<int, ScrollDrag>> scrolls_;  // scroll keys held, by their pointer id
+    // The game controllers, and the sticks' and triggers' directions held (as PadButtons).
+    std::vector<std::pair<std::int32_t, void*>> pads_;  // SDL joystick id, SDL_GameController*
+    std::vector<PadButton> pad_held_;
+    void pad_axis(std::vector<Input>& out, std::int32_t which, int axis, int value);
     std::optional<ScrollDrag> wheel_;  // the mouse wheel's drag (kWheelPointer)
     int wheel_frames_ = 0, wheel_dir_x_ = 0, wheel_dir_y_ = 0;
 };

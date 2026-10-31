@@ -45,6 +45,8 @@ constexpr Glyph kFont[] = {
     {'`', {0x08, 0x04, 0x02, 0x00, 0x00, 0x00, 0x00}}, {' ', {0, 0, 0, 0, 0, 0, 0}},
     {kUp, {0x04, 0x0E, 0x15, 0x04, 0x04, 0x04, 0x04}}, {kDown, {0x04, 0x04, 0x04, 0x04, 0x15, 0x0E, 0x04}},
     {kLeft, {0x00, 0x04, 0x08, 0x1F, 0x08, 0x04, 0x00}}, {kRight, {0x00, 0x04, 0x02, 0x1F, 0x02, 0x04, 0x00}},
+    {kGlyphCross, {0x00, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x00}}, {kGlyphCircle, {0x00, 0x0E, 0x11, 0x11, 0x11, 0x0E, 0x00}},
+    {kGlyphSquare, {0x00, 0x1F, 0x11, 0x11, 0x11, 0x1F, 0x00}}, {kGlyphTriangle, {0x00, 0x04, 0x0A, 0x0A, 0x11, 0x1F, 0x00}},
 };
 
 const Glyph* glyph(char ch) {
@@ -87,8 +89,8 @@ std::vector<HintFill> layout_hint(const HintLabel& label, int surface_width, int
     // A button at the surface's edge still gets its whole badge.
     x = std::clamp(x, 0, std::max(surface_width - w, 0));
     y = std::clamp(y, 0, std::max(surface_height - h, 0));
-    fills.push_back({x, y, w, h, HintFill::Color::Border});
-    fills.push_back({x + s, y + s, w - 2 * s, h - 2 * s, HintFill::Color::Back});
+    fills.push_back({x, y, w, h, kHintBorder});
+    fills.push_back({x + s, y + s, w - 2 * s, h - 2 * s, kHintBack});
     for (int i = 0; i < n; ++i) {
         const Glyph* g = glyph(label.text[i]);
         if (!g) continue;
@@ -102,9 +104,25 @@ std::vector<HintFill> layout_hint(const HintLabel& label, int surface_width, int
                 }
                 int start = col;
                 while (col < 5 && (g->rows[row] & (0x10 >> col))) ++col;
-                fills.push_back({gx + start * s, gy + row * s, (col - start) * s, s, HintFill::Color::Text});
+                fills.push_back({gx + start * s, gy + row * s, (col - start) * s, s, label.text_rgb});
             }
         }
+    }
+    return fills;
+}
+
+std::vector<HintFill> layout_box(const HintBox& box, int surface_height) {
+    std::vector<HintFill> fills;
+    if (box.w <= 0 || box.h <= 0) return fills;
+    int t = std::max(3, (surface_height + 180) / 240);  // the line: 3 pixels at 720, 5 at 1080
+    int x = box.x, y = box.y, w = box.w, h = box.h;
+    // A dark edge first, a pixel wider all round, so the line shows on light tiles too.
+    for (auto [rgb, grow] : {std::pair{kHintBack, 1}, std::pair{box.rgb, 0}}) {
+        int lx = x - grow, ly = y - grow, lw = w + 2 * grow, lh = h + 2 * grow, lt = t + 2 * grow;
+        fills.push_back({lx, ly, lw, lt, rgb});
+        fills.push_back({lx, ly + lh - lt, lw, lt, rgb});
+        fills.push_back({lx, ly, lt, lh, rgb});
+        fills.push_back({lx + lw - lt, ly, lt, lh, rgb});
     }
     return fills;
 }

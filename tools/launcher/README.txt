@@ -24,7 +24,8 @@ THE MENU
                     the first wave or after the last zombie goes on to its
                     charged idle), keybinds, keybind hints (on by default:
                     each key in a small badge on the seed packet or button
-                    it presses), and each code patch in patches\.
+                    it presses), controller support (on by default, see
+                    below), and each code patch in patches\.
                     Offline skips the CDN and the update check. A mod's own
                     libraries (Reflourished's libRFLib, AltverZ's libSnowie)
                     are part of the game and always load; the menu lists them.
@@ -96,6 +97,21 @@ KEYBINDS (keybinds.txt)
   add those lines to it). The mouse wheel scrolls too, sideways with Shift.
   Key names are SDL's (A, 1, Space, F1, Left_Shift, Keypad_1). Keybinds are
   off while the game shows its keyboard, so typing a name still works.
+
+CONTROLLER
+  Any controller Windows knows (Xbox, PlayStation, Switch Pro...) plays the
+  lawn like PvZ1's console version. A cursor box appears on the lawn once
+  the controller is used:
+    D-pad / left stick  move the cursor a tile
+    LB / RB             pick the seed packet (boxed in gold)
+    A                   plant the picked packet on the cursor's tile
+    B (hold 1 second)   dig up the plant there
+    Y                   feed it plant food
+    Start               pause (again to resume)
+    L3                  fast-forward
+  With keybind hints on, the buttons are labelled for the controller
+  plugged in (Xbox's when it isn't recognised). More controls (collecting,
+  powerups, menus) are on the way.
 
 CODE PATCHES (patches\*.patch)
   Small fixes as bytes for rfu to put into a library after it loads, after

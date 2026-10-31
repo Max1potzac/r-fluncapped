@@ -112,6 +112,19 @@ border, a back and a 5x7 pixel font); `Window::draw_hints` fills them with sciss
 the only GL state it touches is the framebuffer, scissor, clear colour and colour mask, which it
 puts back. The letters are the key names written in the keybinds file, not the keyboard layout's.
 
+`--controller` reads game controllers through SDL (`PadInput`: buttons by position, the left stick
+as the d-pad, the triggers as buttons, and which labels the pad has, from SDL's controller type)
+and plays the lawn the way PvZ1's console version does. The cursor is a tile of the Board's grid:
+the grid's origin, size and columns and rows are Board fields in world units (200, 160, 9 x 64,
+5 x 76 on a normal lawn), and the Board draws the world zoomed about a centre that depends on the
+screen's shape (`Board` 0xab23d0: `ui = centre + floor(zoom * (trunc(1.28 * world) - centre +
+board_pos))`, 1.28 being `LawnApp`+0x980). A button queues touches in the UI's units: A taps the
+picked packet (unless the game's `PlantCursor` is up already) and then the tile's middle; B held a
+second taps the shovel, then the tile; Y plant food, then the tile; Start and L3 the pause and
+fast-forward buttons. The cursor, a box around the picked packet and, with `--key-hints`, the
+buttons' labels (A/B/X/Y, cross/circle/square/triangle, or Nintendo's) are drawn with the hints.
+While a dialog is up (paused, the seed chooser) the Board loses focus, and the cursor goes away.
+
 ## Network
 
 The game fetches its CDN content (`https://reflourished.ducnguyen.org/cdn/1.4.2.main.tar`, the
@@ -229,6 +242,7 @@ repeated without a person at the mouse (and on a machine without one). Each line
 | `peek <hex address> <bytes>` | log guest memory as words and floats |
 | `seed <n>`, `shovel`, `plantfood`, `fastforward`, `pause` | a game keybind, held for three frames |
 | `scroll <dir> <frames> [speed] [x y]` | a scroll keybind held for `frames` frames, the mouse at (x, y) (the middle by default) |
+| `pad <button> [frames] [xbox\|ps\|switch]` | a controller button (`a`, `b`, `x`, `y`, `lb`, `rb`, `lt`, `rt`, `l3`, `start`, `up`...) held for `frames` frames (default 3) |
 | `quit` | close the window |
 
 rfu keeps reading the file while the game runs, so lines appended to it drive the game live; a

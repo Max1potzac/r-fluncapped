@@ -30,7 +30,9 @@ struct AppOptions {
     std::filesystem::path screenshot;  // with max_frames: save the last frame here as a .bmp
     std::filesystem::path script;      // scripted input for testing: "<frame> <action> <args>" lines
     std::function<void(const platform::GameKeyInput&)> game_keys;  // seed and shovel keybinds (game/game_keys.h)
-    std::function<std::vector<platform::HintLabel>()> key_hints;  // drawn over each frame (--key-hints)
+    std::function<void(const platform::PadInput&)> game_pad;  // the controller on the lawn (game/game_keys.h)
+    std::function<void()> game_frame;                         // once a frame, before the game's
+    std::function<platform::HintOverlay()> overlay;           // drawn over each frame: keybind hints, the pad's cursor
 };
 
 // Guest paths of the game's storage, as Android would give them.

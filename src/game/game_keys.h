@@ -16,6 +16,12 @@
 //
 // Keybind hints (--key-hints) put each game key's name on what it presses, through the same
 // rectangles, drawn over each frame by Window::draw_hints.
+//
+// The controller (--controller) plays the lawn the way PvZ1's console version does: a cursor on
+// the grid's tiles that the d-pad moves, and buttons that tap the packet, the shovel or plant food
+// and then the tile. The tiles come from the Board's grid (origin and tile size in world units)
+// and the zoom it draws the lawn with, the same maths as the game's own (Board, 0xab23d0); the
+// cursor is a box drawn with the hints.
 
 #include "platform/window.h"
 
@@ -27,13 +33,21 @@ namespace rfu {
 class Runtime;
 class Module;
 
+struct GameKeyOptions {
+    std::vector<platform::KeyBind> hint_binds;  // the binds whose keys are shown on what they press (--key-hints)
+    bool controller = false;                    // the pad's controls on the lawn (--controller)
+    bool pad_hints = false;                     // and its buttons shown on what they press
+};
+
 struct GameKeyHandlers {
     std::function<void(const platform::GameKeyInput&)> key;  // GameKeyInput
-    std::function<std::vector<platform::HintLabel>()> hints;  // the keybind hints for the frame on screen
+    std::function<void(const platform::PadInput&)> pad;      // PadInput
+    std::function<void()> frame;                             // once a frame, between frames
+    std::function<platform::HintOverlay()> overlay;          // drawn over the frame on screen
 };
 
 // The handlers, called on the thread that runs the game's frames; empty when this libPVZ2.so is a
-// build it doesn't know. hints is set when hint_binds isn't empty: the binds whose keys it shows.
-GameKeyHandlers install_game_keys(Runtime& rt, const Module& pvz2, const std::vector<platform::KeyBind>& hint_binds = {});
+// build it doesn't know.
+GameKeyHandlers install_game_keys(Runtime& rt, const Module& pvz2, const GameKeyOptions& options = {});
 
 }  // namespace rfu

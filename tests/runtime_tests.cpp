@@ -7,6 +7,7 @@
 #include "core/log.h"
 #include "core/patches.h"
 #include "core/vfs.h"
+#include "platform/key_hints.h"
 #include "platform/keybinds.h"
 #include "platform/png.h"
 #include "runtime.h"
@@ -136,6 +137,27 @@ void test_keybinds() {
     EXPECT(low.frame()[0].y > steps[0].y);
 }
 
+void test_key_hints() {
+    using rfu::platform::HintFill;
+    using rfu::platform::HintLabel;
+    EXPECT(rfu::platform::hint_text("f") == "F" && rfu::platform::hint_text("1") == "1");
+    EXPECT(rfu::platform::hint_text("Space") == "SPC" && rfu::platform::hint_text("Keypad 1") == "KP1");
+    EXPECT(rfu::platform::hint_text("Left_Shift") == "LSHF" && rfu::platform::hint_text("Up").size() == 1);
+    EXPECT(rfu::platform::hint_text("F12") == "F12" && rfu::platform::hint_text("Application") == "APPL");
+    // "1" at 720: 2-pixel font pixels, a border one of them thick, then the back, then the glyph's runs.
+    auto fills = rfu::platform::layout_hint({"1", 10, 20, HintLabel::Anchor::TopLeft}, 1280, 720);
+    EXPECT(fills.size() == 9 && fills[0].color == HintFill::Color::Border && fills[1].color == HintFill::Color::Back);
+    EXPECT(fills[0].x == 10 && fills[0].y == 20 && fills[0].w == 22 && fills[0].h == 26);
+    EXPECT(fills[2].color == HintFill::Color::Text && fills[2].x == 10 + 6 + 4 && fills[2].y == 26 && fills[2].w == 2);
+    EXPECT(fills.back().w == 6);  // the foot: 01110
+    // At a corner of the surface the badge stays on it.
+    fills = rfu::platform::layout_hint({"D", 1300, 730, HintLabel::Anchor::BottomRight}, 1280, 720);
+    EXPECT(fills[0].x == 1280 - 22 && fills[0].y == 720 - 26);
+    fills = rfu::platform::layout_hint({"D", 300, 300, HintLabel::Anchor::BottomRight}, 1920, 1080);
+    EXPECT(fills[0].x == 300 - 33 && fills[0].y == 300 - 39);
+    EXPECT(rfu::platform::layout_hint({"", 0, 0, HintLabel::Anchor::TopLeft}, 1280, 720).empty());
+}
+
 void test_patches() {
     std::vector<std::string> errors;
     auto p = rfu::parse_patches("# name: test\nlibPVZ2.so+0x1a2b3c 1F 20 03 D5 was 00 00 80 52\nlibRFLib.so+10 C0035FD6\n"
@@ -257,7 +279,7 @@ void test_guest_offline(const std::filesystem::path& dir) {
 int main(int argc, char** argv) {
     rfu::log::set_level(rfu::log::Level::Warn);
     std::vector<std::pair<const char*, std::function<void()>>> tests{
-        {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}};
+        {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"key hints", test_key_hints}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}};
     if (argc > 1) {
         tests.emplace_back("guest", [&] { test_guest(argv[1]); });
         tests.emplace_back("hooks", [&] { test_hooks(argv[1]); });

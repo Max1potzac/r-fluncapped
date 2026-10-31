@@ -104,6 +104,14 @@ the game's handle registry, asks the game for each packet's rectangle on screen,
 at the middle of the chosen one (or the button) into `LawnApp`'s TouchBegan, then TouchEnded when
 the key comes up, from the main thread between frames, as `UI_ProcessEvents` would.
 
+`--key-hints` shows those keys on what they press. After each frame the game draws, the same
+rectangles (in the UI's units, `LawnApp`'s 1365x768 on a 1280x720 surface, scaled to the surface's
+pixels) place a badge per key: seed keys at their packets' top left corners, button keys at the
+buttons' bottom right ones. `src/platform/key_hints.cpp` lays a badge out as solid rectangles (a
+border, a back and a 5x7 pixel font); `Window::draw_hints` fills them with scissored clears, so
+the only GL state it touches is the framebuffer, scissor, clear colour and colour mask, which it
+puts back. The letters are the key names written in the keybinds file, not the keyboard layout's.
+
 ## Network
 
 The game fetches its CDN content (`https://reflourished.ducnguyen.org/cdn/1.4.2.main.tar`, the

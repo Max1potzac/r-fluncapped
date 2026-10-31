@@ -105,6 +105,7 @@ Options:
 | `--hover` | collect sun, coins and plant food by moving the mouse over them, no click needed |
 | `--fix-animations` | unfreeze plants stuck on an animation while the level isn't running (Citron before the first wave or after the last zombie) |
 | `--keybinds <file>` | keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling, a finger on a spot of the screen, or the back button (see `src/platform/keybinds.h`) |
+| `--key-hints` | with `--keybinds`: show each key in a small badge on the seed packet or button it presses |
 | `--patch <file>` | code patches to apply after the libraries load, checked against the bytes they expect (see `src/core/patches.h`) |
 | `--icon <file.png>`, `--title <text>` | the window's icon (pvz2conv takes the game's out of the APK) and title |
 | `--version-name <x.y.z>` | the APK's version name, which the game reports (default 1.4.0) |

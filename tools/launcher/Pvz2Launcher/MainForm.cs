@@ -45,6 +45,7 @@ sealed class MainForm : Form, ILaunchUi
     const string HoverItem = "Hover to collect sun, coins and plant food";
     const string AnimationsItem = "Fix frozen plant animations (Citron)";
     const string KeybindsItem = "Keybinds (keybinds.txt)";
+    const string KeyHintsItem = "Show keybind hints (keys on seed packets and buttons)";
 
     public MainForm(string launcherDir)
     {
@@ -230,6 +231,7 @@ sealed class MainForm : Form, ILaunchUi
             _injections.Items.Add(HoverItem, s.HoverCollect);
             _injections.Items.Add(AnimationsItem, s.FixAnimations);
             _injections.Items.Add(KeybindsItem, s.Keybinds);
+            _injections.Items.Add(KeyHintsItem, s.KeyHints);
             foreach (var p in game.PatchFiles())
                 _injections.Items.Add(new PatchItem(p), s.Patches.Contains(p.FileName, StringComparer.OrdinalIgnoreCase));
 
@@ -270,6 +272,7 @@ sealed class MainForm : Form, ILaunchUi
                 case HoverItem: s.HoverCollect = on; break;
                 case AnimationsItem: s.FixAnimations = on; break;
                 case KeybindsItem: s.Keybinds = on; break;
+                case KeyHintsItem: s.KeyHints = on; break;
                 case PatchItem p when on: s.Patches.Add(p.Patch.FileName); break;
             }
         }

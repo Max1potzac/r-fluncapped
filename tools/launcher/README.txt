@@ -22,7 +22,9 @@ THE MENU
                     coins and plant food picks them up), the frozen animations
                     fix (on by default: a Citron that finishes charging before
                     the first wave or after the last zombie goes on to its
-                    charged idle), keybinds, and each code patch in patches\.
+                    charged idle), keybinds, keybind hints (on by default:
+                    each key in a small badge on the seed packet or button
+                    it presses), and each code patch in patches\.
                     Offline skips the CDN and the update check. A mod's own
                     libraries (Reflourished's libRFLib, AltverZ's libSnowie)
                     are part of the game and always load; the menu lists them.

@@ -717,6 +717,7 @@ int App::run() {
             if (elapsed < frame_time) std::this_thread::sleep_for(frame_time - elapsed);
             last_frame = clock::now();
             call(kSurfaceView, "Native_onDrawFrame", gl_view);
+            if (options.key_hints && !splash_showing) window->draw_hints(options.key_hints());
         }
         ++frames;
         ++frames_since_report;

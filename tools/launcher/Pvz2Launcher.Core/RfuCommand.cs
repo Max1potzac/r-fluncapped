@@ -28,7 +28,11 @@ public static class RfuCommand
 
         if (s.HoverCollect) args.Add("--hover");
         if (s.FixAnimations) args.Add("--fix-animations");
-        if (s.Keybinds && File.Exists(game.KeybindsPath)) args.AddRange(["--keybinds", game.KeybindsPath]);
+        if (s.Keybinds && File.Exists(game.KeybindsPath))
+        {
+            args.AddRange(["--keybinds", game.KeybindsPath]);
+            if (s.KeyHints) args.Add("--key-hints");
+        }
         foreach (var patch in s.Patches)
         {
             string path = Path.Combine(game.PatchesDir, patch);

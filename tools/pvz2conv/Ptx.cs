@@ -17,10 +17,38 @@ static class Ptx
         23 => "RGBA5551 tiled",
         147 => "ETC1 + A8",
         150 => "ETC2 RGBA8 (EAC alpha)",
+        161 => "ASTC 5x5",
+        162 => "ASTC 6x6",
         _ => $"format {format}",
     };
 
     public static bool Supported(uint format) => format is 0 or 1 or 2 or 3 or 21 or 22 or 23 or 147 or 150;
+
+    /// PvZ2 China's ASTC formats: the block size, or null for anything else.
+    /// Found by size: every 161 texture is exactly ceil(w/5) * ceil(h/5) 16-byte
+    /// blocks, every 162 one ceil(w/6) * ceil(h/6), and both decode as ASTC.
+    public static (int X, int Y)? AstcBlock(uint format) => format switch
+    {
+        161 => (5, 5),
+        162 => (6, 6),
+        _ => null,
+    };
+
+    /// The PTX's ASTC blocks behind the standard 16-byte .astc header, so
+    /// astcenc (astcenc -dl x.astc x.png) and image tools can open them.
+    public static byte[] AstcFile(ReadOnlySpan<byte> src, int width, int height, int bx, int by)
+    {
+        long bytes = (long)((width + bx - 1) / bx) * ((height + by - 1) / by) * 16;
+        Need(src, bytes, $"ASTC {bx}x{by}");
+        var file = new byte[16 + bytes];
+        BitConverter.GetBytes(0x5CA1AB13u).CopyTo(file, 0);
+        file[4] = (byte)bx; file[5] = (byte)by; file[6] = 1;
+        file[7] = (byte)width; file[8] = (byte)(width >> 8); file[9] = (byte)(width >> 16);
+        file[10] = (byte)height; file[11] = (byte)(height >> 8); file[12] = (byte)(height >> 16);
+        file[13] = 1;
+        src[..(int)bytes].CopyTo(file.AsSpan(16));
+        return file;
+    }
 
     /// Decodes to RGBA. Throws FormatException for an unknown format or
     /// data too short for the size the RSB gives.
@@ -105,7 +133,9 @@ static class Ptx
     static int BlocksX(int w) => (w + 3) / 4;
     static int BlocksY(int h) => (h + 3) / 4;
 
-    // 147: ETC1 blocks for the whole texture, then one alpha byte per pixel.
+    // 147: ETC1 blocks for the whole texture, then the alpha, either one byte
+    // per pixel or (PvZ2 China) a palette: a count n, n 4-bit values (0-15),
+    // then each pixel's index in ceil(log2 n) bits, high bits first.
     static void DecodeEtc1A8(ReadOnlySpan<byte> src, byte[] dst, int w, int h)
     {
         int colorBytes = BlocksX(w) * BlocksY(h) * 8;
@@ -119,10 +149,38 @@ static class Ptx
                 Store(block, dst, w, h, bx, by, alpha: false);
             }
         var alpha = src[colorBytes..];
-        if (alpha.Length >= w * h)
-            for (int i = 0; i < w * h; i++) dst[i * 4 + 3] = alpha[i];
-        else
-            throw new FormatException($"ETC1 + A8 alpha plane needs {w * h} bytes, {alpha.Length} left");
+        int pixels = w * h;
+        if (alpha.Length == pixels || alpha.Length < 1 || !DecodePaletteAlpha(alpha, dst, pixels))
+        {
+            if (alpha.Length < pixels)
+                throw new FormatException($"ETC1 + A8 alpha plane needs {pixels} bytes, {alpha.Length} left");
+            for (int i = 0; i < pixels; i++) dst[i * 4 + 3] = alpha[i];
+        }
+    }
+
+    // false when the size doesn't fit a palette, so the caller reads it as A8
+    static bool DecodePaletteAlpha(ReadOnlySpan<byte> alpha, byte[] dst, int pixels)
+    {
+        int n = alpha[0];
+        if (n < 1 || n > 16 || alpha.Length < 1 + n) return false;
+        int bits = n <= 2 ? 1 : n <= 4 ? 2 : n <= 8 ? 3 : 4;
+        long need = 1 + n + ((long)pixels * bits + 7) / 8;
+        if (alpha.Length < need || alpha.Length - need >= 16) return false;
+        Span<byte> palette = stackalloc byte[16];
+        for (int i = 0; i < n; i++) palette[i] = (byte)((alpha[1 + i] & 15) * 17);
+        var idx = alpha[(1 + n)..];
+        long bit = 0;
+        for (int p = 0; p < pixels; p++, bit += bits)
+        {
+            int v = 0;
+            for (int b = 0; b < bits; b++)
+            {
+                long at = bit + b;
+                v = (v << 1) | (idx[(int)(at >> 3)] >> (7 - (int)(at & 7)) & 1);
+            }
+            dst[p * 4 + 3] = palette[Math.Min(v, n - 1)];
+        }
+        return true;
     }
 
     // 150: 16-byte blocks, an EAC alpha block then an ETC2 colour block.

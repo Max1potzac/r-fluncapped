@@ -276,7 +276,7 @@ static class Trie
 static class ObbSource
 {
     /// Returns a path to a plain RSB: the input itself, or a temporary file
-    /// unwrapped from an SMF (zlib) or zip container. tempFile is set when
+    /// unwrapped from an SMF (zlib), RSLB (block LZMA) or zip container. tempFile is set when
     /// the caller must delete it.
     public static string Resolve(string path, string tempDir, out string? tempFile, Action<string> log)
     {
@@ -285,6 +285,13 @@ static class ObbSource
         using (var fs = File.OpenRead(path)) head = head[..fs.Read(head)];
         uint magic = head.Length >= 4 ? BitConverter.ToUInt32(head) : 0;
         if (magic == Rsb.Magic) return path;
+
+        if (magic == Rslb.Magic) // PvZ2 China's block-LZMA
+        {
+            tempFile = Path.Combine(tempDir, Path.GetFileName(path) + ".rsb.tmp");
+            Rslb.Unwrap(path, tempFile, log);
+            return tempFile;
+        }
 
         if (magic == 0xDEADFED4) // SMF: u32 magic, u32 size, zlib stream
         {

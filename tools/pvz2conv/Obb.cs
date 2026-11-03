@@ -21,7 +21,7 @@ sealed class Obb
     readonly Action<string> _log;
     readonly ObbOptions _opt;
     readonly ConcurrentDictionary<string, ulong> _written = new(StringComparer.OrdinalIgnoreCase);
-    int _files, _png, _json, _kept, _shared, _failed, _groupsDone, _groupsSkipped, _groupsPastEnd;
+    int _files, _png, _astc, _json, _kept, _shared, _failed, _groupsDone, _groupsSkipped, _groupsPastEnd;
 
     public Obb(ObbOptions opt, Action<string> log) { _opt = opt; _log = log; }
 
@@ -87,7 +87,7 @@ sealed class Obb
             _log($"SKIP {_groupsPastEnd} groups: the file ends before them (an incomplete or cut-short .obb)");
         WriteManifest(Path.Combine(outDir, "_obb_manifest.json"), rsb, results);
         _log($"groups: {_groupsDone} extracted, {_groupsSkipped} skipped, {_failed} failed");
-        _log($"files: {_files} written ({_png} PNG, {_json} JSON, {_kept} kept as-is), {_shared} identical copies shared between groups");
+        _log($"files: {_files} written ({_png} PNG, {_astc} ASTC, {_json} JSON, {_kept} kept as-is), {_shared} identical copies shared between groups");
         _log($"output: {outDir}");
         return (_groupsDone, _failed);
     }
@@ -153,6 +153,19 @@ sealed class Obb
                 Interlocked.Increment(ref _png);
                 if (!_opt.ConvertedOnly) Write(outDir, rel, data);
                 return (png.Replace('\\', '/'), info);
+            }
+            catch (FormatException ex) { warnings.Add($"{e.Path}: {ex.Message}; kept the PTX"); }
+        }
+        else if (_opt.Convert && t != null && Ptx.AstcBlock(t.Format) is (int bx, int by))
+        {
+            // no ASTC decoder here: rewrap the blocks as a standard .astc file instead
+            try
+            {
+                string astc = Path.ChangeExtension(rel, ".astc");
+                Write(outDir, astc, Ptx.AstcFile(data, w, h, bx, by));
+                Interlocked.Increment(ref _astc);
+                if (!_opt.ConvertedOnly) Write(outDir, rel, data);
+                return (astc.Replace('\\', '/'), info);
             }
             catch (FormatException ex) { warnings.Add($"{e.Path}: {ex.Message}; kept the PTX"); }
         }

@@ -12,6 +12,7 @@ bool pause = !Console.IsInputRedirected;
 bool overwrite = true;
 bool deleteOriginal = false;
 bool toRton = false;
+bool encryptRton = false;
 var obbOptions = new ObbOptions();
 
 for (int i = 0; i < args.Length; i++)
@@ -26,6 +27,7 @@ for (int i = 0; i < args.Length; i++)
         case "--list": obbOptions.ListOnly = true; break;
         case "--no-convert": obbOptions.Convert = false; break;
         case "--to-rton": toRton = true; break;
+        case "--encrypt": encryptRton = true; break;
         case "--help": case "-h": case "/?": PrintUsage(); return 0;
         default:
             if (args[i].StartsWith("--")) { Console.Error.WriteLine($"unknown option {args[i]}"); PrintUsage(); return 2; }
@@ -143,7 +145,7 @@ void ConvertOne(string path, string? targetDir)
     {
         string? byExt = Converters.KindFromExtension(path);
         if (byExt == "rton" && Rton.LooksEncrypted(data))
-            Log($"SKIP {path}: encrypted RTON, not supported yet");
+            Log($"SKIP {path}: encrypted RTON with an unknown key (not PvZ2 China's)");
         else if (Path.GetExtension(path).Equals(".ptx", StringComparison.OrdinalIgnoreCase))
             Log($"SKIP {path}: a PTX on its own has no size or format; unpack the .obb with pvz2conv to get PNGs");
         else
@@ -153,7 +155,7 @@ void ConvertOne(string path, string? targetDir)
     }
 
     string dir = targetDir ?? Path.GetDirectoryName(path)!;
-    string outName = Converters.JsonName(Path.GetFileNameWithoutExtension(path), kind);
+    string outName = Converters.JsonName(Path.GetFileNameWithoutExtension(Converters.StripSmf(path)), kind);
     string outPath = Path.Combine(dir, outName);
 
     if (!overwrite && File.Exists(outPath)) { skipped++; return; }
@@ -187,11 +189,12 @@ void ToRton(string path, byte[] data, string? targetDir)
     try
     {
         byte[] rton = RtonWriter.FromJson(data);
+        if (encryptRton) rton = RtonCrypt.Encrypt(rton);
         Directory.CreateDirectory(dir);
         File.WriteAllBytes(Converters.LongPath(outPath), rton);
         if (deleteOriginal) File.Delete(path);
         converted++;
-        Log($"ok   json  {path} -> {outName}");
+        Log($"ok   json  {path} -> {outName}{(encryptRton ? " (encrypted)" : "")}");
     }
     catch (Exception e) when (e is JsonException or FormatException or IOException or UnauthorizedAccessException)
     {
@@ -203,12 +206,13 @@ void ToRton(string path, byte[] data, string? targetDir)
 static bool IsObb(string path)
 {
     string ext = Path.GetExtension(path).ToLowerInvariant();
-    if (ext is ".obb" or ".rsb" or ".smf") return true;
+    if (ext is ".obb" or ".rsb") return true;
+    // .smf is decided by the signature: PvZ2 China also names loose RTON files x.rton.smf
     try
     {
         using var fs = File.OpenRead(path);
         Span<byte> head = stackalloc byte[4];
-        return fs.Read(head) == 4 && (Rsb.LooksLike(head) || BitConverter.ToUInt32(head) == 0xDEADFED4);
+        return fs.Read(head) == 4 && (Rsb.LooksLike(head) || Rslb.LooksLike(head) || BitConverter.ToUInt32(head) == 0xDEADFED4);
     }
     catch (IOException) { return false; }
 }
@@ -229,7 +233,7 @@ static void PrintUsage()
         Usage: pvz2conv [options] <.apk, .obb, file or folder> ...
           An .apk gives "<name>_extracted" with lib\arm64-v8a (the libraries rfu
           loads), assets and _apk_manifest.json (version, library hashes).
-          An .obb (or .rsb / .rsb.smf) is unpacked into "<name>_extracted" next to it,
+          An .obb (or .rsb / .rsb.smf, PvZ2 China's too) is unpacked into "<name>_extracted" next to it,
           in the game's own folder layout. On the way, textures (PTX) become PNG and
           RTON, PAM and POPFX files become JSON. _obb_manifest.json lists every group.
           Other files and folders: RTON, PAM and POPFX are converted to JSON next to
@@ -246,6 +250,8 @@ static void PrintUsage()
           --to-rton            folders: convert *.json back to RTON (a single .json
                                file given on its own always is; .pam.json and
                                .popfx.json are left alone)
+          --encrypt            with --to-rton (or a .json given): write PvZ2 China's
+                               encrypted RTON instead of plain RTON
           --no-pause           don't wait for Enter at the end (for scripts)
         """);
 }

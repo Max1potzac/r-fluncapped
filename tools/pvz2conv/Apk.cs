@@ -111,6 +111,8 @@ sealed class Apk
 
         foreach (var l in libs) _log($"ok   {LibDir}{l.Name} ({l.Size:N0} bytes)");
         _log($"ok   {assets.Count} files in assets/{(dex > 0 ? $" ({dex} .dex left out)" : "")}");
+        if (assets.Any(a => a.Path.EndsWith(".rsb.smf", StringComparison.OrdinalIgnoreCase)))
+            _log("     the game's packages are in assets (*.rsb.smf, as in PvZ2 China): drop them onto pvz2conv to unpack them");
         var missing = Required.Where(r => !libs.Any(l => l.Name == r)).ToList();
         if (missing.Count > 0) _log($"FAIL rfu needs {string.Join(", ", missing)}, which this APK doesn't have");
         var modLibs = libs.Where(l => IsModLibrary(l.Name, l.Elf)).Select(l => l.Name).ToList();

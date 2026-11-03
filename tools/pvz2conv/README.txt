@@ -25,7 +25,7 @@ HOW TO USE
   The .obb is unpacked into a folder named
   "<obb name>_extracted" next to it, in the game's own folder layout
   (ATLASES, IMAGES, PACKAGES, SOUNDBANKS ...), and converted on the way:
-    ATLASES\X.PTX              ->  ATLASES\X.png
+    ATLASES\X.PTX              ->  ATLASES\X.png (ASTC: ATLASES\X.astc)
     PACKAGES\X.RTON            ->  PACKAGES\X.json
     IMAGES\...\X.PAM           ->  IMAGES\...\X.pam.json
     X.POPFX                    ->  X.popfx.json
@@ -35,9 +35,17 @@ HOW TO USE
   You can also drop RTON / PAM / POPFX files or folders, as before: each file
   gets a JSON file next to it, and a folder is searched recursively.
 
+  PVZ2 CHINA (PvZ2C, com.popcap.pvz2cthdlx): it has no OBB. Its packages are
+  the APK's assets\*.rsb.smf (init, dynamic, LuaAct, one per world ...):
+  drop those (all of them at once is fine) and each one is unpacked like an
+  OBB. Its assets\properties folder (x.rton.smf) can be dropped as a folder.
+  Its encrypted RTON is decrypted on the way. See docs\pvz2c.md in the
+  repository for how that version is laid out.
+
   JSON BACK TO RTON: drop a .json (one that came from an RTON, from pvz2conv
   or Sen) and you get the .rton next to it, for the game to read. For a
   folder, add --to-rton. .pam.json and .popfx.json aren't converted back.
+  Add --encrypt to write PvZ2 China's encrypted RTON instead.
 
   A console window shows progress; press Enter to close it at the end.
   _pvz2conv_log.txt is written into the output folder with everything that
@@ -61,14 +69,17 @@ OPTIONS (command prompt)
   --no-convert         OBB: extract the files as they are
   --skip-existing      don't overwrite JSON that's already there
   --to-rton            folders: convert *.json back to RTON
+  --encrypt            with --to-rton or a .json: write encrypted RTON
+                       (PvZ2 China)
   --no-pause           don't wait for Enter (for scripts and the launcher)
 
 OBB / RSB
   The .obb is an RSB ("1bsr", version 4 in Reflourished): a header of tables
   (groups, composites, pools, texture formats, name tries), then one packet
   ("pgsr") per resource group with part 0 (ordinary files) and part 1
-  (textures). Also accepted: a bare .rsb, an .rsb.smf (zlib-wrapped) and an
-  .obb that is really a zip with the RSB inside. An .obb that is cut short
+  (textures). Also accepted: a bare .rsb, an .rsb.smf (zlib-wrapped), PvZ2
+  China's .rsb.smf ("RSLB": the RSB cut into 32 MB blocks, each compressed
+  with raw LZMA) and an .obb that is really a zip with the RSB inside. An .obb that is cut short
   extracts every group that is complete; a header-only file is listed.
   What it does differently from stock extractors:
     * Each block's compression is read from its own signature (zstd, zlib,
@@ -90,17 +101,27 @@ PTX
   made while unpacking (a loose .PTX can't be converted on its own).
     0    RGBA8888                    verified on Reflourished
     147  ETC1 + 8-bit alpha plane    verified on Reflourished
+    147  ETC1 + palette alpha        verified on PvZ2 China: the alpha is a
+                                     count n, n 4-bit values, then 1-4 bits
+                                     per pixel (told apart from A8 by size)
     150  ETC2 RGBA8 (EAC alpha)      verified on Reflourished
+    161  ASTC 5x5                    PvZ2 China, written as .astc
+    162  ASTC 6x6                    PvZ2 China, written as .astc
     1/2/3     RGBA4444 / RGB565 / RGBA5551            not seen yet
     21/22/23  the same in 32x32 tiles                 not seen yet
-  Other formats (PVRTC, ASTC, ETC1 palette alpha) are kept as .PTX and named
-  in the log; none appeared in the part of the Reflourished OBB tested.
+  ASTC isn't decoded here: the blocks get the standard 16-byte .astc header,
+  so astcenc (astcenc -dl X.astc X.png), Sen or an image tool can open it.
+  Other formats (PVRTC ...) are kept as .PTX and named in the log.
 
 RTON / PAM / POPFX
   RTON   "RTON" + version 1 ... "DONE". PopCap's binary JSON: typed values,
          varints, a string cache (0x90/0x91, 0x92/0x93) and RTID references,
          written as "RTID(uid@Sheet)" the way other community tools do.
-         Encrypted RTON (starts with 10 00) is detected and skipped for now.
+         Encrypted RTON (PvZ2 China): 10 00, then the RTON in Rijndael-CBC
+         with a 192-bit block, zero-padded. Key: the 32 hex digits of
+         MD5("com_popcap_pvz2_magento_product_2013_05_05"), IV: key
+         characters 4 to 27. It's decrypted before converting; --encrypt
+         does the reverse (checked both ways against the game's files).
          Back to RTON: strings through the string cache, RTID(...) as RTIDs,
          whole numbers as varints, decimals as float32 when nothing is lost.
          RTON -> JSON -> RTON -> JSON gives the same JSON (checked on
@@ -120,7 +141,8 @@ RTON / PAM / POPFX
 CREDITS
   The OBB and PTX layouts were checked against RipeConsole by FranZ
   (github.com/CyberKnightFran45/RipeConsole, GPL-3.0) and Sen; pvz2conv
-  contains no code from either. zstd decoding: ZstdSharp (MIT).
+  contains no code from either. zstd decoding: ZstdSharp (MIT). LZMA
+  decoding: the LZMA SDK by Igor Pavlov (public domain).
 
 BUILDING
   .NET 8 SDK:  dotnet publish -c Release -o publish

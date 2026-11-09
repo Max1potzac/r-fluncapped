@@ -20,6 +20,7 @@
     <Compile Include="../../pvz2conv/BinReader.cs" Link="pvz2conv/BinReader.cs" />
     <Compile Include="../../pvz2conv/Rton.cs" Link="pvz2conv/Rton.cs" />
     <Compile Include="../../pvz2conv/RtonWriter.cs" Link="pvz2conv/RtonWriter.cs" />
+    <Compile Include="../../pvz2conv/RtonCrypt.cs" Link="pvz2conv/RtonCrypt.cs" />
   </ItemGroup>
 
 </Project>

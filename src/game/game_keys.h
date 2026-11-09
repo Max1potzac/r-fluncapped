@@ -26,6 +26,7 @@
 #include "platform/window.h"
 
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace rfu {
@@ -33,10 +34,22 @@ namespace rfu {
 class Runtime;
 class Module;
 
+// --pad-binds: the button for each of the lawn's actions, as "plant=a,dig=b,use=x,plantfood=y,
+// prevseed=lb,nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start". An action is the
+// button that does it by default (A for plant...); a bound action's default button does nothing
+// unless it's bound to something too.
+struct PadBind {
+    platform::PadButton action;  // the action, as its default button
+    platform::PadButton button;  // the button that does it
+};
+// Empty, with error set, when the text isn't binds.
+std::vector<PadBind> parse_pad_binds(const std::string& text, std::string& error);
+
 struct GameKeyOptions {
     std::vector<platform::KeyBind> hint_binds;  // the binds whose keys are shown on what they press (--key-hints)
     bool controller = false;                    // the pad's controls on the lawn (--controller)
     bool pad_hints = false;                     // and its buttons shown on what they press
+    std::vector<PadBind> pad_binds;             // the pad's buttons, rebound (--pad-binds)
 };
 
 struct GameKeyHandlers {

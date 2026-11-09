@@ -16,7 +16,7 @@ namespace rfu::platform {
 constexpr char kGlyphCross = 5, kGlyphCircle = 6, kGlyphSquare = 7, kGlyphTriangle = 8;
 
 struct HintLabel {
-    enum class Anchor { TopLeft, BottomRight };  // the badge's corner that sits on (x, y)
+    enum class Anchor { TopLeft, BottomLeft, BottomRight };  // the badge's corner that sits on (x, y)
     std::string text;
     int x = 0, y = 0;  // pixels of the game's surface, from the top left
     Anchor anchor = Anchor::TopLeft;

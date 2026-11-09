@@ -128,10 +128,25 @@ vacuum: over a few frames, the Board's own `TouchMoved` (vtable +0x268, 0xab24c8
 finger at every 40 UI units of the screen, the way hover to collect tells it of the mouse, and
 everything a sliding finger would pick up is collected. The cursor (corner brackets), a box around
 the picked packet, dials that fill while B, Y or X is held and, with `--key-hints`, the buttons'
-labels (A/B/X/Y, cross/circle/square/triangle, or Nintendo's) are drawn with the hints. While a
-dialog is up (paused, the seed chooser) the Board loses focus, and the cursor goes away; it's also
-hidden until the level starts (Board +0xe0, the state: 1 for the pan, 3 for the seed chooser, 5
-in play).
+labels (A/B/X/Y, cross/circle/square/triangle, or Nintendo's) are drawn with the hints. While
+something is in front of the lawn (paused, a dialog) the cursor goes away: the widget
+`WidgetManager::GetWidgetAt` (0x163e82c) finds at the grid's middle isn't the Board then. (The
+Board's focus byte, +0x72, isn't used: it can stay off after the window loses the focus until the
+next level.) It's also hidden until the level starts (Board +0xe0, the state: 1 for the pan, 3
+for the seed chooser, 5 in play).
+
+A plant that aims (Banana Launcher, Missile Toe, the launchers, Escape Root) puts up a cursor of
+its own (`BananaTargetCursor`, `MissileToeTargetCursor`, `PlantLauncherTargetCursor`,
+`EscapeRootCursor`, seen through their vtables' first function, as `PlantCursor` is). While one
+is up, each move of the tile cursor slides a finger there (the Board's `TouchMoved`), so the
+plant's reticle follows; X taps the tile to fire, A taps the plant again to call it off. X held in
+the first column holds a finger on the row's mower until X is let go, as the game wants for
+launching one.
+
+`--pad-binds` moves actions to other buttons (each button is translated to the action it does
+before anything else sees it, and the labels show the button that does each action now).
+`--pad-mappings` adds SDL mappings after the controller subsystem starts, so a joystick SDL didn't
+know comes as a controller then; one it still doesn't know is logged with its GUID.
 
 ## Network
 
@@ -251,6 +266,7 @@ repeated without a person at the mouse (and on a machine without one). Each line
 | `seed <n>`, `shovel`, `plantfood`, `fastforward`, `pause` | a game keybind, held for three frames |
 | `scroll <dir> <frames> [speed] [x y]` | a scroll keybind held for `frames` frames, the mouse at (x, y) (the middle by default) |
 | `pad <button> [frames] [xbox\|ps\|switch]` | a controller button (`a`, `b`, `x`, `y`, `lb`, `rb`, `lt`, `rt`, `l3`, `start`, `up`...) held for `frames` frames (default 3) |
+| `focus on\|off` | the window getting or losing the focus (alt-tab) |
 | `quit` | close the window |
 
 rfu keeps reading the file while the game runs, so lines appended to it drive the game live; a

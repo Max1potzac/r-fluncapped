@@ -337,6 +337,12 @@ void App::load_script(const fs::path& file, std::uint64_t now) {
                                                                               y1 + (y2 - y1) * i / steps}}, {}});
         } else if (verb == "back") {
             script.emplace(frame, Scripted{platform::Input{platform::BackInput{}}, {}});
+        } else if (verb == "focus") {
+            // The window losing or getting back the focus (alt-tab): "focus off", "focus on".
+            std::string state;
+            ls >> state;
+            if (state != "on" && state != "off") throw std::runtime_error(fmt::format("{}:{}: focus on or focus off", path_to_utf8(file), line_no));
+            script.emplace(frame, Scripted{platform::Input{platform::FocusInput{state == "on"}}, {}});
         } else if (verb == "text") {
             // Typed as on a keyboard: digits as key presses, everything else as text.
             std::string text;

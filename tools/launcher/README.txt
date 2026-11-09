@@ -108,13 +108,22 @@ CONTROLLER
     B (hold 1 second)   dig up the plant there (a dial fills as you hold)
     Y                   feed it plant food
     Y (hold 2 seconds)  buy plant food (the "+" by the plant food bar)
-    X                   tap the tile: a plant's own ability, then its target
-    X (hold 1 second)   in the first column: that row's mower
+    X                   tap the tile: a plant's own ability. A plant that aims
+                        (Banana Launcher...) then aims where the cursor is:
+                        X fires, A calls it off
+    X (hold)            in the first column: hold the row's mower until the
+                        game's dial fills
     LT / RT             vacuum up all the sun, coins and plant food
     Start               pause (again to resume)
     L3                  fast-forward
   With keybind hints on, the buttons are labelled for the controller
-  plugged in (Xbox's when it isn't recognised). More controls (powerups,
+  plugged in (Xbox's when it isn't recognised).
+  "Controller settings" shows the controllers plugged in, lights up their
+  buttons as you press them, and says whether the game recognises each one.
+  One it doesn't (some DualShock 4s, generic pads) can be set up there: it
+  asks for each button in turn and saves it in games\controllers.txt, which
+  every game then reads. Below that, any action can be moved to another
+  button. More controls (powerups,
   menus) are on the way.
 
 CODE PATCHES (patches\*.patch)

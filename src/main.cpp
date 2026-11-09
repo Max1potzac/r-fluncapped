@@ -54,6 +54,9 @@ void usage() {
                  "  --keybinds <file>        keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling or spots of the screen (see src/platform/keybinds.h)\n"
                  "  --key-hints              show each keybind's key (or controller button) on the seed packet or button it presses\n"
                  "  --controller             play the lawn with a game controller, PvZ1 console style (see src/game/game_keys.h)\n"
+                 "  --pad-binds <binds>      the controller's buttons for its actions: plant=a,dig=b,use=x,plantfood=y,prevseed=lb,\n"
+                 "                           nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start\n"
+                 "  --pad-mappings <file>    SDL controller mappings (gamecontrollerdb.txt lines) for controllers SDL doesn't know\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
                  "  --fix-animations         unfreeze plants stuck on an animation while the level isn't running\n"
@@ -141,6 +144,7 @@ int main(int argc, char** argv) {
     bool load_mod_libs = true;
     bool fix_animations = false;
     bool key_hints = false;
+    std::vector<rfu::PadBind> pad_binds;
     std::string dump_patches;
     std::vector<std::string> trace_classes;
     bool init_only = false;
@@ -190,6 +194,12 @@ int main(int argc, char** argv) {
                 key_hints = true;
             } else if (arg == "--controller") {
                 app.window.controller = true;
+            } else if (arg == "--pad-binds") {
+                std::string error;
+                pad_binds = rfu::parse_pad_binds(value(), error);
+                if (!error.empty()) throw std::runtime_error(error);
+            } else if (arg == "--pad-mappings") {
+                app.window.pad_mappings = rfu::path_from_utf8(value());
             } else if (arg == "--trace-class") {
                 trace_classes.push_back(value());
             } else if (arg == "--dump-patches") {
@@ -358,6 +368,7 @@ int main(int argc, char** argv) {
             if (key_hints) options.hint_binds = app.window.keybinds;
             options.controller = app.window.controller;
             options.pad_hints = key_hints;
+            options.pad_binds = pad_binds;
             auto keys = rfu::install_game_keys(rt, pvz2, options);
             app.game_keys = keys.key;
             app.game_pad = keys.pad;

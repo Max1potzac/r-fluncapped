@@ -7,6 +7,7 @@
 #include "core/log.h"
 #include "core/patches.h"
 #include "core/vfs.h"
+#include "game/game_keys.h"
 #include "platform/key_hints.h"
 #include "platform/keybinds.h"
 #include "platform/png.h"
@@ -171,6 +172,19 @@ void test_key_hints() {
     EXPECT(count(fills, 0xFF0000) == 20);
 }
 
+void test_pad_binds() {
+    using rfu::platform::PadButton;
+    std::string error;
+    auto binds = rfu::parse_pad_binds("plant=B, Dig=a,,vacuum=rt", error);
+    EXPECT(error.empty() && binds.size() == 3);
+    EXPECT(binds[0].action == PadButton::A && binds[0].button == PadButton::B);
+    EXPECT(binds[1].action == PadButton::B && binds[1].button == PadButton::A);
+    EXPECT(binds[2].action == PadButton::LT && binds[2].button == PadButton::RT);
+    EXPECT(rfu::parse_pad_binds("plant=q", error).empty() && !error.empty());
+    error.clear();
+    EXPECT(rfu::parse_pad_binds("jump=a", error).empty() && !error.empty());
+}
+
 void test_patches() {
     std::vector<std::string> errors;
     auto p = rfu::parse_patches("# name: test\nlibPVZ2.so+0x1a2b3c 1F 20 03 D5 was 00 00 80 52\nlibRFLib.so+10 C0035FD6\n"
@@ -292,7 +306,7 @@ void test_guest_offline(const std::filesystem::path& dir) {
 int main(int argc, char** argv) {
     rfu::log::set_level(rfu::log::Level::Warn);
     std::vector<std::pair<const char*, std::function<void()>>> tests{
-        {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"key hints", test_key_hints}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}};
+        {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"key hints", test_key_hints}, {"pad binds", test_pad_binds}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}};
     if (argc > 1) {
         tests.emplace_back("guest", [&] { test_guest(argv[1]); });
         tests.emplace_back("hooks", [&] { test_hooks(argv[1]); });

@@ -120,7 +120,15 @@ CONTROLLER
     D-pad / left stick  move the box; left and right move a slider
     A                   press the button
     B / Start           resume
-  Everywhere else (the world map, the menus...) but the seed selection:
+  On the seed selection:
+    D-pad / left stick  move the box over the packets (the list scrolls)
+    A                   pick the packet
+    LB / RB             pick a slot on the left (boxed in gold)
+    B                   take the slot's packet out
+    B (hold 2 seconds)  empty every slot
+    Y                   look at the lawn (again to come back)
+    X (hold 1 second)   Let's Rock
+  Everywhere else (the world map, the menus...):
     Right stick         move a cursor (faster the further it's pushed)
     A                   touch where the cursor is (hold to drag)
     D-pad / left stick  scroll

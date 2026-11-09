@@ -153,8 +153,19 @@ between its sliders and buttons: the dialog's Sexy widgets (`Sexy::Widget`: its 
 `std::list` at +0x8, its parent at +0x28, x, y, width and height relative to the parent at +0x44,
 shown at +0x70) that are a `Sexy::Slider` or a `PVZ2UIButton`, in rows top to bottom. Left and
 right move a slider a tenth (a finger down on its thumb, from its value at +0xc0, across and up),
-A taps a button, and B or Start are Android's back, which resumes. Everywhere else but the seed
-chooser (Board state 3, which is to get controls of its own) the right stick moves a cursor (a
+A taps a button, and B or Start are Android's back, which resumes.
+
+The seed chooser (Board state 3) isn't made of widgets: `SeedChooser` is a UI object (drawn
+through vtable slot 13, which is how it's seen) whose children are `SeedPacket`s, both the ones to
+pick (with their rects scrolled with the list) and the ones picked, in the slots down the left (an
+empty slot's at 0, 0). The d-pad moves a box over the packets to pick; one out of the list's view
+(about 0.445 to 0.975 of the screen's height) is scrolled to with a slow drag that's held still
+before it lets go, so the list doesn't fling. A taps the packet, LB/RB pick a slot, B taps the
+slot's packet (which takes it out; held two seconds, every slot's from the bottom), Y taps
+`ViewBoardOrZombiesButton`, and X held a second taps "let's rock", which the chooser draws itself
+in the screen's bottom right corner (117 and 47 of 768 UI units in, at every shape).
+
+Everywhere else the right stick moves a cursor (a
 dot, faster the further the stick is pushed: `PadInput` also brings each stick's position as
 `LStick`/`RStick`), A holds a finger down there until it's let go (it drags as the cursor moves),
 the d-pad or left stick held scrolls what's under the cursor (a `ScrollDrag`, as the scroll

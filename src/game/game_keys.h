@@ -22,8 +22,8 @@
 // and then the tile. The tiles come from the Board's grid (origin and tile size in world units)
 // and the zoom it draws the lawn with, the same maths as the game's own (Board, 0xab23d0); the
 // cursor is a box drawn with the hints. Off the lawn, the pause menu's sliders and buttons are
-// picked with the d-pad, and elsewhere (but the seed chooser) the right stick moves a cursor that A
-// touches with.
+// picked with the d-pad, the seed chooser's packets and slots with the d-pad and LB/RB, and
+// elsewhere the right stick moves a cursor that A touches with.
 
 #include "platform/window.h"
 

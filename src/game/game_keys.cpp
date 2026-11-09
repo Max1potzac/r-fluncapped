@@ -32,6 +32,7 @@ struct Known {
 };
 constexpr std::uint64_t kApp = 0x25a4618;  // LawnApp* (the app singleton)
 constexpr Known kAppTouchBegan{0x14e8568, {0xF941C000, 0x1401B9C9, 0xF941C000}};  // LawnApp::TouchBegan(touch): wm->TouchBegan
+constexpr Known kAppTouchMoved{0x14e8578, {0xF941C000, 0x1401BA28, 0xF81E0FF3}};
 constexpr Known kAppTouchEnded{0x14e8570, {0xF941C000, 0x1401BAB4, 0xF941C000}};
 constexpr Known kScreenRect{0x5c1788, {0xD10143FF, 0xA9015FF8, 0xA90257F6}};  // UI object: its Rect on screen, through x8
 // Handles: the registry, a handle's object pointer (through x8), and the calls that look it up.
@@ -189,7 +190,7 @@ public:
     }
 
     bool install(const Module& pvz2) {
-        for (const Known* k : {&kAppTouchBegan, &kAppTouchEnded, &kScreenRect, &kRegistry, &kHandleRef, &kRefIsNull, &kRefType, &kTypeTable, &kRefResolve, &kRefFree})
+        for (const Known* k : {&kAppTouchBegan, &kAppTouchMoved, &kAppTouchEnded, &kScreenRect, &kRegistry, &kHandleRef, &kRefIsNull, &kRefType, &kTypeTable, &kRefResolve, &kRefFree})
             if (!known(*k)) return false;
         auto bank = find_vtable(rt_.mem(), pvz2, "SeedBankNew");
         auto packet = find_vtable(rt_.mem(), pvz2, "SeedPacket");
@@ -282,9 +283,10 @@ public:
             return;
         }
         if (p.button == PadButton::X) {
-            // Aiming: the target, the cursor's tile.
-            if (p.down && lawn && aiming()) {
-                tap_tile(*lawn);
+            // Aiming: the finger that's held on the target lets go, and the plant fires.
+            if (p.down && aim_down_) {
+                steps_.push_back({1, 3, aim_x_, aim_y_});
+                aim_down_ = false;
                 aim_from_.reset();
                 return;
             }
@@ -311,9 +313,15 @@ public:
         }
         case PadButton::A:
             if (!lawn) break;
-            if (aiming()) {
-                // Aiming is called off: the plant tapped again.
-                if (aim_from_) tap(tile_x(*lawn, aim_from_->first), tile_y(*lawn, aim_from_->second));
+            if (aim_down_) {
+                // Aiming is called off: the finger slides back onto the plant and lets go there.
+                if (aim_from_) {
+                    aim_x_ = tile_x(*lawn, aim_from_->first);
+                    aim_y_ = tile_y(*lawn, aim_from_->second);
+                    steps_.push_back({1, 1, aim_x_, aim_y_});
+                }
+                steps_.push_back({1, 3, aim_x_, aim_y_});
+                aim_down_ = false;
                 aim_from_.reset();
                 break;
             }
@@ -378,6 +386,21 @@ public:
             }
         }
         if (sweep_ >= 0) sweep();
+        // A plant started aiming (its cursor is up): a finger goes down on the cursor's tile and
+        // stays, as on a phone the reticle shows under a finger held on the lawn. If the game
+        // drops the aiming by itself, the finger comes up.
+        bool aims = aiming();
+        if (aims && !aim_down_ && !mower_down_ && steps_.empty()) {
+            if (auto lawn = this->lawn()) {
+                aim_x_ = tile_x(*lawn, col_);
+                aim_y_ = tile_y(*lawn, row_);
+                steps_.push_back({1, 0, aim_x_, aim_y_});
+                aim_down_ = true;
+            }
+        } else if (!aims && aim_down_ && steps_.empty()) {
+            steps_.push_back({1, 3, aim_x_, aim_y_});
+            aim_down_ = false;
+        }
         if (!steps_.empty() && --steps_.front().wait <= 0) {
             Step step = steps_.front();
             steps_.pop_front();
@@ -569,8 +592,12 @@ private:
         if (!lawn) return;
         col_ = std::clamp(col_ + dx, 0, lawn->cols - 1);
         row_ = std::clamp(row_ + dy, 0, lawn->rows - 1);
-        // While a plant aims, its reticle follows the cursor the way it follows a finger.
-        if (aiming()) slide_to(*lawn, tile_x(*lawn, col_), tile_y(*lawn, row_));
+        // While a plant aims, the finger held for it slides along, and its reticle with it.
+        if (aim_down_) {
+            aim_x_ = tile_x(*lawn, col_);
+            aim_y_ = tile_y(*lawn, row_);
+            steps_.push_back({1, 1, aim_x_, aim_y_});
+        }
     }
 
     // A plant's aiming cursor is up.
@@ -687,7 +714,12 @@ private:
             GuestAddr packet = resolve(h);
             if (!packet || mem.read<std::uint64_t>(packet) != packet_vtable_) continue;
             Rect r = screen_rect(packet);
-            if (r.w > 0 && r.h > 0) packets.push_back(r);
+            if (r.w <= 0 || r.h <= 0) continue;
+            // The card is drawn a little up and left of the packet's rect (by about 7 and 3 of
+            // the UI's units on a 119x76 packet, at every resolution), so the box goes there.
+            r.x -= r.w * 6 / 100;
+            r.y -= r.h * 4 / 100;
+            packets.push_back(r);
         }
         std::stable_sort(packets.begin(), packets.end(), [](const Rect& a, const Rect& b) { return a.y != b.y ? a.y < b.y : a.x < b.x; });
         return packets;
@@ -700,12 +732,12 @@ private:
         return packets[slot - 1];
     }
 
-    // A touch at (x_, y_) in the given phase (0 down, 3 up), into LawnApp's handlers.
+    // A touch at (x_, y_) in the given phase (0 down, 1 moved, 3 up), into LawnApp's handlers.
     void send(int phase) {
         GuestAddr app = rt_.mem().read<std::uint64_t>(base_ + kApp);
         if (!app) return;
         fill_touch(phase, x_, y_);
-        rt_.call(base_ + (phase == 0 ? kAppTouchBegan : kAppTouchEnded).offset, {app, touch_});
+        rt_.call(base_ + (phase == 0 ? kAppTouchBegan : phase == 1 ? kAppTouchMoved : kAppTouchEnded).offset, {app, touch_});
     }
 
     void fill_touch(int phase, std::int32_t x, std::int32_t y) {
@@ -750,6 +782,8 @@ private:
     GuestAddr board_vtable_ = 0, cursor_vtable_ = 0;
     Seen plant_cursor_;
     std::deque<std::pair<GuestAddr, Seen>> aim_cursors_;  // the aiming cursors' vtables, and the last of each seen
+    bool aim_down_ = false;                                // a finger held on the lawn for a plant that aims
+    std::int32_t aim_x_ = 0, aim_y_ = 0;                   // where it is
     std::optional<std::pair<int, int>> aim_from_;          // the tile X last tapped: the plant that's aiming
     std::array<Dir, 4> dirs_{{{platform::PadButton::Up, 0, -1}, {platform::PadButton::Down, 0, 1},
                               {platform::PadButton::Left, -1, 0}, {platform::PadButton::Right, 1, 0}}};

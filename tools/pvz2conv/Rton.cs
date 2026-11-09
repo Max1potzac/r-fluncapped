@@ -16,10 +16,11 @@ static class Rton
 
     public static void ToJson(byte[] data, Utf8JsonWriter w, List<string> warnings)
     {
+        if (RtonCrypt.IsEncryptedRton(data)) data = RtonCrypt.Decrypt(data);
         if (!LooksLike(data))
         {
             if (LooksEncrypted(data))
-                throw new FormatException("this RTON is encrypted (starts with 10 00); decryption is not supported yet");
+                throw new FormatException("this RTON is encrypted (starts with 10 00) with a key other than PvZ2 China's");
             throw new FormatException("missing RTON signature");
         }
         var r = new BinReader(data, 4);

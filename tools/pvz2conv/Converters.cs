@@ -15,13 +15,17 @@ static class Converters
 
     public static string? KindFromSignature(byte[] data)
     {
-        if (Rton.LooksLike(data)) return "rton";
+        if (Rton.LooksLike(data) || RtonCrypt.IsEncryptedRton(data)) return "rton";
         if (Pam.LooksLike(data)) return "pam";
         if (PopFx.LooksLike(data)) return "popfx";
         return null;
     }
 
-    public static string? KindFromExtension(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    /// PvZ2 China adds .smf to loose files (resourcesBeach.rton.smf); look past it.
+    public static string StripSmf(string name) =>
+        name.EndsWith(".smf", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+
+    public static string? KindFromExtension(string path) => Path.GetExtension(StripSmf(path)).ToLowerInvariant() switch
     {
         ".rton" => "rton",
         ".pam" => "pam",

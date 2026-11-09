@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <utility>
 
@@ -119,10 +120,57 @@ std::vector<HintFill> layout_box(const HintBox& box, int surface_height) {
     // A dark edge first, a pixel wider all round, so the line shows on light tiles too.
     for (auto [rgb, grow] : {std::pair{kHintBack, 1}, std::pair{box.rgb, 0}}) {
         int lx = x - grow, ly = y - grow, lw = w + 2 * grow, lh = h + 2 * grow, lt = t + 2 * grow;
+        if (box.corners) {
+            // Each corner's arms a quarter of the shorter side long.
+            int arm = std::max(lt + 2, std::min(w, h) / 4 + 2 * grow);
+            fills.push_back({lx, ly, arm, lt, rgb});
+            fills.push_back({lx, ly, lt, arm, rgb});
+            fills.push_back({lx + lw - arm, ly, arm, lt, rgb});
+            fills.push_back({lx + lw - lt, ly, lt, arm, rgb});
+            fills.push_back({lx, ly + lh - lt, arm, lt, rgb});
+            fills.push_back({lx, ly + lh - arm, lt, arm, rgb});
+            fills.push_back({lx + lw - arm, ly + lh - lt, arm, lt, rgb});
+            fills.push_back({lx + lw - lt, ly + lh - arm, lt, arm, rgb});
+            continue;
+        }
         fills.push_back({lx, ly, lw, lt, rgb});
         fills.push_back({lx, ly + lh - lt, lw, lt, rgb});
         fills.push_back({lx, ly, lt, lh, rgb});
         fills.push_back({lx + lw - lt, ly, lt, lh, rgb});
+    }
+    return fills;
+}
+
+std::vector<HintFill> layout_meter(const HintMeter& meter) {
+    std::vector<HintFill> fills;
+    int r = meter.radius;
+    if (r <= 0) return fills;
+    float progress = std::clamp(meter.progress, 0.0f, 1.0f);
+    constexpr float kTau = 6.2831853f;
+    for (int dy = -r - 1; dy <= r; ++dy) {
+        float py = dy + 0.5f;
+        // The dark disc, a pixel wider than the dial.
+        float outer = static_cast<float>(r + 1) * (r + 1) - py * py;
+        if (outer <= 0) continue;
+        int half = static_cast<int>(std::sqrt(outer) + 0.5f);
+        fills.push_back({meter.x - half, meter.y + dy, 2 * half, 1, kHintBack});
+        if (progress <= 0) continue;
+        // The filled part: runs of the row inside the dial and within the swept angle.
+        int start = 0;
+        bool in = false;
+        for (int dx = -r; dx <= r; ++dx) {
+            float px = dx + 0.5f;
+            bool inside = px * px + py * py <= static_cast<float>(r) * r;
+            if (inside && progress < 1) {
+                float a = std::atan2(px, -py);  // clockwise from the top
+                if (a < 0) a += kTau;
+                inside = a <= progress * kTau;
+            }
+            if (inside && !in) start = dx;
+            if (!inside && in) fills.push_back({meter.x + start, meter.y + dy, dx - start, 1, meter.rgb});
+            in = inside;
+        }
+        if (in) fills.push_back({meter.x + start, meter.y + dy, r + 1 - start, 1, meter.rgb});
     }
     return fills;
 }

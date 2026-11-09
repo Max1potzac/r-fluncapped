@@ -325,6 +325,10 @@ void Window::draw_hints(const HintOverlay& overlay) {
         auto f = layout_box(box, game_h_);
         fills.insert(fills.end(), f.begin(), f.end());
     }
+    for (const auto& meter : overlay.meters) {
+        auto f = layout_meter(meter);
+        fills.insert(fills.end(), f.begin(), f.end());
+    }
     for (const auto& label : overlay.labels) {
         auto f = layout_hint(label, game_w_, game_h_);
         fills.insert(fills.end(), f.begin(), f.end());

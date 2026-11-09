@@ -106,7 +106,7 @@ Options:
 | `--fix-animations` | unfreeze plants stuck on an animation while the level isn't running (Citron before the first wave or after the last zombie) |
 | `--keybinds <file>` | keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling, a finger on a spot of the screen, or the back button (see `src/platform/keybinds.h`) |
 | `--key-hints` | with `--keybinds` or `--controller`: show each key (or the controller's buttons, labelled for the pad plugged in) in a small badge on the seed packet or button it presses |
-| `--controller` | play the lawn with a game controller, PvZ1 console style: the d-pad or left stick moves a tile cursor, LB/RB pick the seed packet, A plants it, B held a second digs, Y feeds plant food, Start pauses, L3 fast-forwards |
+| `--controller` | play the lawn with a game controller, PvZ1 console style: the d-pad or left stick moves a tile cursor, LB/RB pick the seed packet, A plants it, B held a second digs, Y feeds plant food (held two seconds, buys one), X taps the tile (plant abilities and their targets; held in the first column, the mower), LT/RT collect everything on the lawn, Start pauses, L3 fast-forwards |
 | `--patch <file>` | code patches to apply after the libraries load, checked against the bytes they expect (see `src/core/patches.h`) |
 | `--icon <file.png>`, `--title <text>` | the window's icon (pvz2conv takes the game's out of the APK) and title |
 | `--version-name <x.y.z>` | the APK's version name, which the game reports (default 1.4.0) |

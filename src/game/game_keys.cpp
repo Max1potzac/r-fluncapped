@@ -55,6 +55,9 @@ constexpr std::uint64_t kAppScale = 0x980;
 // Board's world Rect to UI one, whose maths Lawn::ui copies, and the world x to column it checks against.
 constexpr Known kWorldToUi{0xab23d0, {0xFC1D0FE8, 0xF90007F5, 0xA9014FF4}};
 constexpr Known kWorldToColumn{0x9b17d0, {0xD0008F08, 0xBD47D101, 0xD0008F08}};
+constexpr Known kBoardTouchMoved{0xab24c8, {0xD101C3FF, 0xF90023F5, 0xA9054FF4}};  // Board::TouchMoved(touch): the lawn hands it to the collectables
+constexpr std::uint64_t kTouchMovedSlot = 0x268;  // its place in Board's vtable
+constexpr std::uint64_t kBoardState = 0xe0;  // 1 and 3 before the level starts (the pan, the seed chooser), 5 in play
 constexpr int kPointer = 98;  // the touch's id, clear of the mouse (1), hover (99) and tap keybinds (100 and up)
 constexpr auto kStale = std::chrono::seconds(1);  // an instance not updated for this long is gone
 
@@ -209,10 +212,11 @@ public:
 
     // The controller's part: the lawn's grid, and the plant cursor that's up while a packet is picked.
     bool install_pad(const Module& pvz2) {
-        if (!known(kWorldToUi) || !known(kWorldToColumn)) return false;
+        if (!known(kWorldToUi) || !known(kWorldToColumn) || !known(kBoardTouchMoved)) return false;
         auto board = find_vtable(rt_.mem(), pvz2, "Board");
         auto cursor = find_vtable(rt_.mem(), pvz2, "PlantCursor");
         if (!board || !cursor || cursor->functions.empty()) return false;
+        if (rt_.mem().read<std::uint64_t>(board->address + kTouchMovedSlot) != base_ + kBoardTouchMoved.offset) return false;
         board_vtable_ = board->address;
         cursor_vtable_ = cursor->address;
         watch(cursor->functions[0], cursor_vtable_, plant_cursor_, "controller: plant cursor");  // its per-frame call
@@ -221,7 +225,10 @@ public:
 
     // A pad button. The lawn's controls, in the manner of PvZ1's console version: the d-pad or left
     // stick moves the cursor a tile, LB/RB pick the packet, A plants it (or taps the tile), B held a
-    // second digs, Y feeds plant food, Start pauses, L3 fast-forwards.
+    // second digs, Y feeds plant food (held two seconds, it buys one through the "+" by the plant
+    // food bar), X taps the tile (a plant's own ability, or the target
+    // once one asks for it; held a second in the first column, the mower), LT/RT sweep the lawn
+    // for sun and coins, Start pauses, L3 fast-forwards.
     void pad(const platform::PadInput& p) {
         using platform::PadButton;
         pad_type_ = p.type;
@@ -239,8 +246,26 @@ public:
             b_since_ = p.down ? now_ticks() : 0;
             return;
         }
-        if (!p.down) return;
         auto lawn = this->lawn();
+        if (p.button == PadButton::Y) {
+            // On the way up, unless the hold already bought one.
+            if (p.down) y_since_ = now_ticks();
+            else if (y_since_ && lawn) {
+                if (auto r = button_rect(platform::KeyBind::Action::PlantFood)) tap(r->x + r->w / 2, r->y + r->h / 2);
+                tap_tile(*lawn);
+            }
+            if (!p.down) y_since_ = 0;
+            return;
+        }
+        if (p.button == PadButton::X) {
+            // In the first column it waits to see if it's held for the mower.
+            if (p.down && lawn && col_ == 0) x_since_ = now_ticks();
+            else if (p.down && lawn) tap_tile(*lawn);
+            else if (x_since_ && lawn) tap_tile(*lawn);
+            if (!p.down) x_since_ = 0;
+            return;
+        }
+        if (!p.down) return;
         switch (p.button) {
         case PadButton::LB:
         case PadButton::RB: {
@@ -257,10 +282,9 @@ public:
             }
             tap_tile(*lawn);
             break;
-        case PadButton::Y:
-            if (!lawn) break;
-            if (auto r = button_rect(platform::KeyBind::Action::PlantFood)) tap(r->x + r->w / 2, r->y + r->h / 2);
-            tap_tile(*lawn);
+        case PadButton::LT:
+        case PadButton::RT:
+            if (lawn && sweep_ < 0) sweep_ = 0;
             break;
         case PadButton::Start:
             if (auto r = button_rect(platform::KeyBind::Action::Pause)) tap(r->x + r->w / 2, r->y + r->h / 2);
@@ -288,6 +312,27 @@ public:
                 tap_tile(*lawn);
             }
         }
+        if (y_since_ && now - y_since_ >= ticks(kBuyHold)) {
+            y_since_ = 0;
+            // The "+" opens a plant food (and its price) over itself; a tap on that buys it.
+            if (lawn())
+                if (auto bar = button_rect(platform::KeyBind::Action::PlantFood)) {
+                    auto plus = buy_rect();
+                    tap(plus->x, plus->y);
+                    std::int32_t x = plus->x - bar->h * 12 / 100, y = plus->y - bar->h * 128 / 100;
+                    steps_.push_back({kPopupWait, 0, x, y});
+                    steps_.push_back({2, 3, x, y});
+                }
+        }
+        if (x_since_ && now - x_since_ >= ticks(kMowerHold)) {
+            x_since_ = 0;
+            if (auto lawn = this->lawn()) {
+                // The row's mower, left of the first column.
+                float wx = lawn->ox - lawn->tw * 0.6f, wy = lawn->oy + lawn->th * (row_ + 0.5f);
+                tap(static_cast<std::int32_t>(lawn->ui_x(wx)), static_cast<std::int32_t>(lawn->ui_y(wy)));
+            }
+        }
+        if (sweep_ >= 0) sweep();
         if (!steps_.empty() && --steps_.front().wait <= 0) {
             Step step = steps_.front();
             steps_.pop_front();
@@ -336,7 +381,28 @@ public:
         float x0 = lawn->ox + lawn->tw * col_, y0 = lawn->oy + lawn->th * row_;
         int left = static_cast<int>(lawn->ui_x(x0) * fx), top = static_cast<int>(lawn->ui_y(y0) * fy);
         int right = static_cast<int>(lawn->ui_x(x0 + lawn->tw) * fx), bottom = static_cast<int>(lawn->ui_y(y0 + lawn->th) * fy);
-        out.boxes.push_back({left, top, right - left, bottom - top, b_since_ ? 0xFF4040u : 0xFFFFFFu});
+        out.boxes.push_back({left, top, right - left, bottom - top, b_since_ ? 0xFF4040u : 0xFFFFFFu, true});
+        if (b_since_) {
+            // The shovel's dial by the tile's top right corner, full when the plant comes up.
+            float held = static_cast<float>(now_ticks() - b_since_) / ticks(kDigHold);
+            int radius = std::max(6, (bottom - top) / 6);
+            out.meters.push_back({right, top, radius, held, 0xFF4040u});
+        }
+        if (x_since_ && now_ticks() - x_since_ >= ticks(std::chrono::milliseconds(250))) {
+            // X held in the first column: the mower's dial, at the tile's left.
+            float held = static_cast<float>(now_ticks() - x_since_) / ticks(kMowerHold);
+            int radius = std::max(6, (bottom - top) / 6);
+            out.meters.push_back({left, top, radius, held, 0xFFFFFFu});
+        }
+        if (y_since_ && now_ticks() - y_since_ >= ticks(std::chrono::milliseconds(250))) {
+            // Y held to buy: a dial above the "+", full when it's pressed.
+            if (auto bar = button_rect(platform::KeyBind::Action::PlantFood)) {
+                auto plus = buy_rect();
+                float held = static_cast<float>(now_ticks() - y_since_) / ticks(kBuyHold);
+                int radius = std::max(6, static_cast<int>(bar->h * fy) / 6);
+                out.meters.push_back({static_cast<int>(plus->x * fx), static_cast<int>(bar->y * fy), radius, held, 0x60E040u});
+            }
+        }
         auto packets = packet_rects();
         if (slot_ >= 1 && static_cast<std::size_t>(slot_) <= packets.size()) {
             const Rect& r = packets[slot_ - 1];
@@ -393,7 +459,9 @@ public:
 
 private:
     static constexpr auto kRepeatDelay = std::chrono::milliseconds(300), kRepeatEvery = std::chrono::milliseconds(110);
-    static constexpr auto kDigHold = std::chrono::seconds(1);
+    static constexpr auto kDigHold = std::chrono::seconds(1), kBuyHold = std::chrono::seconds(2), kMowerHold = std::chrono::seconds(1);
+    static constexpr int kSweepStep = 40;  // between the sweep's points, in the UI's units
+    static constexpr int kPopupWait = 12;  // frames for the plant food "+"'s offer to come up
     static std::int64_t ticks(std::chrono::steady_clock::duration d) { return d.count(); }
 
     bool known(const Known& k) const {
@@ -410,6 +478,10 @@ private:
         GuestAddr app = mem.read<std::uint64_t>(base_ + kApp);
         if (!board || !app || !board_vtable_ || mem.read<std::uint64_t>(board) != board_vtable_) return std::nullopt;
         if (!mem.read<std::uint8_t>(board + kBoardFocus)) return std::nullopt;
+        // Not before the level starts, nor in the states where the lawn takes no touches (the
+        // game's own test, in Board::TouchMoved).
+        std::int32_t state = mem.read<std::int32_t>(board + kBoardState);
+        if (state < 0 || state > 13 || state == 3 || ((1u << state) & 0x2f46u)) return std::nullopt;
         Lawn l;
         l.cols = mem.read<std::int32_t>(board + kGridCols);
         l.rows = mem.read<std::int32_t>(board + kGridCols + 4);
@@ -449,6 +521,26 @@ private:
     void tap_tile(const Lawn& l) {
         float wx = l.ox + l.tw * (col_ + 0.5f), wy = l.oy + l.th * (row_ + 0.5f);
         tap(static_cast<std::int32_t>(l.ui_x(wx)), static_cast<std::int32_t>(l.ui_y(wy)));
+    }
+
+    // One line of the vacuum's sweep a frame, top to bottom over the whole screen: a finger sliding
+    // over the lawn collects what it passes, and the lawn's own TouchMoved is told of one at each
+    // point, the way hover to collect tells it of the mouse.
+    void sweep() {
+        auto lawn = this->lawn();
+        float y = (sweep_ + 0.5f) * kSweepStep;
+        if (!lawn || y >= lawn->lh) {
+            sweep_ = -1;
+            return;
+        }
+        ++sweep_;
+        GuestAddr game = rt_.mem().read<std::uint64_t>(base_ + kGame);
+        GuestAddr board = rt_.mem().read<std::uint64_t>(game + kBoardOfGame);
+        for (float x = kSweepStep / 2.0f; x < lawn->lw; x += kSweepStep) {
+            // In the board's own coordinates.
+            fill_touch(1, static_cast<std::int32_t>(x - lawn->bx), static_cast<std::int32_t>(y - lawn->by));
+            rt_.call(base_ + kBoardTouchMoved.offset, {board, touch_});
+        }
     }
 
     void write_stub(GuestAddr at, std::uint32_t mov_x8, GuestAddr target) {
@@ -507,6 +599,14 @@ private:
         return r;
     }
 
+    // The plant food bar's "+" (buy one): not a widget of its own but drawn by the bar's right
+    // end, which moves out as upgrades lengthen the bar. Its centre, as a 1x1 Rect.
+    std::optional<Rect> buy_rect() {
+        auto bar = button_rect(platform::KeyBind::Action::PlantFood);
+        if (!bar) return std::nullopt;
+        return Rect{bar->x + bar->w + bar->h * 35 / 100, bar->y + bar->h / 2, 1, 1};
+    }
+
     // The seed bank's packets, top to bottom, then left to right.
     std::vector<Rect> packet_rects() {
         std::vector<Rect> packets;
@@ -536,17 +636,21 @@ private:
     void send(int phase) {
         GuestAddr app = rt_.mem().read<std::uint64_t>(base_ + kApp);
         if (!app) return;
+        fill_touch(phase, x_, y_);
+        rt_.call(base_ + (phase == 0 ? kAppTouchBegan : kAppTouchEnded).offset, {app, touch_});
+    }
+
+    void fill_touch(int phase, std::int32_t x, std::int32_t y) {
         auto& mem = rt_.mem();
         std::memset(mem.host(touch_), 0, 0x38);
         mem.write<std::int32_t>(touch_, kPointer);
-        mem.write<std::int32_t>(touch_ + 0x10, x_);
-        mem.write<std::int32_t>(touch_ + 0x14, y_);
-        mem.write<std::int32_t>(touch_ + 0x18, x_);
-        mem.write<std::int32_t>(touch_ + 0x1c, y_);
+        mem.write<std::int32_t>(touch_ + 0x10, x);
+        mem.write<std::int32_t>(touch_ + 0x14, y);
+        mem.write<std::int32_t>(touch_ + 0x18, x);
+        mem.write<std::int32_t>(touch_ + 0x1c, y);
         mem.write<std::int32_t>(touch_ + 0x20, 1);
         mem.write<std::int32_t>(touch_ + 0x24, 8);
         mem.write<std::int32_t>(touch_ + 0x30, phase);
-        rt_.call(base_ + (phase == 0 ? kAppTouchBegan : kAppTouchEnded).offset, {app, touch_});
     }
 
     Runtime& rt_;
@@ -581,7 +685,8 @@ private:
     bool pad_active_ = false;
     platform::PadType pad_type_ = platform::PadType::Xbox;
     int col_ = 0, row_ = 2, slot_ = 1;
-    std::int64_t b_since_ = 0;  // when B went down, while it's held
+    std::int64_t b_since_ = 0, y_since_ = 0, x_since_ = 0;  // when B, Y or X went down, while it's held and still to act
+    int sweep_ = -1;  // the vacuum's next line, while it sweeps
 };
 
 }  // namespace

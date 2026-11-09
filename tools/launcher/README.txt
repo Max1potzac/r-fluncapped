@@ -105,13 +105,17 @@ CONTROLLER
     D-pad / left stick  move the cursor a tile
     LB / RB             pick the seed packet (boxed in gold)
     A                   plant the picked packet on the cursor's tile
-    B (hold 1 second)   dig up the plant there
+    B (hold 1 second)   dig up the plant there (a dial fills as you hold)
     Y                   feed it plant food
+    Y (hold 2 seconds)  buy plant food (the "+" by the plant food bar)
+    X                   tap the tile: a plant's own ability, then its target
+    X (hold 1 second)   in the first column: that row's mower
+    LT / RT             vacuum up all the sun, coins and plant food
     Start               pause (again to resume)
     L3                  fast-forward
   With keybind hints on, the buttons are labelled for the controller
-  plugged in (Xbox's when it isn't recognised). More controls (collecting,
-  powerups, menus) are on the way.
+  plugged in (Xbox's when it isn't recognised). More controls (powerups,
+  menus) are on the way.
 
 CODE PATCHES (patches\*.patch)
   Small fixes as bytes for rfu to put into a library after it loads, after

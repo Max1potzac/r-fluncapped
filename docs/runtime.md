@@ -120,10 +120,18 @@ the grid's origin, size and columns and rows are Board fields in world units (20
 screen's shape (`Board` 0xab23d0: `ui = centre + floor(zoom * (trunc(1.28 * world) - centre +
 board_pos))`, 1.28 being `LawnApp`+0x980). A button queues touches in the UI's units: A taps the
 picked packet (unless the game's `PlantCursor` is up already) and then the tile's middle; B held a
-second taps the shovel, then the tile; Y plant food, then the tile; Start and L3 the pause and
-fast-forward buttons. The cursor, a box around the picked packet and, with `--key-hints`, the
-buttons' labels (A/B/X/Y, cross/circle/square/triangle, or Nintendo's) are drawn with the hints.
-While a dialog is up (paused, the seed chooser) the Board loses focus, and the cursor goes away.
+second taps the shovel, then the tile; Y plant food, then the tile (held two seconds, the plant
+food bar's "+" alone, which buys one: it's drawn by the bar, not a widget, so it's tapped a little
+right of the bar's end); X the tile (a plant's own ability, then its target), or held a second in
+the first column, the mower left of it; Start and L3 the pause and fast-forward buttons. LT/RT
+vacuum: over a few frames, the Board's own `TouchMoved` (vtable +0x268, 0xab24c8) is told of a
+finger at every 40 UI units of the screen, the way hover to collect tells it of the mouse, and
+everything a sliding finger would pick up is collected. The cursor (corner brackets), a box around
+the picked packet, dials that fill while B, Y or X is held and, with `--key-hints`, the buttons'
+labels (A/B/X/Y, cross/circle/square/triangle, or Nintendo's) are drawn with the hints. While a
+dialog is up (paused, the seed chooser) the Board loses focus, and the cursor goes away; it's also
+hidden until the level starts (Board +0xe0, the state: 1 for the pan, 3 for the seed chooser, 5
+in play).
 
 ## Network
 

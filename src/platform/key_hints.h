@@ -23,16 +23,25 @@ struct HintLabel {
     std::uint32_t text_rgb = 0xFFFFFF;
 };
 
-// An outlined rectangle: the controller's cursor.
+// An outlined rectangle: the controller's cursor. With corners, only its four corners are drawn.
 struct HintBox {
     int x = 0, y = 0, w = 0, h = 0;  // pixels of the game's surface, from the top left
+    std::uint32_t rgb = 0xFFFFFF;
+    bool corners = false;
+};
+
+// A dial that fills clockwise from the top: how long a held button has still to go (the shovel's).
+struct HintMeter {
+    int x = 0, y = 0, radius = 0;  // its centre, pixels of the game's surface
+    float progress = 0;            // 0 to 1
     std::uint32_t rgb = 0xFFFFFF;
 };
 
 struct HintOverlay {
     std::vector<HintLabel> labels;
     std::vector<HintBox> boxes;
-    bool empty() const { return labels.empty() && boxes.empty(); }
+    std::vector<HintMeter> meters;
+    bool empty() const { return labels.empty() && boxes.empty() && meters.empty(); }
 };
 
 struct HintFill {
@@ -50,5 +59,8 @@ std::vector<HintFill> layout_hint(const HintLabel& label, int surface_width, int
 
 // The rectangles of a box's outline (with a dark edge outside), sized for the surface's height.
 std::vector<HintFill> layout_box(const HintBox& box, int surface_height);
+
+// The rows of a meter: a dark disc, and the filled part over it.
+std::vector<HintFill> layout_meter(const HintMeter& meter);
 
 }  // namespace rfu::platform

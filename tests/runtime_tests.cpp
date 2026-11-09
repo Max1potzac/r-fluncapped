@@ -13,6 +13,7 @@
 #include "runtime.h"
 #include "shims/abi.h"
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -156,6 +157,18 @@ void test_key_hints() {
     fills = rfu::platform::layout_hint({"D", 300, 300, HintLabel::Anchor::BottomRight}, 1920, 1080);
     EXPECT(fills[0].x == 300 - 33 && fills[0].y == 300 - 39);
     EXPECT(rfu::platform::layout_hint({"", 0, 0, HintLabel::Anchor::TopLeft}, 1280, 720).empty());
+    // A box's corners: eight arms, a dark edge's then the colour's.
+    fills = rfu::platform::layout_box({100, 100, 80, 60, 0xFFFFFF, true}, 720);
+    EXPECT(fills.size() == 16 && fills[8].x == 100 && fills[8].y == 100 && fills[8].w == 15 && fills[8].h == 3);
+    // A meter: a dark row for each line of its disc, and none of the colour while empty...
+    auto count = [](const std::vector<HintFill>& f, std::uint32_t rgb) { return std::count_if(f.begin(), f.end(), [&](const HintFill& x) { return x.rgb == rgb; }); };
+    fills = rfu::platform::layout_meter({50, 50, 10, 0, 0xFF0000});
+    EXPECT(count(fills, rfu::platform::kHintBack) == 22 && count(fills, 0xFF0000) == 0);
+    // ... the right half at half way, and all of it when full.
+    fills = rfu::platform::layout_meter({50, 50, 10, 0.5f, 0xFF0000});
+    EXPECT(std::all_of(fills.begin(), fills.end(), [](const HintFill& f) { return f.rgb != 0xFF0000 || f.x >= 50; }));
+    fills = rfu::platform::layout_meter({50, 50, 10, 1, 0xFF0000});
+    EXPECT(count(fills, 0xFF0000) == 20);
 }
 
 void test_patches() {

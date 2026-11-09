@@ -20,6 +20,7 @@ struct VTable {
     std::vector<GuestAddr> functions;   // slot by slot, up to the first non-code entry
 };
 
+// class_name: "SeedPacket", or with its namespaces, "Sexy::Slider".
 std::optional<VTable> find_vtable(const GuestMemory& mem, const Module& module, const std::string& class_name);
 
 }  // namespace rfu

@@ -408,6 +408,15 @@ void App::load_script(const fs::path& file, std::uint64_t now) {
             auto type = type_name == "ps" ? platform::PadType::PlayStation : type_name == "switch" ? platform::PadType::Switch : platform::PadType::Xbox;
             script.emplace(frame, Scripted{platform::Input{platform::PadInput{b->second, true, type}}, {}});
             script.emplace(frame + std::max(frames, 1), Scripted{platform::Input{platform::PadInput{b->second, false, type}}, {}});
+        } else if (verb == "stick") {
+            // A controller stick pushed for some frames, then let go: "stick <l|r> <x> <y> <frames>".
+            std::string side;
+            float x = 0, y = 0;
+            int frames = 30;
+            ls >> side >> x >> y >> frames;
+            auto b = side == "l" ? platform::PadButton::LStick : platform::PadButton::RStick;
+            script.emplace(frame, Scripted{platform::Input{platform::PadInput{b, true, platform::PadType::Xbox, x, y}}, {}});
+            script.emplace(frame + std::max(frames, 1), Scripted{platform::Input{platform::PadInput{b, true, platform::PadType::Xbox, 0, 0}}, {}});
         } else if (verb == "screenshot" || verb == "quit" || verb == "peek") {
             std::string rest;
             std::getline(ls >> std::ws, rest);
@@ -633,7 +642,7 @@ void App::handle(const platform::Input& input) {
             } else if constexpr (std::is_same_v<T, platform::GameKeyInput>) {
                 if (options.game_keys && app_has_focus && !splash_showing) options.game_keys(in);
             } else if constexpr (std::is_same_v<T, platform::PadInput>) {
-                if (options.game_pad && app_has_focus && !splash_showing) options.game_pad(in);
+                if (options.game_pad && app_has_focus && !splash_showing && options.game_pad(in)) events.back();
             } else if constexpr (std::is_same_v<T, platform::KeyInput>) {
                 // Keys only reach the game through the soft keyboard's InputConnection
                 // (EditInputConnection.sendKeyEvent), which passes on Enter, Delete and the

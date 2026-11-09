@@ -53,7 +53,7 @@ void usage() {
                  "  --overlay <guest>=<host> lay a host directory over a guest one, read-only (mods); later ones win\n"
                  "  --keybinds <file>        keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling or spots of the screen (see src/platform/keybinds.h)\n"
                  "  --key-hints              show each keybind's key (or controller button) on the seed packet or button it presses\n"
-                 "  --controller             play the lawn with a game controller, PvZ1 console style (see src/game/game_keys.h)\n"
+                 "  --controller             play with a game controller: PvZ1 console style on the lawn, a cursor elsewhere (see src/game/game_keys.h)\n"
                  "  --pad-binds <binds>      the controller's buttons for its actions: plant=a,dig=b,use=x,plantfood=y,prevseed=lb,\n"
                  "                           nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start\n"
                  "  --pad-mappings <file>    SDL controller mappings (gamecontrollerdb.txt lines) for controllers SDL doesn't know\n"

@@ -72,13 +72,15 @@ struct GameKeyInput {
 };
 // A game controller's button going down or up. The sticks and triggers come as buttons too: the
 // left stick as the d-pad, the right one as RUp..RRight, a trigger past halfway as LT or RT.
-// Buttons are by position (A is the bottom face button, whatever it's labelled).
-enum class PadButton { A, B, X, Y, LB, RB, LT, RT, L3, R3, Start, Back, Up, Down, Left, Right, RUp, RDown, RLeft, RRight };
+// Buttons are by position (A is the bottom face button, whatever it's labelled). A stick that
+// moves also comes as LStick or RStick, with where it is now (x, y).
+enum class PadButton { A, B, X, Y, LB, RB, LT, RT, L3, R3, Start, Back, Up, Down, Left, Right, RUp, RDown, RLeft, RRight, LStick, RStick };
 enum class PadType { Xbox, PlayStation, Switch };  // which labels its buttons have; Xbox when unknown
 struct PadInput {
     PadButton button;
     bool down;
     PadType type;
+    float x = 0, y = 0;  // LStick, RStick: -1 to 1 each way, right and down positive
 };
 using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput, GameKeyInput, PadInput>;
 

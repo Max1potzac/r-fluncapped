@@ -116,6 +116,15 @@ CONTROLLER
     LT / RT             vacuum up all the sun, coins and plant food
     Start               pause (again to resume)
     L3                  fast-forward
+  On the pause menu a box picks the sliders and buttons instead:
+    D-pad / left stick  move the box; left and right move a slider
+    A                   press the button
+    B / Start           resume
+  Everywhere else (the world map, the menus...) but the seed selection:
+    Right stick         move a cursor (faster the further it's pushed)
+    A                   touch where the cursor is (hold to drag)
+    D-pad / left stick  scroll
+    B                   back
   With keybind hints on, the buttons are labelled for the controller
   plugged in (Xbox's when it isn't recognised).
   "Controller settings" shows the controllers plugged in, lights up their

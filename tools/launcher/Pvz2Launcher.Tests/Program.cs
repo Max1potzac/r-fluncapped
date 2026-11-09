@@ -24,6 +24,7 @@ var tests = new (string Name, Action Run)[]
     ("level pack", LevelPackTest),
     ("update check", UpdateCheckTest),
     ("rfu command", RfuCommandTest),
+    ("controller setup", PadSetupTest),
 };
 foreach (var (name, run) in tests)
 {
@@ -285,4 +286,33 @@ void RfuCommandTest()
     var noPad = RfuCommand.Build(g, []);
     Expect(!noPad.Contains("--controller") && !noPad.Contains("--key-hints"), "the controller can be switched off, and hints with it and keybinds");
     Expect(RfuCommand.IsSize("1920x1080") && !RfuCommand.IsSize("big") && !RfuCommand.IsSize("10x10"), "sizes");
+    g.Settings.Controller = true;
+    Expect(!RfuCommand.Build(g, []).Contains("--pad-binds"), "no binds while every action is on its button");
+    g.Settings.PadBinds["dig"] = "x";
+    g.Settings.PadBinds["use"] = "b";
+    var padArgs = RfuCommand.Build(g, []);
+    int bi = padArgs.IndexOf("--pad-binds");
+    Expect(bi >= 0 && padArgs[bi + 1].Contains("dig=x") && padArgs[bi + 1].Contains("use=b") && padArgs[bi + 1].Contains("plant=a"), $"binds: {string.Join(" ", padArgs)}");
+    Expect(!padArgs.Contains("--pad-mappings"), "no mappings file, no mappings");
+    File.WriteAllText(g.ControllerMappingsPath, "x\n");
+    Expect(RfuCommand.Build(g, []).Contains("--pad-mappings"), "the mappings file is passed on");
+    File.Delete(g.ControllerMappingsPath);
+}
+
+void PadSetupTest()
+{
+    var binds = new Dictionary<string, string> { ["plant"] = "b" };
+    Expect(PadSetup.Clashes(binds).Count == 2, "plant and dig both on B clash");
+    binds["dig"] = "a";
+    Expect(PadSetup.Clashes(binds).Count == 0, "swapped, no clash");
+    Expect(PadSetup.BindsArg(new Dictionary<string, string> { ["plant"] = "nonsense" }) == null, "an unknown button is the default");
+    string m = PadSetup.Mapping("030000004c050000c405000000000000", "Wireless, Controller",
+        [new("a", PadSetup.Button(1)), new("dpup", PadSetup.Hat(0, 1)), new("leftx", PadSetup.Axis(0, false)), new("lefty", PadSetup.Axis(1, true)), new("x", "")]);
+    Expect(m == "030000004c050000c405000000000000,Wireless Controller,a:b1,dpup:h0.1,leftx:a0,lefty:a1~,platform:Windows,", m);
+    string path = Path.Combine(root, "controllers.txt");
+    Directory.CreateDirectory(root);
+    File.WriteAllLines(path, ["0300aa,Old,a:b0,platform:Windows,", "0300bb,Other,a:b0,platform:Windows,"]);
+    PadSetup.SaveMapping(path, "0300AA,New,a:b2,platform:Windows,");
+    var lines = File.ReadAllLines(path);
+    Expect(lines.Length == 2 && lines.Contains("0300bb,Other,a:b0,platform:Windows,") && lines.Contains("0300AA,New,a:b2,platform:Windows,"), "a mapping replaces its GUID's line");
 }

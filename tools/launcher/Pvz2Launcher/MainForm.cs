@@ -99,7 +99,8 @@ sealed class MainForm : Form, ILaunchUi
             Row(_fullscreen, _vsync, _angle));
 
         var injections = Group("Code injections and fixes", _injections,
-            Row(MakeButton("Edit keybinds", EditKeybinds), MakeButton("Patches folder", () => { if (_game != null) OpenFolder(_game.PatchesDir); })),
+            Row(MakeButton("Edit keybinds", EditKeybinds), MakeButton("Controller settings...", ControllerSettings),
+                MakeButton("Patches folder", () => { if (_game != null) OpenFolder(_game.PatchesDir); })),
             _offline);
 
         var content = Group("Custom content (the lowest one wins where two change the same file)", _mods,
@@ -396,6 +397,14 @@ sealed class MainForm : Form, ILaunchUi
         if (_game == null) return;
         _game.EnsureKeybindsFile();
         Open(_game.KeybindsPath);
+    }
+
+    void ControllerSettings()
+    {
+        if (_game == null) return;
+        string? rfu = Tools.Find(_launcherDir, "rfu");
+        using var form = new ControllerForm(_game, rfu == null ? null : Path.GetDirectoryName(rfu));
+        form.ShowDialog(this);
     }
 
     async Task UnpackResourcesAsync()

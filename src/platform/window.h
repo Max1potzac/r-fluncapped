@@ -31,6 +31,7 @@ struct WindowOptions {
     bool hover = false;  // send the mouse's moves with no button down too (kHoverPointer)
     std::filesystem::path icon;  // a PNG for the window's (and taskbar's) icon
     bool controller = false;  // read game controllers (PadInput)
+    std::filesystem::path pad_mappings;  // SDL controller mappings (gamecontrollerdb.txt lines) for pads SDL doesn't know
 };
 
 // Input, in the shape the game's Java side reports it.

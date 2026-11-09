@@ -30,7 +30,12 @@ public static class RfuCommand
         if (s.FixAnimations) args.Add("--fix-animations");
         bool keybinds = s.Keybinds && File.Exists(game.KeybindsPath);
         if (keybinds) args.AddRange(["--keybinds", game.KeybindsPath]);
-        if (s.Controller) args.Add("--controller");
+        if (s.Controller)
+        {
+            args.Add("--controller");
+            if (PadSetup.BindsArg(s.PadBinds) is { } binds) args.AddRange(["--pad-binds", binds]);
+            if (File.Exists(game.ControllerMappingsPath)) args.AddRange(["--pad-mappings", game.ControllerMappingsPath]);
+        }
         if (s.KeyHints && (keybinds || s.Controller)) args.Add("--key-hints");
         foreach (var patch in s.Patches)
         {

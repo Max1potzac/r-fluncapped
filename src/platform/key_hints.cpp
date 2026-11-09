@@ -85,7 +85,7 @@ std::vector<HintFill> layout_hint(const HintLabel& label, int surface_width, int
     int s = std::max(1, (surface_height + 180) / 360);
     int n = static_cast<int>(label.text.size());
     int w = 6 * s + n * 5 * s + (n - 1) * s, h = 7 * s + 6 * s;
-    int x = label.anchor == HintLabel::Anchor::TopLeft ? label.x : label.x - w;
+    int x = label.anchor == HintLabel::Anchor::BottomRight ? label.x - w : label.x;
     int y = label.anchor == HintLabel::Anchor::TopLeft ? label.y : label.y - h;
     // A button at the surface's edge still gets its whole badge.
     x = std::clamp(x, 0, std::max(surface_width - w, 0));

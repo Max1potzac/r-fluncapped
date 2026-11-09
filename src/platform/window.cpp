@@ -187,8 +187,18 @@ Window::Window(const WindowOptions& options) {
     if (!binds_.empty()) log::info("{} keybinds", binds_.size());
     hover_ = options.hover;
     if (options.controller) {
+        // Keep reading the controller while another window has the focus, so its buttons'
+        // state is still right when the focus comes back (alt-tab).
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
         if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) log::warn("game controllers: {}", SDL_GetError());
         else log::info("game controllers: on");  // each one comes as SDL_CONTROLLERDEVICEADDED
+        // Mappings for the ones SDL doesn't know (made in the launcher): a joystick a mapping
+        // is added for comes as a controller then.
+        if (!options.pad_mappings.empty()) {
+            int n = SDL_GameControllerAddMappingsFromFile(path_to_utf8(options.pad_mappings).c_str());
+            if (n < 0) log::warn("controller mappings {}: {}", path_to_utf8(options.pad_mappings), SDL_GetError());
+            else log::info("controller mappings: {} from {}", n, path_to_utf8(options.pad_mappings));
+        }
     }
 
     game_w_ = options.game_width;
@@ -433,6 +443,16 @@ std::vector<Input> Window::poll() {
     while (SDL_PollEvent(&ev)) {
         switch (ev.type) {
         case SDL_QUIT: out.push_back(QuitInput{}); break;
+        case SDL_JOYDEVICEADDED:
+            // A joystick SDL has no controller mapping for never comes as a controller: say so,
+            // with what a mapping for it needs (the launcher's controller settings make one).
+            if (!SDL_IsGameController(ev.jdevice.which)) {
+                char guid[64];
+                SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(ev.jdevice.which), guid, sizeof guid);
+                const char* name = SDL_JoystickNameForIndex(ev.jdevice.which);
+                log::warn("controller \"{}\" ({}): SDL doesn't know its buttons; set it up in the launcher's controller settings", name ? name : "?", guid);
+            }
+            break;
         case SDL_CONTROLLERDEVICEADDED:
             if (SDL_GameController* pad = SDL_GameControllerOpen(ev.cdevice.which)) {
                 SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad));

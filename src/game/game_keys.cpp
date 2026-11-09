@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -16,6 +17,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace rfu {
@@ -50,13 +53,15 @@ constexpr std::uint64_t kLogicalSize = 0xf4, kSurfaceSize = 0x744;
 // and the zoom about a centre it's drawn with. It loses focus while a dialog is up (paused, the seed
 // chooser...). LawnApp: world units to the UI's before the zoom.
 constexpr std::uint64_t kGame = 0x2593760, kBoardOfGame = 0x9a8;
-constexpr std::uint64_t kBoardPos = 0x44, kBoardFocus = 0x72, kGridCols = 0xd8, kGridOrigin = 0x440, kGridSize = 0x448, kBoardZoom = 0x460, kBoardCentre = 0x464;
+constexpr std::uint64_t kBoardPos = 0x44, kGridCols = 0xd8, kGridOrigin = 0x440, kGridSize = 0x448, kBoardZoom = 0x460, kBoardCentre = 0x464;
 constexpr std::uint64_t kAppScale = 0x980;
 // Board's world Rect to UI one, whose maths Lawn::ui copies, and the world x to column it checks against.
 constexpr Known kWorldToUi{0xab23d0, {0xFC1D0FE8, 0xF90007F5, 0xA9014FF4}};
 constexpr Known kWorldToColumn{0x9b17d0, {0xD0008F08, 0xBD47D101, 0xD0008F08}};
 constexpr Known kBoardTouchMoved{0xab24c8, {0xD101C3FF, 0xF90023F5, 0xA9054FF4}};  // Board::TouchMoved(touch): the lawn hands it to the collectables
 constexpr std::uint64_t kTouchMovedSlot = 0x268;  // its place in Board's vtable
+constexpr Known kWidgetAt{0x163e82c, {0xD10243FF, 0xA9036FFC, 0xA90467FA}};  // WidgetManager::GetWidgetAt(x, y, flags, bool* blocked, 0, 0)
+constexpr std::uint64_t kFlagsMode = 0xc4, kFlagsAdd = 0xf0, kFlagsRemove = 0xf4, kFlagsBase = 0x260;  // WidgetManager: the flags a touch is tested with
 constexpr std::uint64_t kBoardState = 0xe0;  // 1 and 3 before the level starts (the pan, the seed chooser), 5 in play
 constexpr int kPointer = 98;  // the touch's id, clear of the mouse (1), hover (99) and tap keybinds (100 and up)
 constexpr auto kStale = std::chrono::seconds(1);  // an instance not updated for this long is gone
@@ -167,8 +172,13 @@ struct HintBind {
 
 class GameKeys : public std::enable_shared_from_this<GameKeys> {
 public:
-    GameKeys(Runtime& rt, const Module& pvz2, const std::vector<platform::KeyBind>& hint_binds, bool pad_hints)
+    GameKeys(Runtime& rt, const Module& pvz2, const std::vector<platform::KeyBind>& hint_binds, bool pad_hints, const std::vector<PadBind>& pad_binds)
         : rt_(rt), base_(pvz2.base()), pad_hints_(pad_hints) {
+        // Each button does its own action, but an action that's rebound leaves its own button
+        // idle unless a bind gives it something else.
+        for (std::size_t i = 0; i < kPadButtons; ++i) action_of_[i] = static_cast<platform::PadButton>(i);
+        for (const auto& b : pad_binds) action_of_[static_cast<std::size_t>(b.action)].reset();
+        for (const auto& b : pad_binds) action_of_[static_cast<std::size_t>(b.button)] = b.action;
         for (const auto& b : hint_binds) {
             if (!platform::is_game_action(b.action)) continue;
             // A second key for the same thing isn't shown.
@@ -201,6 +211,7 @@ public:
         ref_ = scratch_ + 0x50;
         rect_stub_ = scratch_ + 0x80;
         ref_stub_ = scratch_ + 0xa0;
+        blocked_ = scratch_ + 0xf0;
         write_stub(rect_stub_, 0xAA0103E8, base_ + kScreenRect.offset);  // mov x8, x1
         write_stub(ref_stub_, 0xAA0203E8, base_ + kHandleRef.offset);    // mov x8, x2
 
@@ -212,7 +223,7 @@ public:
 
     // The controller's part: the lawn's grid, and the plant cursor that's up while a packet is picked.
     bool install_pad(const Module& pvz2) {
-        if (!known(kWorldToUi) || !known(kWorldToColumn) || !known(kBoardTouchMoved)) return false;
+        if (!known(kWorldToUi) || !known(kWorldToColumn) || !known(kBoardTouchMoved) || !known(kWidgetAt)) return false;
         auto board = find_vtable(rt_.mem(), pvz2, "Board");
         auto cursor = find_vtable(rt_.mem(), pvz2, "PlantCursor");
         if (!board || !cursor || cursor->functions.empty()) return false;
@@ -220,6 +231,15 @@ public:
         board_vtable_ = board->address;
         cursor_vtable_ = cursor->address;
         watch(cursor->functions[0], cursor_vtable_, plant_cursor_, "controller: plant cursor");  // its per-frame call
+        // The cursors of the plants that aim (Banana Launcher, Missile Toe, the launchers, Escape
+        // Root): up from a tap on the plant until its target is tapped.
+        for (const char* name : {"BananaTargetCursor", "MissileToeTargetCursor", "PlantLauncherTargetCursor", "EscapeRootCursor"}) {
+            auto aim = find_vtable(rt_.mem(), pvz2, name);
+            if (!aim || aim->functions.empty()) continue;
+            aim_cursors_.emplace_back(std::piecewise_construct, std::forward_as_tuple(aim->address), std::forward_as_tuple());
+        }
+        for (auto& a : aim_cursors_)
+            watch(rt_.mem().read<std::uint64_t>(a.first), a.first, a.second, "controller: aiming cursor");
         return true;
     }
 
@@ -229,8 +249,12 @@ public:
     // food bar), X taps the tile (a plant's own ability, or the target
     // once one asks for it; held a second in the first column, the mower), LT/RT sweep the lawn
     // for sun and coins, Start pauses, L3 fast-forwards.
-    void pad(const platform::PadInput& p) {
+    void pad(const platform::PadInput& pressed) {
         using platform::PadButton;
+        auto action = action_of_[static_cast<std::size_t>(pressed.button)];
+        if (!action) return;
+        platform::PadInput p = pressed;
+        p.button = *action;
         pad_type_ = p.type;
         pad_active_ = true;
         auto dir = std::find_if(dirs_.begin(), dirs_.end(), [&](const Dir& d) { return d.button == p.button; });
@@ -258,10 +282,21 @@ public:
             return;
         }
         if (p.button == PadButton::X) {
+            // Aiming: the target, the cursor's tile.
+            if (p.down && lawn && aiming()) {
+                tap_tile(*lawn);
+                aim_from_.reset();
+                return;
+            }
+            if (p.down && lawn) aim_from_ = std::pair{col_, row_};
             // In the first column it waits to see if it's held for the mower.
             if (p.down && lawn && col_ == 0) x_since_ = now_ticks();
             else if (p.down && lawn) tap_tile(*lawn);
-            else if (x_since_ && lawn) tap_tile(*lawn);
+            else if (mower_down_) {
+                // Let go of the mower: the game launched it if it was held long enough.
+                steps_.push_back({1, 3, mower_x_, mower_y_});
+                mower_down_ = false;
+            } else if (x_since_ && lawn) tap_tile(*lawn);
             if (!p.down) x_since_ = 0;
             return;
         }
@@ -276,6 +311,12 @@ public:
         }
         case PadButton::A:
             if (!lawn) break;
+            if (aiming()) {
+                // Aiming is called off: the plant tapped again.
+                if (aim_from_) tap(tile_x(*lawn, aim_from_->first), tile_y(*lawn, aim_from_->second));
+                aim_from_.reset();
+                break;
+            }
             // The picked packet first, unless the game's plant cursor says one is picked already.
             if (slot_ > 0 && !live(plant_cursor_, cursor_vtable_, std::chrono::milliseconds(200))) {
                 if (auto r = packet_rect(slot_)) tap(r->x + r->w / 2, r->y + r->h / 2);
@@ -327,9 +368,13 @@ public:
         if (x_since_ && now - x_since_ >= ticks(kMowerHold)) {
             x_since_ = 0;
             if (auto lawn = this->lawn()) {
-                // The row's mower, left of the first column.
+                // A finger on the row's mower, left of the first column, held while X is: the
+                // game's own dial fills, and the mower goes once it's full.
                 float wx = lawn->ox - lawn->tw * 0.6f, wy = lawn->oy + lawn->th * (row_ + 0.5f);
-                tap(static_cast<std::int32_t>(lawn->ui_x(wx)), static_cast<std::int32_t>(lawn->ui_y(wy)));
+                mower_x_ = static_cast<std::int32_t>(lawn->ui_x(wx));
+                mower_y_ = static_cast<std::int32_t>(lawn->ui_y(wy));
+                steps_.push_back({1, 0, mower_x_, mower_y_});
+                mower_down_ = true;
             }
         }
         if (sweep_ >= 0) sweep();
@@ -381,18 +426,13 @@ public:
         float x0 = lawn->ox + lawn->tw * col_, y0 = lawn->oy + lawn->th * row_;
         int left = static_cast<int>(lawn->ui_x(x0) * fx), top = static_cast<int>(lawn->ui_y(y0) * fy);
         int right = static_cast<int>(lawn->ui_x(x0 + lawn->tw) * fx), bottom = static_cast<int>(lawn->ui_y(y0 + lawn->th) * fy);
-        out.boxes.push_back({left, top, right - left, bottom - top, b_since_ ? 0xFF4040u : 0xFFFFFFu, true});
+        // Red while B is held to dig, orange while a plant aims.
+        out.boxes.push_back({left, top, right - left, bottom - top, b_since_ ? 0xFF4040u : aiming() ? 0xFFA030u : 0xFFFFFFu, true});
         if (b_since_) {
             // The shovel's dial by the tile's top right corner, full when the plant comes up.
             float held = static_cast<float>(now_ticks() - b_since_) / ticks(kDigHold);
             int radius = std::max(6, (bottom - top) / 6);
             out.meters.push_back({right, top, radius, held, 0xFF4040u});
-        }
-        if (x_since_ && now_ticks() - x_since_ >= ticks(std::chrono::milliseconds(250))) {
-            // X held in the first column: the mower's dial, at the tile's left.
-            float held = static_cast<float>(now_ticks() - x_since_) / ticks(kMowerHold);
-            int radius = std::max(6, (bottom - top) / 6);
-            out.meters.push_back({left, top, radius, held, 0xFFFFFFu});
         }
         if (y_since_ && now_ticks() - y_since_ >= ticks(std::chrono::milliseconds(250))) {
             // Y held to buy: a dial above the "+", full when it's pressed.
@@ -410,8 +450,12 @@ public:
         }
         if (!pad_hints_) return out;
         using platform::PadButton;
-        auto label = [&](PadButton b, int x, int y, platform::HintLabel::Anchor anchor) {
-            PadLabel l = pad_label(b, pad_type_);
+        auto label = [&](PadButton action, int x, int y, platform::HintLabel::Anchor anchor) {
+            // The button that does the action now.
+            std::size_t i = 0;
+            while (i < kPadButtons && action_of_[i] != action) ++i;
+            if (i == kPadButtons) return;
+            PadLabel l = pad_label(static_cast<PadButton>(i), pad_type_);
             out.labels.push_back({l.text, x, y, anchor, l.rgb});
         };
         int n = static_cast<int>(packets.size());
@@ -419,7 +463,8 @@ public:
             const Rect& prev = packets[(slot_ + n - 2) % n];
             const Rect& next = packets[slot_ % n];
             label(PadButton::LB, static_cast<int>(prev.x * fx), static_cast<int>(prev.y * fy), platform::HintLabel::Anchor::TopLeft);
-            label(PadButton::RB, static_cast<int>(next.x * fx), static_cast<int>(next.y * fy), platform::HintLabel::Anchor::TopLeft);
+            // RB at the next packet's bottom, so it doesn't read as the same corner as LB's.
+            label(PadButton::RB, static_cast<int>(next.x * fx), static_cast<int>((next.y + next.h) * fy), platform::HintLabel::Anchor::BottomLeft);
         }
         const std::pair<platform::KeyBind::Action, PadButton> kOnButtons[] = {
             {platform::KeyBind::Action::Shovel, PadButton::B}, {platform::KeyBind::Action::PlantFood, PadButton::Y},
@@ -459,7 +504,8 @@ public:
 
 private:
     static constexpr auto kRepeatDelay = std::chrono::milliseconds(300), kRepeatEvery = std::chrono::milliseconds(110);
-    static constexpr auto kDigHold = std::chrono::seconds(1), kBuyHold = std::chrono::seconds(2), kMowerHold = std::chrono::seconds(1);
+    static constexpr auto kDigHold = std::chrono::seconds(1), kBuyHold = std::chrono::seconds(2);
+    static constexpr auto kMowerHold = std::chrono::milliseconds(250);  // X held this long in the first column is for the mower
     static constexpr int kSweepStep = 40;  // between the sweep's points, in the UI's units
     static constexpr int kPopupWait = 12;  // frames for the plant food "+"'s offer to come up
     static std::int64_t ticks(std::chrono::steady_clock::duration d) { return d.count(); }
@@ -477,7 +523,6 @@ private:
         GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
         GuestAddr app = mem.read<std::uint64_t>(base_ + kApp);
         if (!board || !app || !board_vtable_ || mem.read<std::uint64_t>(board) != board_vtable_) return std::nullopt;
-        if (!mem.read<std::uint8_t>(board + kBoardFocus)) return std::nullopt;
         // Not before the level starts, nor in the states where the lawn takes no touches (the
         // game's own test, in Board::TouchMoved).
         std::int32_t state = mem.read<std::int32_t>(board + kBoardState);
@@ -503,6 +548,19 @@ private:
         if (!(l.tw > 0 && l.th > 0 && l.zoom > 0.1f && l.zoom < 10 && l.scale > 0.1f && l.lw > 0 && l.lh > 0 && l.sw > 0 && l.sh > 0)) return std::nullopt;
         col_ = std::clamp(col_, 0, l.cols - 1);
         row_ = std::clamp(row_, 0, l.rows - 1);
+        // Nothing in front of the lawn (the pause menu, a dialog): the widget a touch in the
+        // grid's middle would go to is the Board. (Board+0x72, the Board having the focus, isn't
+        // enough: it can stay off after the window loses the focus, and come back only with a
+        // new level.)
+        GuestAddr wm = mem.read<std::uint64_t>(app + kWidgetManager);
+        if (!wm) return std::nullopt;
+        std::uint32_t flags = mem.read<std::uint32_t>(wm + kFlagsBase);
+        if (!mem.read<std::uint8_t>(wm + kFlagsMode)) flags = (mem.read<std::uint32_t>(wm + kFlagsAdd) | flags) & ~mem.read<std::uint32_t>(wm + kFlagsRemove);
+        float mx = l.ox + l.tw * l.cols / 2, my = l.oy + l.th * l.rows / 2;
+        mem.write<std::uint8_t>(blocked_, 0);
+        GuestAddr at = rt_.call(base_ + kWidgetAt.offset, {wm, static_cast<std::uint32_t>(static_cast<std::int32_t>(l.ui_x(mx))),
+                                                            static_cast<std::uint32_t>(static_cast<std::int32_t>(l.ui_y(my))), flags, blocked_, 0, 0});
+        if (at != board) return std::nullopt;
         return l;
     }
 
@@ -511,6 +569,25 @@ private:
         if (!lawn) return;
         col_ = std::clamp(col_ + dx, 0, lawn->cols - 1);
         row_ = std::clamp(row_ + dy, 0, lawn->rows - 1);
+        // While a plant aims, its reticle follows the cursor the way it follows a finger.
+        if (aiming()) slide_to(*lawn, tile_x(*lawn, col_), tile_y(*lawn, row_));
+    }
+
+    // A plant's aiming cursor is up.
+    bool aiming() const {
+        return std::any_of(aim_cursors_.begin(), aim_cursors_.end(), [&](const auto& a) { return live(a.second, a.first, std::chrono::milliseconds(200)) != 0; });
+    }
+
+    // The tile's middle, in the UI's units.
+    std::int32_t tile_x(const Lawn& l, int col) const { return static_cast<std::int32_t>(l.ui_x(l.ox + l.tw * (col + 0.5f))); }
+    std::int32_t tile_y(const Lawn& l, int row) const { return static_cast<std::int32_t>(l.ui_y(l.oy + l.th * (row + 0.5f))); }
+
+    // A finger sliding over the lawn to (x, y), in the UI's units: the Board's own TouchMoved.
+    void slide_to(const Lawn& l, std::int32_t x, std::int32_t y) {
+        GuestAddr game = rt_.mem().read<std::uint64_t>(base_ + kGame);
+        GuestAddr board = rt_.mem().read<std::uint64_t>(game + kBoardOfGame);
+        fill_touch(1, static_cast<std::int32_t>(x - l.bx), static_cast<std::int32_t>(y - l.by));
+        rt_.call(base_ + kBoardTouchMoved.offset, {board, touch_});
     }
 
     // A finger down and up at (x, y) in the UI's units, after the touches already queued.
@@ -518,10 +595,7 @@ private:
         steps_.push_back({1, 0, x, y});
         steps_.push_back({2, 3, x, y});
     }
-    void tap_tile(const Lawn& l) {
-        float wx = l.ox + l.tw * (col_ + 0.5f), wy = l.oy + l.th * (row_ + 0.5f);
-        tap(static_cast<std::int32_t>(l.ui_x(wx)), static_cast<std::int32_t>(l.ui_y(wy)));
-    }
+    void tap_tile(const Lawn& l) { tap(tile_x(l, col_), tile_y(l, row_)); }
 
     // One line of the vacuum's sweep a frame, top to bottom over the whole screen: a finger sliding
     // over the lawn collects what it passes, and the lawn's own TouchMoved is told of one at each
@@ -534,13 +608,7 @@ private:
             return;
         }
         ++sweep_;
-        GuestAddr game = rt_.mem().read<std::uint64_t>(base_ + kGame);
-        GuestAddr board = rt_.mem().read<std::uint64_t>(game + kBoardOfGame);
-        for (float x = kSweepStep / 2.0f; x < lawn->lw; x += kSweepStep) {
-            // In the board's own coordinates.
-            fill_touch(1, static_cast<std::int32_t>(x - lawn->bx), static_cast<std::int32_t>(y - lawn->by));
-            rt_.call(base_ + kBoardTouchMoved.offset, {board, touch_});
-        }
+        for (float x = kSweepStep / 2.0f; x < lawn->lw; x += kSweepStep) slide_to(*lawn, static_cast<std::int32_t>(x), static_cast<std::int32_t>(y));
     }
 
     void write_stub(GuestAddr at, std::uint32_t mov_x8, GuestAddr target) {
@@ -657,7 +725,7 @@ private:
     GuestAddr base_;
     GuestAddr bank_vtable_ = 0, packet_vtable_ = 0;
     std::array<GuestAddr, kButtonCount> button_vtables_{};
-    GuestAddr scratch_ = 0, touch_ = 0, rect_ = 0, ref_ = 0, rect_stub_ = 0, ref_stub_ = 0;
+    GuestAddr scratch_ = 0, touch_ = 0, rect_ = 0, ref_ = 0, rect_stub_ = 0, ref_stub_ = 0, blocked_ = 0;
     Seen bank_;
     std::array<Seen, kButtonCount> buttons_;
     std::vector<HintBind> hints_;
@@ -677,8 +745,12 @@ private:
         std::int32_t x, y;
     };
     bool pad_hints_;
+    static constexpr std::size_t kPadButtons = static_cast<std::size_t>(platform::PadButton::RRight) + 1;
+    std::array<std::optional<platform::PadButton>, kPadButtons> action_of_;  // what each button does
     GuestAddr board_vtable_ = 0, cursor_vtable_ = 0;
     Seen plant_cursor_;
+    std::deque<std::pair<GuestAddr, Seen>> aim_cursors_;  // the aiming cursors' vtables, and the last of each seen
+    std::optional<std::pair<int, int>> aim_from_;          // the tile X last tapped: the plant that's aiming
     std::array<Dir, 4> dirs_{{{platform::PadButton::Up, 0, -1}, {platform::PadButton::Down, 0, 1},
                               {platform::PadButton::Left, -1, 0}, {platform::PadButton::Right, 1, 0}}};
     std::deque<Step> steps_;
@@ -686,13 +758,50 @@ private:
     platform::PadType pad_type_ = platform::PadType::Xbox;
     int col_ = 0, row_ = 2, slot_ = 1;
     std::int64_t b_since_ = 0, y_since_ = 0, x_since_ = 0;  // when B, Y or X went down, while it's held and still to act
-    int sweep_ = -1;  // the vacuum's next line, while it sweeps
+    int sweep_ = -1;
+    bool mower_down_ = false;  // a finger held on a mower, while X is
+    std::int32_t mower_x_ = 0, mower_y_ = 0;  // the vacuum's next line, while it sweeps
 };
 
 }  // namespace
 
+std::vector<PadBind> parse_pad_binds(const std::string& text, std::string& error) {
+    using platform::PadButton;
+    static const std::pair<const char*, PadButton> kActions[] = {
+        {"plant", PadButton::A},     {"dig", PadButton::B},     {"use", PadButton::X},
+        {"plantfood", PadButton::Y}, {"prevseed", PadButton::LB}, {"nextseed", PadButton::RB},
+        {"vacuum", PadButton::LT},   {"vacuum2", PadButton::RT}, {"fastforward", PadButton::L3},
+        {"pause", PadButton::Start}};
+    static const std::pair<const char*, PadButton> kButtonNames[] = {
+        {"a", PadButton::A},   {"b", PadButton::B},       {"x", PadButton::X},       {"y", PadButton::Y},         {"lb", PadButton::LB},
+        {"rb", PadButton::RB}, {"lt", PadButton::LT},     {"rt", PadButton::RT},     {"l3", PadButton::L3},       {"r3", PadButton::R3},
+        {"start", PadButton::Start}, {"back", PadButton::Back}, {"up", PadButton::Up}, {"down", PadButton::Down}, {"left", PadButton::Left},
+        {"right", PadButton::Right}};
+    std::vector<PadBind> binds;
+    std::size_t at = 0;
+    while (at < text.size()) {
+        std::size_t end = text.find(',', at);
+        if (end == std::string::npos) end = text.size();
+        std::string item = text.substr(at, end - at);
+        at = end + 1;
+        for (auto& c : item) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        item.erase(std::remove(item.begin(), item.end(), ' '), item.end());
+        if (item.empty()) continue;
+        std::size_t eq = item.find('=');
+        std::string name = item.substr(0, eq), button = eq == std::string::npos ? "" : item.substr(eq + 1);
+        auto a = std::find_if(std::begin(kActions), std::end(kActions), [&](const auto& k) { return name == k.first; });
+        auto b = std::find_if(std::begin(kButtonNames), std::end(kButtonNames), [&](const auto& k) { return button == k.first; });
+        if (a == std::end(kActions) || b == std::end(kButtonNames)) {
+            error = "pad binds: \"" + item + "\" isn't action=button";
+            return {};
+        }
+        binds.push_back({a->second, b->second});
+    }
+    return binds;
+}
+
 GameKeyHandlers install_game_keys(Runtime& rt, const Module& pvz2, const GameKeyOptions& options) {
-    auto keys = std::make_shared<GameKeys>(rt, pvz2, options.hint_binds, options.pad_hints);
+    auto keys = std::make_shared<GameKeys>(rt, pvz2, options.hint_binds, options.pad_hints, options.pad_binds);
     if (!keys->install(pvz2)) {
         log::warn("game keys (seed, shovel, plant food...): this libPVZ2.so is a build they don't know; left off");
         return {};

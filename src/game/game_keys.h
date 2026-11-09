@@ -21,7 +21,9 @@
 // the grid's tiles that the d-pad moves, and buttons that tap the packet, the shovel or plant food
 // and then the tile. The tiles come from the Board's grid (origin and tile size in world units)
 // and the zoom it draws the lawn with, the same maths as the game's own (Board, 0xab23d0); the
-// cursor is a box drawn with the hints.
+// cursor is a box drawn with the hints. Off the lawn, the pause menu's sliders and buttons are
+// picked with the d-pad, and elsewhere (but the seed chooser) the right stick moves a cursor that A
+// touches with.
 
 #include "platform/window.h"
 
@@ -54,7 +56,7 @@ struct GameKeyOptions {
 
 struct GameKeyHandlers {
     std::function<void(const platform::GameKeyInput&)> key;  // GameKeyInput
-    std::function<void(const platform::PadInput&)> pad;      // PadInput
+    std::function<bool(const platform::PadInput&)> pad;      // PadInput; true when it's Android's back
     std::function<void()> frame;                             // once a frame, between frames
     std::function<platform::HintOverlay()> overlay;          // drawn over the frame on screen
 };

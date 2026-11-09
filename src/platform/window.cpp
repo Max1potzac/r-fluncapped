@@ -420,9 +420,16 @@ void Window::pad_axis(std::vector<Input>& out, std::int32_t which, int axis, int
         PadButton b = axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT ? PadButton::LT : PadButton::RT;
         bool held = std::find(pad_held_.begin(), pad_held_.end(), b) != pad_held_.end();
         set(b, value > (held ? 11000 : 16384));
-        break;
+        return;
     }
+    default: return;
     }
+    // And the stick, where it is now (for the cursor that follows the right one).
+    bool left = axis == SDL_CONTROLLER_AXIS_LEFTX || axis == SDL_CONTROLLER_AXIS_LEFTY;
+    auto* pad = static_cast<SDL_GameController*>(it->second);
+    auto at = [&](SDL_GameControllerAxis a) { return std::clamp(SDL_GameControllerGetAxis(pad, a) / 32767.0f, -1.0f, 1.0f); };
+    out.push_back(PadInput{left ? PadButton::LStick : PadButton::RStick, true, type, at(left ? SDL_CONTROLLER_AXIS_LEFTX : SDL_CONTROLLER_AXIS_RIGHTX),
+                           at(left ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_RIGHTY)});
 }
 
 void Window::mouse_on_surface(float& x, float& y) const {

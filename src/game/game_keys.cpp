@@ -32,6 +32,7 @@ struct Known {
 };
 constexpr std::uint64_t kApp = 0x25a4618;  // LawnApp* (the app singleton)
 constexpr Known kAppTouchBegan{0x14e8568, {0xF941C000, 0x1401B9C9, 0xF941C000}};  // LawnApp::TouchBegan(touch): wm->TouchBegan
+constexpr Known kAppTouchMoved{0x14e8578, {0xF941C000, 0x1401BA28, 0xF81E0FF3}};
 constexpr Known kAppTouchEnded{0x14e8570, {0xF941C000, 0x1401BAB4, 0xF941C000}};
 constexpr Known kScreenRect{0x5c1788, {0xD10143FF, 0xA9015FF8, 0xA90257F6}};  // UI object: its Rect on screen, through x8
 // Handles: the registry, a handle's object pointer (through x8), and the calls that look it up.
@@ -61,6 +62,9 @@ constexpr Known kWorldToColumn{0x9b17d0, {0xD0008F08, 0xBD47D101, 0xD0008F08}};
 constexpr Known kBoardTouchMoved{0xab24c8, {0xD101C3FF, 0xF90023F5, 0xA9054FF4}};  // Board::TouchMoved(touch): the lawn hands it to the collectables
 constexpr std::uint64_t kTouchMovedSlot = 0x268;  // its place in Board's vtable
 constexpr Known kWidgetAt{0x163e82c, {0xD10243FF, 0xA9036FFC, 0xA90467FA}};  // WidgetManager::GetWidgetAt(x, y, flags, bool* blocked, 0, 0)
+// Sexy::Widget: its children (a std::list: the end node, then the first's at +8), its parent,
+// whether it's shown, and its x, y, width and height, relative to the parent. Sexy::Slider's value (0-1).
+constexpr std::uint64_t kWidgetList = 0x8, kWidgetParent = 0x28, kWidgetRect = 0x44, kWidgetVisible = 0x70, kSliderValue = 0xc0;
 constexpr std::uint64_t kFlagsMode = 0xc4, kFlagsAdd = 0xf0, kFlagsRemove = 0xf4, kFlagsBase = 0x260;  // WidgetManager: the flags a touch is tested with
 constexpr std::uint64_t kBoardState = 0xe0;  // 1 and 3 before the level starts (the pan, the seed chooser), 5 in play
 constexpr int kPointer = 98;  // the touch's id, clear of the mouse (1), hover (99) and tap keybinds (100 and up)
@@ -189,7 +193,7 @@ public:
     }
 
     bool install(const Module& pvz2) {
-        for (const Known* k : {&kAppTouchBegan, &kAppTouchEnded, &kScreenRect, &kRegistry, &kHandleRef, &kRefIsNull, &kRefType, &kTypeTable, &kRefResolve, &kRefFree})
+        for (const Known* k : {&kAppTouchBegan, &kAppTouchMoved, &kAppTouchEnded, &kScreenRect, &kRegistry, &kHandleRef, &kRefIsNull, &kRefType, &kTypeTable, &kRefResolve, &kRefFree})
             if (!known(*k)) return false;
         auto bank = find_vtable(rt_.mem(), pvz2, "SeedBankNew");
         auto packet = find_vtable(rt_.mem(), pvz2, "SeedPacket");
@@ -238,6 +242,17 @@ public:
             if (!aim || aim->functions.empty()) continue;
             aim_cursors_.emplace_back(std::piecewise_construct, std::forward_as_tuple(aim->address), std::forward_as_tuple());
         }
+        // The pause menu: its dialog, sliders and buttons (Sexy widgets).
+        auto pause = find_vtable(rt_.mem(), pvz2, "PauseDialog");
+        auto slider = find_vtable(rt_.mem(), pvz2, "Sexy::Slider");
+        auto button = find_vtable(rt_.mem(), pvz2, "PVZ2UIButton");
+        if (pause && slider && button) {
+            pause_vtable_ = pause->address;
+            slider_vtable_ = slider->address;
+            button_vtable_ = button->address;
+        } else {
+            log::warn("controller: the pause menu's classes aren't there; its controls are off");
+        }
         for (auto& a : aim_cursors_)
             watch(rt_.mem().read<std::uint64_t>(a.first), a.first, a.second, "controller: aiming cursor");
         return true;
@@ -249,10 +264,26 @@ public:
     // food bar), X taps the tile (a plant's own ability, or the target
     // once one asks for it; held a second in the first column, the mower), LT/RT sweep the lawn
     // for sun and coins, Start pauses, L3 fast-forwards.
-    void pad(const platform::PadInput& pressed) {
+    //
+    // Off the lawn: on the pause menu the d-pad picks a slider or button (left and right move a
+    // slider), A presses it and B or Start resume; everywhere else but the seed chooser the right
+    // stick moves a cursor, A touches where it is (held, it drags), the d-pad or left stick
+    // scrolls, and B is Android's back. True: the input is Android's back button.
+    bool pad(const platform::PadInput& pressed) {
         using platform::PadButton;
+        if (pressed.button == PadButton::LStick || pressed.button == PadButton::RStick) {
+            if (pressed.button == PadButton::RStick) {
+                stick_x_ = pressed.x;
+                stick_y_ = pressed.y;
+                if (std::hypot(stick_x_, stick_y_) > kDeadZone) {
+                    pad_type_ = pressed.type;
+                    pad_active_ = true;
+                }
+            }
+            return false;
+        }
         auto action = action_of_[static_cast<std::size_t>(pressed.button)];
-        if (!action) return;
+        if (!action) return false;
         platform::PadInput p = pressed;
         p.button = *action;
         pad_type_ = p.type;
@@ -261,11 +292,34 @@ public:
         if (dir != dirs_.end()) {
             dir->held = p.down;
             if (p.down) {
-                move(dir->dx, dir->dy);
+                Mode m = mode();
+                if (m == Mode::Lawn) move(dir->dx, dir->dy);
+                else if (m == Mode::Menu) menu_move(dir->dx, dir->dy);
                 dir->next = now_ticks() + ticks(kRepeatDelay);
             }
-            return;
+            return false;
         }
+        if (!p.down) {
+            // Whatever went down, its finger comes up.
+            if (p.button == PadButton::A && cursor_down_) {
+                steps_.push_back({1, 3, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
+                cursor_down_ = false;
+            }
+            lawn_pad(p);
+            return false;
+        }
+        switch (mode()) {
+        case Mode::Lawn: lawn_pad(p); return false;
+        case Mode::Menu: return menu_pad(p);
+        case Mode::Cursor: return cursor_pad(p);
+        case Mode::None: return false;
+        }
+        return false;
+    }
+
+    // The lawn's controls (and the buttons let go anywhere).
+    void lawn_pad(const platform::PadInput& p) {
+        using platform::PadButton;
         if (p.button == PadButton::B) {
             b_since_ = p.down ? now_ticks() : 0;
             return;
@@ -282,9 +336,10 @@ public:
             return;
         }
         if (p.button == PadButton::X) {
-            // Aiming: the target, the cursor's tile.
-            if (p.down && lawn && aiming()) {
-                tap_tile(*lawn);
+            // Aiming: the finger that's held on the target lets go, and the plant fires.
+            if (p.down && aim_down_) {
+                steps_.push_back({1, 3, aim_x_, aim_y_});
+                aim_down_ = false;
                 aim_from_.reset();
                 return;
             }
@@ -311,9 +366,15 @@ public:
         }
         case PadButton::A:
             if (!lawn) break;
-            if (aiming()) {
-                // Aiming is called off: the plant tapped again.
-                if (aim_from_) tap(tile_x(*lawn, aim_from_->first), tile_y(*lawn, aim_from_->second));
+            if (aim_down_) {
+                // Aiming is called off: the finger slides back onto the plant and lets go there.
+                if (aim_from_) {
+                    aim_x_ = tile_x(*lawn, aim_from_->first);
+                    aim_y_ = tile_y(*lawn, aim_from_->second);
+                    steps_.push_back({1, 1, aim_x_, aim_y_});
+                }
+                steps_.push_back({1, 3, aim_x_, aim_y_});
+                aim_down_ = false;
                 aim_from_.reset();
                 break;
             }
@@ -343,9 +404,12 @@ public:
         auto now = now_ticks();
         for (auto& d : dirs_)
             if (d.held && now >= d.next) {
-                move(d.dx, d.dy);
+                Mode m = mode();
+                if (m == Mode::Lawn) move(d.dx, d.dy);
+                else if (m == Mode::Menu) menu_move(d.dx, d.dy);
                 d.next = now + ticks(kRepeatEvery);
             }
+        cursor_frame(now);
         if (b_since_ && now - b_since_ >= ticks(kDigHold)) {
             b_since_ = 0;
             if (auto lawn = this->lawn()) {
@@ -378,6 +442,21 @@ public:
             }
         }
         if (sweep_ >= 0) sweep();
+        // A plant started aiming (its cursor is up): a finger goes down on the cursor's tile and
+        // stays, as on a phone the reticle shows under a finger held on the lawn. If the game
+        // drops the aiming by itself, the finger comes up.
+        bool aims = aiming();
+        if (aims && !aim_down_ && !mower_down_ && steps_.empty()) {
+            if (auto lawn = this->lawn()) {
+                aim_x_ = tile_x(*lawn, col_);
+                aim_y_ = tile_y(*lawn, row_);
+                steps_.push_back({1, 0, aim_x_, aim_y_});
+                aim_down_ = true;
+            }
+        } else if (!aims && aim_down_ && steps_.empty()) {
+            steps_.push_back({1, 3, aim_x_, aim_y_});
+            aim_down_ = false;
+        }
         if (!steps_.empty() && --steps_.front().wait <= 0) {
             Step step = steps_.front();
             steps_.pop_front();
@@ -420,7 +499,10 @@ public:
             return out;
         }
         auto lawn = this->lawn();
-        if (!lawn) return out;
+        if (!lawn) {
+            off_lawn_overlay(out);
+            return out;
+        }
         float fx = lawn->sw / lawn->lw, fy = lawn->sh / lawn->lh;
         // The tile, in the surface's pixels; red while B is held to dig.
         float x0 = lawn->ox + lawn->tw * col_, y0 = lawn->oy + lawn->th * row_;
@@ -552,16 +634,263 @@ private:
         // grid's middle would go to is the Board. (Board+0x72, the Board having the focus, isn't
         // enough: it can stay off after the window loses the focus, and come back only with a
         // new level.)
-        GuestAddr wm = mem.read<std::uint64_t>(app + kWidgetManager);
-        if (!wm) return std::nullopt;
+        float mx = l.ox + l.tw * l.cols / 2, my = l.oy + l.th * l.rows / 2;
+        if (widget_at(static_cast<std::int32_t>(l.ui_x(mx)), static_cast<std::int32_t>(l.ui_y(my))) != board) return std::nullopt;
+        return l;
+    }
+
+    // The widget a touch at (x, y), in the UI's units, would go to (the WidgetManager's own test).
+    GuestAddr widget_at(std::int32_t x, std::int32_t y) {
+        auto& mem = rt_.mem();
+        GuestAddr app = mem.read<std::uint64_t>(base_ + kApp);
+        GuestAddr wm = app ? mem.read<std::uint64_t>(app + kWidgetManager) : 0;
+        if (!wm) return 0;
         std::uint32_t flags = mem.read<std::uint32_t>(wm + kFlagsBase);
         if (!mem.read<std::uint8_t>(wm + kFlagsMode)) flags = (mem.read<std::uint32_t>(wm + kFlagsAdd) | flags) & ~mem.read<std::uint32_t>(wm + kFlagsRemove);
-        float mx = l.ox + l.tw * l.cols / 2, my = l.oy + l.th * l.rows / 2;
         mem.write<std::uint8_t>(blocked_, 0);
-        GuestAddr at = rt_.call(base_ + kWidgetAt.offset, {wm, static_cast<std::uint32_t>(static_cast<std::int32_t>(l.ui_x(mx))),
-                                                            static_cast<std::uint32_t>(static_cast<std::int32_t>(l.ui_y(my))), flags, blocked_, 0, 0});
-        if (at != board) return std::nullopt;
-        return l;
+        return rt_.call(base_ + kWidgetAt.offset, {wm, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), flags, blocked_, 0, 0});
+    }
+
+    // The UI's size and the surface's (all 0 before the app is up).
+    struct Sizes {
+        float lw = 0, lh = 0, sw = 0, sh = 0;
+        bool ok() const { return lw > 0 && lh > 0 && sw > 0 && sh > 0; }
+    };
+    Sizes sizes() const {
+        auto& mem = rt_.mem();
+        GuestAddr app = mem.read<std::uint64_t>(base_ + kApp);
+        if (!app) return {};
+        return {static_cast<float>(mem.read<std::int32_t>(app + kLogicalSize)), static_cast<float>(mem.read<std::int32_t>(app + kLogicalSize + 4)),
+                static_cast<float>(mem.read<std::int32_t>(app + kSurfaceSize)), static_cast<float>(mem.read<std::int32_t>(app + kSurfaceSize + 4))};
+    }
+
+    // What the pad does now.
+    enum class Mode { Lawn, Menu, Cursor, None };
+    Mode mode() {
+        if (lawn()) return Mode::Lawn;
+        if (pause_dialog()) return Mode::Menu;
+        // The seed chooser has controls of its own to come; the cursor stays off it.
+        auto& mem = rt_.mem();
+        GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
+        GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
+        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ && mem.read<std::int32_t>(board + kBoardState) == 3) return Mode::None;
+        return sizes().ok() ? Mode::Cursor : Mode::None;
+    }
+
+    // The pause menu, when it's up: the dialog is what a touch in the screen's middle goes to, or
+    // holds it.
+    GuestAddr pause_dialog() {
+        if (!pause_vtable_) return 0;
+        Sizes z = sizes();
+        if (!z.ok()) return 0;
+        auto& mem = rt_.mem();
+        GuestAddr w = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+        for (int i = 0; w && i < 8; ++i, w = mem.read<std::uint64_t>(w + kWidgetParent))
+            if (mem.read<std::uint64_t>(w) == pause_vtable_) return w;
+        return 0;
+    }
+
+    // The pause menu's sliders and buttons, top to bottom then left to right, in the UI's units.
+    struct MenuItem {
+        GuestAddr widget;
+        Rect r;
+        bool slider;
+        int row;
+    };
+    std::vector<MenuItem> menu_items(GuestAddr dialog) {
+        std::vector<MenuItem> items;
+        auto& mem = rt_.mem();
+        // Sexy::WidgetContainer: its children in a std::list, positions relative to the parent.
+        auto collect = [&](auto& self, GuestAddr container, std::int32_t ax, std::int32_t ay, int depth) -> void {
+            GuestAddr end = container + kWidgetList;
+            GuestAddr node = mem.read<std::uint64_t>(end + 8);
+            for (int n = 0; node && node != end && n < 64; ++n, node = mem.read<std::uint64_t>(node + 8)) {
+                GuestAddr w = mem.read<std::uint64_t>(node + 16);
+                if (!w || !mem.read<std::uint8_t>(w + kWidgetVisible)) continue;
+                Rect r{ax + mem.read<std::int32_t>(w + kWidgetRect), ay + mem.read<std::int32_t>(w + kWidgetRect + 4),
+                       mem.read<std::int32_t>(w + kWidgetRect + 8), mem.read<std::int32_t>(w + kWidgetRect + 12)};
+                GuestAddr vt = mem.read<std::uint64_t>(w);
+                if ((vt == slider_vtable_ || vt == button_vtable_) && r.w > 0 && r.h > 0) items.push_back({w, r, vt == slider_vtable_, 0});
+                if (depth < 4) self(self, w, r.x, r.y, depth + 1);
+            }
+        };
+        collect(collect, dialog, mem.read<std::int32_t>(dialog + kWidgetRect), mem.read<std::int32_t>(dialog + kWidgetRect + 4), 0);
+        std::stable_sort(items.begin(), items.end(), [](const MenuItem& a, const MenuItem& b) {
+            return a.r.y + a.r.h / 2 != b.r.y + b.r.h / 2 ? a.r.y + a.r.h / 2 < b.r.y + b.r.h / 2 : a.r.x < b.r.x;
+        });
+        // Rows: items whose middles are within half a height of the row's first.
+        for (std::size_t i = 1, first = 0; i < items.size(); ++i) {
+            const Rect& a = items[first].r;
+            const Rect& b = items[i].r;
+            bool same = std::abs((b.y + b.h / 2) - (a.y + a.h / 2)) < std::max(a.h, b.h) / 2;
+            items[i].row = same ? items[first].row : items[first].row + 1;
+            if (!same) first = i;
+        }
+        return items;
+    }
+
+    // The item the menu's box is on, as an index in items (the first when it's none of them).
+    std::size_t menu_selected(const std::vector<MenuItem>& items) {
+        for (std::size_t i = 0; i < items.size(); ++i)
+            if (items[i].widget == menu_sel_) return i;
+        menu_sel_ = items.empty() ? 0 : items[0].widget;
+        return 0;
+    }
+
+    void menu_move(int dx, int dy) {
+        GuestAddr dialog = pause_dialog();
+        if (!dialog) return;
+        auto items = menu_items(dialog);
+        if (items.empty()) return;
+        std::size_t at = menu_selected(items);
+        const MenuItem& sel = items[at];
+        if (dy) {
+            // The nearest item, side to side, of the row above or below.
+            int row = sel.row + dy;
+            int mid = sel.r.x + sel.r.w / 2;
+            std::optional<std::size_t> best;
+            for (std::size_t i = 0; i < items.size(); ++i) {
+                if (items[i].row != row) continue;
+                int d = std::abs(items[i].r.x + items[i].r.w / 2 - mid);
+                if (!best || d < std::abs(items[*best].r.x + items[*best].r.w / 2 - mid)) best = i;
+            }
+            if (best) menu_sel_ = items[*best].widget;
+        } else if (dx && sel.slider) {
+            slide(sel, dx);
+        } else if (dx) {
+            std::size_t next = at + (dx > 0 ? 1 : -1);
+            if (next < items.size() && items[next].row == sel.row) menu_sel_ = items[next].widget;
+        }
+    }
+
+    // A slider a tenth along, the way a finger moves it: down on its thumb, across, up.
+    void slide(const MenuItem& item, int dir) {
+        double value = std::clamp(rt_.mem().read<double>(item.widget + kSliderValue), 0.0, 1.0);
+        double to = std::clamp(value + 0.1 * dir, 0.0, 1.0);
+        if (to == value) return;
+        int thumb = item.r.h * 7 / 10;  // about the thumb's width
+        auto x = [&](double v) { return static_cast<std::int32_t>(item.r.x + thumb / 2 + v * (item.r.w - thumb)); };
+        std::int32_t y = item.r.y + item.r.h / 2;
+        steps_.push_back({1, 0, x(value), y});
+        steps_.push_back({1, 1, x((value + to) / 2), y});
+        steps_.push_back({1, 1, x(to), y});
+        steps_.push_back({1, 3, x(to), y});
+    }
+
+    bool menu_pad(const platform::PadInput& p) {
+        using platform::PadButton;
+        if (p.button == PadButton::B || p.button == PadButton::Start) return true;  // back: the game resumes
+        if (p.button != PadButton::A) return false;
+        GuestAddr dialog = pause_dialog();
+        if (!dialog) return false;
+        auto items = menu_items(dialog);
+        if (items.empty()) return false;
+        const MenuItem& sel = items[menu_selected(items)];
+        if (!sel.slider) tap(sel.r.x + sel.r.w / 2, sel.r.y + sel.r.h / 2);
+        return false;
+    }
+
+    bool cursor_pad(const platform::PadInput& p) {
+        using platform::PadButton;
+        // Back, but not in a level, where B is the shovel and back would pause.
+        if (p.button == PadButton::B) return !button_rect(platform::KeyBind::Action::Pause);
+        // The level's buttons still work while the lawn isn't taking touches (a banner's up).
+        if (p.button == PadButton::Start || p.button == PadButton::L3) {
+            if (auto r = button_rect(p.button == PadButton::Start ? platform::KeyBind::Action::Pause : platform::KeyBind::Action::FastForward))
+                tap(r->x + r->w / 2, r->y + r->h / 2);
+            return false;
+        }
+        if (p.button == PadButton::A && !cursor_down_ && !scroll_) {
+            cursor_place();
+            steps_.push_back({1, 0, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
+            cursor_down_ = true;
+        }
+        return false;
+    }
+
+    // The cursor starts in the middle of the screen.
+    void cursor_place() {
+        if (cursor_x_ >= 0) return;
+        Sizes z = sizes();
+        cursor_x_ = z.lw / 2;
+        cursor_y_ = z.lh / 2;
+    }
+
+    // Once a frame: the right stick moves the cursor (dragging the finger A holds down), and the
+    // d-pad or left stick held scrolls what's under it, a finger dragging the other way.
+    void cursor_frame(std::int64_t now) {
+        double dt = std::min(0.1, static_cast<double>(now - last_frame_) / ticks(std::chrono::seconds(1)));
+        last_frame_ = now;
+        float mag = std::hypot(stick_x_, stick_y_);
+        int dx = 0, dy = 0;
+        for (const auto& d : dirs_)
+            if (d.held) {
+                dx += d.dx;
+                dy += d.dy;
+            }
+        if (mag <= kDeadZone && !dx && !dy && !scroll_) return;
+        Sizes z = sizes();
+        if (mode() != Mode::Cursor || !z.ok()) {
+            stop_scroll();
+            return;
+        }
+        cursor_place();
+        if (mag > kDeadZone) {
+            // Faster the further it's pushed: across the screen's height in about a second at full tilt.
+            float speed = z.lh * 1.1f * std::pow((std::min(mag, 1.0f) - kDeadZone) / (1 - kDeadZone), 2.0f);
+            cursor_x_ = std::clamp(cursor_x_ + static_cast<float>(stick_x_ / mag * speed * dt), 0.0f, z.lw - 1);
+            cursor_y_ = std::clamp(cursor_y_ + static_cast<float>(stick_y_ / mag * speed * dt), 0.0f, z.lh - 1);
+            if (cursor_down_) steps_.push_back({1, 1, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
+        }
+        if ((dx || dy) && !cursor_down_) {
+            if (scroll_ && (scroll_dx_ != dx || scroll_dy_ != dy)) stop_scroll();
+            if (!scroll_) {
+                platform::KeyBind bind;
+                bind.action = platform::KeyBind::Action::Scroll;
+                bind.dir_x = dx;
+                bind.dir_y = dy;
+                scroll_.emplace(bind, static_cast<int>(z.lw), static_cast<int>(z.lh), cursor_x_, cursor_y_);
+                scroll_dx_ = dx;
+                scroll_dy_ = dy;
+            }
+            for (const auto& step : scroll_->frame()) scroll_step(step);
+        } else {
+            stop_scroll();
+        }
+    }
+
+    void stop_scroll() {
+        if (!scroll_) return;
+        for (const auto& step : scroll_->release()) scroll_step(step);
+        scroll_.reset();
+    }
+
+    void scroll_step(const platform::ScrollDrag::Step& step) {
+        x_ = static_cast<std::int32_t>(step.x);
+        y_ = static_cast<std::int32_t>(step.y);
+        send(step.phase == platform::ScrollDrag::Step::Down ? 0 : step.phase == platform::ScrollDrag::Step::Move ? 1 : 3);
+    }
+
+    // Off the lawn: the pause menu's box, or the cursor.
+    void off_lawn_overlay(platform::HintOverlay& out) {
+        Mode m = mode();
+        Sizes z = sizes();
+        if (!z.ok()) return;
+        float fx = z.sw / z.lw, fy = z.sh / z.lh;
+        if (m == Mode::Menu) {
+            GuestAddr dialog = pause_dialog();
+            auto items = dialog ? menu_items(dialog) : std::vector<MenuItem>{};
+            if (items.empty()) return;
+            const Rect& r = items[menu_selected(items)].r;
+            int pad = static_cast<int>(r.h * fy) / 8;
+            out.boxes.push_back({static_cast<int>(r.x * fx) - pad, static_cast<int>(r.y * fy) - pad, static_cast<int>(r.w * fx) + 2 * pad,
+                                 static_cast<int>(r.h * fy) + 2 * pad, 0xFFFFFFu, true});
+        } else if (m == Mode::Cursor && cursor_x_ >= 0) {
+            int x = static_cast<int>(cursor_x_ * fx), y = static_cast<int>(cursor_y_ * fy);
+            int radius = std::max(6, static_cast<int>(z.sh) / 64);
+            out.meters.push_back({x, y, radius + std::max(2, radius / 3), 1.0f, 0x202020u});
+            out.meters.push_back({x, y, radius, 1.0f, cursor_down_ ? 0xFFD040u : 0xFFFFFFu});
+        }
     }
 
     void move(int dx, int dy) {
@@ -569,8 +898,12 @@ private:
         if (!lawn) return;
         col_ = std::clamp(col_ + dx, 0, lawn->cols - 1);
         row_ = std::clamp(row_ + dy, 0, lawn->rows - 1);
-        // While a plant aims, its reticle follows the cursor the way it follows a finger.
-        if (aiming()) slide_to(*lawn, tile_x(*lawn, col_), tile_y(*lawn, row_));
+        // While a plant aims, the finger held for it slides along, and its reticle with it.
+        if (aim_down_) {
+            aim_x_ = tile_x(*lawn, col_);
+            aim_y_ = tile_y(*lawn, row_);
+            steps_.push_back({1, 1, aim_x_, aim_y_});
+        }
     }
 
     // A plant's aiming cursor is up.
@@ -687,7 +1020,12 @@ private:
             GuestAddr packet = resolve(h);
             if (!packet || mem.read<std::uint64_t>(packet) != packet_vtable_) continue;
             Rect r = screen_rect(packet);
-            if (r.w > 0 && r.h > 0) packets.push_back(r);
+            if (r.w <= 0 || r.h <= 0) continue;
+            // The card is drawn a little up and left of the packet's rect (by about 7 and 3 of
+            // the UI's units on a 119x76 packet, at every resolution), so the box goes there.
+            r.x -= r.w * 6 / 100;
+            r.y -= r.h * 4 / 100;
+            packets.push_back(r);
         }
         std::stable_sort(packets.begin(), packets.end(), [](const Rect& a, const Rect& b) { return a.y != b.y ? a.y < b.y : a.x < b.x; });
         return packets;
@@ -700,12 +1038,12 @@ private:
         return packets[slot - 1];
     }
 
-    // A touch at (x_, y_) in the given phase (0 down, 3 up), into LawnApp's handlers.
+    // A touch at (x_, y_) in the given phase (0 down, 1 moved, 3 up), into LawnApp's handlers.
     void send(int phase) {
         GuestAddr app = rt_.mem().read<std::uint64_t>(base_ + kApp);
         if (!app) return;
         fill_touch(phase, x_, y_);
-        rt_.call(base_ + (phase == 0 ? kAppTouchBegan : kAppTouchEnded).offset, {app, touch_});
+        rt_.call(base_ + (phase == 0 ? kAppTouchBegan : phase == 1 ? kAppTouchMoved : kAppTouchEnded).offset, {app, touch_});
     }
 
     void fill_touch(int phase, std::int32_t x, std::int32_t y) {
@@ -750,10 +1088,24 @@ private:
     GuestAddr board_vtable_ = 0, cursor_vtable_ = 0;
     Seen plant_cursor_;
     std::deque<std::pair<GuestAddr, Seen>> aim_cursors_;  // the aiming cursors' vtables, and the last of each seen
+    bool aim_down_ = false;                                // a finger held on the lawn for a plant that aims
+    std::int32_t aim_x_ = 0, aim_y_ = 0;                   // where it is
     std::optional<std::pair<int, int>> aim_from_;          // the tile X last tapped: the plant that's aiming
     std::array<Dir, 4> dirs_{{{platform::PadButton::Up, 0, -1}, {platform::PadButton::Down, 0, 1},
                               {platform::PadButton::Left, -1, 0}, {platform::PadButton::Right, 1, 0}}};
     std::deque<Step> steps_;
+    // Off the lawn: the pause menu's classes and its item the box is on; the cursor (in the UI's
+    // units, -1 until it's first used), the right stick, the finger A holds down there, and the
+    // scroll the d-pad drags.
+    GuestAddr pause_vtable_ = 0, slider_vtable_ = 0, button_vtable_ = 0;
+    GuestAddr menu_sel_ = 0;
+    float cursor_x_ = -1, cursor_y_ = -1;
+    float stick_x_ = 0, stick_y_ = 0;
+    bool cursor_down_ = false;
+    std::optional<platform::ScrollDrag> scroll_;
+    int scroll_dx_ = 0, scroll_dy_ = 0;
+    std::int64_t last_frame_ = 0;
+    static constexpr float kDeadZone = 0.2f;
     bool pad_active_ = false;
     platform::PadType pad_type_ = platform::PadType::Xbox;
     int col_ = 0, row_ = 2, slot_ = 1;
@@ -815,7 +1167,7 @@ GameKeyHandlers install_game_keys(Runtime& rt, const Module& pvz2, const GameKey
     bool pad = options.controller && keys->install_pad(pvz2);
     if (options.controller) log::info("controller on the lawn: {}", pad ? "on" : "this libPVZ2.so is a build it doesn't know; left off");
     if (pad) {
-        handlers.pad = [keys](const platform::PadInput& p) { keys->pad(p); };
+        handlers.pad = [keys](const platform::PadInput& p) { return keys->pad(p); };
         handlers.frame = [keys] { keys->frame(); };
     }
     if (pad || !options.hint_binds.empty()) handlers.overlay = [keys] { return keys->overlay(); };

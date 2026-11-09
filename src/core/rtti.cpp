@@ -29,7 +29,22 @@ std::vector<GuestAddr> slots_holding(const GuestMemory& mem, const Module& m, Gu
 }  // namespace
 
 std::optional<VTable> find_vtable(const GuestMemory& mem, const Module& m, const std::string& class_name) {
-    std::string mangled = std::to_string(class_name.size()) + class_name;
+    // "Sexy::Slider", a class in a namespace, is "N4Sexy6SliderE".
+    std::string mangled;
+    std::size_t colon = class_name.find("::");
+    if (colon == std::string::npos) {
+        mangled = std::to_string(class_name.size()) + class_name;
+    } else {
+        mangled = "N";
+        for (std::size_t from = 0;;) {
+            std::size_t to = class_name.find("::", from);
+            std::string part = class_name.substr(from, to == std::string::npos ? std::string::npos : to - from);
+            mangled += std::to_string(part.size()) + part;
+            if (to == std::string::npos) break;
+            from = to + 2;
+        }
+        mangled += "E";
+    }
     for (const auto& s : m.segments()) {  // the name is in .rodata, often in the code segment
         const char* data = reinterpret_cast<const char*>(mem.host(s.start));
         for (std::uint64_t i = 1; i + mangled.size() < s.size; ++i) {

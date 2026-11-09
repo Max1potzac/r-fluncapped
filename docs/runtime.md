@@ -138,10 +138,28 @@ for the seed chooser, 5 in play).
 A plant that aims (Banana Launcher, Missile Toe, the launchers, Escape Root) puts up a cursor of
 its own (`BananaTargetCursor`, `MissileToeTargetCursor`, `PlantLauncherTargetCursor`,
 `EscapeRootCursor`, seen through their vtables' first function, as `PlantCursor` is). While one
-is up, each move of the tile cursor slides a finger there (the Board's `TouchMoved`), so the
-plant's reticle follows; X taps the tile to fire, A taps the plant again to call it off. X held in
-the first column holds a finger on the row's mower until X is let go, as the game wants for
-launching one.
+is up, a finger goes down on the cursor's tile and stays (LawnApp's TouchBegan, then TouchMoved,
+0x14e8578, as the cursor moves), so the plant's reticle follows it as it follows a finger on a
+phone; X lets the finger go, which fires, and A slides it back onto the plant and lets go there to
+call it off. X held in the first column holds a finger on the row's mower until X is let go, as
+the game wants for launching one.
+
+The seed bank's packets are drawn a little up and left of their rects (about 7 and 3 UI units on
+a 119x76 packet), so the gold box and the LB/RB labels are moved by as much.
+
+Off the lawn the pad does other things. On the pause menu (`PauseDialog`, found as the widget, or
+a parent of the widget, that `GetWidgetAt` gives for the screen's middle) the d-pad moves a box
+between its sliders and buttons: the dialog's Sexy widgets (`Sexy::Widget`: its children in a
+`std::list` at +0x8, its parent at +0x28, x, y, width and height relative to the parent at +0x44,
+shown at +0x70) that are a `Sexy::Slider` or a `PVZ2UIButton`, in rows top to bottom. Left and
+right move a slider a tenth (a finger down on its thumb, from its value at +0xc0, across and up),
+A taps a button, and B or Start are Android's back, which resumes. Everywhere else but the seed
+chooser (Board state 3, which is to get controls of its own) the right stick moves a cursor (a
+dot, faster the further the stick is pushed: `PadInput` also brings each stick's position as
+`LStick`/`RStick`), A holds a finger down there until it's let go (it drags as the cursor moves),
+the d-pad or left stick held scrolls what's under the cursor (a `ScrollDrag`, as the scroll
+keybinds do), and B is Android's back (not in a level, where B is the shovel; Start and L3 still
+press pause and fast-forward when a banner keeps the lawn from taking touches).
 
 `--pad-binds` moves actions to other buttons (each button is translated to the action it does
 before anything else sees it, and the labels show the button that does each action now).
@@ -266,6 +284,7 @@ repeated without a person at the mouse (and on a machine without one). Each line
 | `seed <n>`, `shovel`, `plantfood`, `fastforward`, `pause` | a game keybind, held for three frames |
 | `scroll <dir> <frames> [speed] [x y]` | a scroll keybind held for `frames` frames, the mouse at (x, y) (the middle by default) |
 | `pad <button> [frames] [xbox\|ps\|switch]` | a controller button (`a`, `b`, `x`, `y`, `lb`, `rb`, `lt`, `rt`, `l3`, `start`, `up`...) held for `frames` frames (default 3) |
+| `stick <l\|r> <x> <y> [frames]` | a controller stick pushed to (x, y), each -1 to 1 (right and down positive), for `frames` frames (default 30), then let go |
 | `focus on\|off` | the window getting or losing the focus (alt-tab) |
 | `quit` | close the window |
 

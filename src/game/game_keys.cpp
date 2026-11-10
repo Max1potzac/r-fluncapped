@@ -220,6 +220,13 @@ public:
         write_stub(ref_stub_, 0xAA0203E8, base_ + kHandleRef.offset);    // mov x8, x2
 
         watch(bank->functions[kUpdateSlot], bank_vtable_, bank_, "game keys: seed bank");
+        // The seed chooser and its look at the lawn button (each drawn once a frame).
+        for (auto [name, vtable, seen] : {std::tuple{"SeedChooser", &chooser_vtable_, &chooser_}, std::tuple{"ViewBoardOrZombiesButton", &view_vtable_, &view_}}) {
+            auto vt = find_vtable(rt_.mem(), pvz2, name);
+            if (!vt || vt->functions.size() <= kUpdateSlot) continue;
+            *vtable = vt->address;
+            watch(vt->functions[kUpdateSlot], vt->address, *seen, std::string("game keys: ") + name);
+        }
         for (std::size_t i = 0; i < kButtonCount; ++i)
             watch(buttons[i]->functions[kUpdateSlot], button_vtables_[i], buttons_[i], std::string("game keys: ") + kButtons[i].name);
         return true;
@@ -266,8 +273,9 @@ public:
     // for sun and coins, Start pauses, L3 fast-forwards.
     //
     // Off the lawn: on the pause menu the d-pad picks a slider or button (left and right move a
-    // slider), A presses it and B or Start resume; everywhere else but the seed chooser the right
-    // stick moves a cursor, A touches where it is (held, it drags), the d-pad or left stick
+    // slider), A presses it and B or Start resume; on the seed chooser the d-pad picks a packet and
+    // A takes it, LB/RB pick a slot and B empties it (held, all of them), Y looks at the lawn and X
+    // held is "let's rock"; everywhere else the right stick moves a cursor, A touches where it is (held, it drags), the d-pad or left stick
     // scrolls, and B is Android's back. True: the input is Android's back button.
     bool pad(const platform::PadInput& pressed) {
         using platform::PadButton;
@@ -295,6 +303,7 @@ public:
                 Mode m = mode();
                 if (m == Mode::Lawn) move(dir->dx, dir->dy);
                 else if (m == Mode::Menu) menu_move(dir->dx, dir->dy);
+                else if (m == Mode::Chooser) chooser_move(dir->dx, dir->dy);
                 dir->next = now_ticks() + ticks(kRepeatDelay);
             }
             return false;
@@ -305,6 +314,7 @@ public:
                 steps_.push_back({1, 3, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
                 cursor_down_ = false;
             }
+            chooser_release(p);
             lawn_pad(p);
             return false;
         }
@@ -312,6 +322,7 @@ public:
         case Mode::Lawn: lawn_pad(p); return false;
         case Mode::Menu: return menu_pad(p);
         case Mode::Cursor: return cursor_pad(p);
+        case Mode::Chooser: chooser_pad(p); return false;
         case Mode::None: return false;
         }
         return false;
@@ -407,9 +418,11 @@ public:
                 Mode m = mode();
                 if (m == Mode::Lawn) move(d.dx, d.dy);
                 else if (m == Mode::Menu) menu_move(d.dx, d.dy);
+                else if (m == Mode::Chooser) chooser_move(d.dx, d.dy);
                 d.next = now + ticks(kRepeatEvery);
             }
         cursor_frame(now);
+        chooser_frame(now);
         if (b_since_ && now - b_since_ >= ticks(kDigHold)) {
             b_since_ = 0;
             if (auto lawn = this->lawn()) {
@@ -665,15 +678,15 @@ private:
     }
 
     // What the pad does now.
-    enum class Mode { Lawn, Menu, Cursor, None };
+    enum class Mode { Lawn, Menu, Cursor, Chooser, None };
     Mode mode() {
         if (lawn()) return Mode::Lawn;
         if (pause_dialog()) return Mode::Menu;
-        // The seed chooser has controls of its own to come; the cursor stays off it.
+        // The seed chooser (and the look at the lawn from it) has controls of its own.
         auto& mem = rt_.mem();
         GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
         GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
-        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ && mem.read<std::int32_t>(board + kBoardState) == 3) return Mode::None;
+        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ && mem.read<std::int32_t>(board + kBoardState) == 3) return Mode::Chooser;
         return sizes().ok() ? Mode::Cursor : Mode::None;
     }
 
@@ -871,13 +884,234 @@ private:
         send(step.phase == platform::ScrollDrag::Step::Down ? 0 : step.phase == platform::ScrollDrag::Step::Move ? 1 : 3);
     }
 
+    // The seed chooser: its packets to pick from (top to bottom, then left to right) and the ones
+    // picked, in the slots down the left (top to bottom), in the UI's units. Both are SeedPackets
+    // among the chooser's children; an empty slot's is at (0, 0).
+    struct Chooser {
+        std::vector<std::pair<GuestAddr, Rect>> grid, slots;
+    };
+    Chooser chooser_packets() {
+        Chooser c;
+        GuestAddr chooser = live(chooser_, chooser_vtable_);
+        Sizes z = sizes();
+        if (!chooser || !z.ok()) return c;
+        auto& mem = rt_.mem();
+        GuestAddr begin = mem.read<std::uint64_t>(chooser + kChildren), end = mem.read<std::uint64_t>(chooser + kChildren + 8);
+        if (end < begin || end - begin > 1024 * 8) return c;
+        for (GuestAddr h = begin; h < end; h += 8) {
+            GuestAddr packet = resolve(h);
+            if (!packet || mem.read<std::uint64_t>(packet) != packet_vtable_) continue;
+            Rect r = screen_rect(packet);
+            if (r.w <= 0 || r.h <= 0 || (r.x == 0 && r.y == 0)) continue;
+            // Drawn a little up and left of the rect, as in the seed bank.
+            r.x -= r.w * 6 / 100;
+            r.y -= r.h * 4 / 100;
+            (r.x + r.w / 2 < z.lw * 0.1f ? c.slots : c.grid).push_back({packet, r});
+        }
+        auto order = [](const auto& a, const auto& b) { return a.second.y != b.second.y ? a.second.y < b.second.y : a.second.x < b.second.x; };
+        std::stable_sort(c.grid.begin(), c.grid.end(), order);
+        std::stable_sort(c.slots.begin(), c.slots.end(), order);
+        return c;
+    }
+
+    // Where the chooser's list shows packets, top and bottom, in the UI's units (what isn't in it is
+    // scrolled to first).
+    std::pair<float, float> chooser_view() const {
+        Sizes z = sizes();
+        return {z.lh * 0.445f, z.lh * 0.975f};
+    }
+
+    // The grid packet the box is on (the first when it's none of them).
+    std::size_t chooser_selected(const Chooser& c) {
+        for (std::size_t i = 0; i < c.grid.size(); ++i)
+            if (c.grid[i].first == ch_sel_) return i;
+        ch_sel_ = c.grid.empty() ? 0 : c.grid[0].first;
+        return 0;
+    }
+
+    void chooser_move(int dx, int dy) {
+        auto c = chooser_packets();
+        if (c.grid.empty()) return;
+        const Rect sel = c.grid[chooser_selected(c)].second;
+        int cx = sel.x + sel.w / 2, cy = sel.y + sel.h / 2;
+        // The nearest packet that way: the next in the row, or in the next row the one nearest across.
+        std::optional<std::size_t> best;
+        long best_d = 0;
+        for (std::size_t i = 0; i < c.grid.size(); ++i) {
+            const Rect& r = c.grid[i].second;
+            int px = r.x + r.w / 2, py = r.y + r.h / 2;
+            bool same_row = std::abs(py - cy) < sel.h / 2;
+            long d;
+            if (dx && same_row && (px - cx) * dx > 0) d = std::abs(px - cx);
+            else if (dy && !same_row && (py - cy) * dy > 0) d = std::abs(py - cy) * 4L + std::abs(px - cx);
+            else continue;
+            if (!best || d < best_d) {
+                best = i;
+                best_d = d;
+            }
+        }
+        if (!best) return;
+        ch_sel_ = c.grid[*best].first;
+        chooser_scroll_to(c.grid[*best].second);
+    }
+
+    // The list dragged (slowly, and held still before letting go, so it doesn't fling) until the
+    // packet is in view.
+    void chooser_scroll_to(const Rect& r) {
+        auto [top, bottom] = chooser_view();
+        float margin = r.h * 0.15f;
+        float dy = 0;
+        if (r.y < top + margin) dy = top + margin - r.y;
+        else if (r.y + r.h > bottom - margin) dy = bottom - margin - (r.y + r.h);
+        if (dy == 0) return;
+        std::int32_t x = r.x + r.w / 2;
+        float y0 = dy > 0 ? top + (bottom - top) * 0.2f : bottom - (bottom - top) * 0.2f;
+        // A drag needs to go a little way before the list takes it as a scroll.
+        float slop = dy > 0 ? r.h * 0.2f : -r.h * 0.2f;
+        steps_.push_back({1, 0, x, static_cast<std::int32_t>(y0)});
+        const int kSteps = 6;
+        for (int i = 1; i <= kSteps; ++i)
+            steps_.push_back({1, 1, x, static_cast<std::int32_t>(y0 + slop + dy * i / kSteps)});
+        steps_.push_back({4, 1, x, static_cast<std::int32_t>(y0 + slop + dy)});
+        steps_.push_back({2, 3, x, static_cast<std::int32_t>(y0 + slop + dy)});
+    }
+
+    void chooser_pad(const platform::PadInput& p) {
+        using platform::PadButton;
+        switch (p.button) {
+        case PadButton::A: {
+            auto c = chooser_packets();
+            if (c.grid.empty()) break;
+            const Rect& r = c.grid[chooser_selected(c)].second;
+            auto [top, bottom] = chooser_view();
+            if (r.y >= top && r.y + r.h <= bottom) tap(r.x + r.w / 2, r.y + r.h / 2);
+            else chooser_scroll_to(r);
+            break;
+        }
+        case PadButton::LB:
+        case PadButton::RB: {
+            int n = static_cast<int>(chooser_packets().slots.size());
+            if (n == 0) break;
+            ch_slot_ = ch_slot_ < 1 || ch_slot_ > n ? 1 : (ch_slot_ - 1 + (p.button == PadButton::RB ? 1 : n - 1)) % n + 1;
+            break;
+        }
+        case PadButton::B: ch_b_since_ = now_ticks(); break;
+        case PadButton::X: ch_x_since_ = now_ticks(); break;
+        case PadButton::Y:
+            if (auto r = live_rect(view_, view_vtable_)) tap(r->x + r->w / 2, r->y + r->h / 2);
+            break;
+        case PadButton::Start:
+            if (auto r = button_rect(platform::KeyBind::Action::Pause)) tap(r->x + r->w / 2, r->y + r->h / 2);
+            break;
+        default: break;
+        }
+    }
+
+    // B let go before it cleared the slots: the slot's packet goes back.
+    void chooser_release(const platform::PadInput& p) {
+        using platform::PadButton;
+        if (p.button == PadButton::B && ch_b_since_) {
+            ch_b_since_ = 0;
+            auto c = chooser_packets();
+            if (ch_slot_ >= 1 && static_cast<std::size_t>(ch_slot_) <= c.slots.size()) {
+                const Rect& r = c.slots[ch_slot_ - 1].second;
+                tap(r.x + r.w / 2, r.y + r.h / 2);
+                // The box stays on the slot below, or the last one.
+                if (static_cast<std::size_t>(ch_slot_) == c.slots.size()) --ch_slot_;
+            }
+        }
+        if (p.button == PadButton::X) ch_x_since_ = 0;
+    }
+
+    // B held two seconds empties every slot; X held a second presses "let's rock".
+    void chooser_frame(std::int64_t now) {
+        if (ch_b_since_ && now - ch_b_since_ >= ticks(kClearHold)) {
+            ch_b_since_ = 0;
+            auto c = chooser_packets();
+            // From the bottom, so the ones above don't move up under the next tap.
+            for (auto it = c.slots.rbegin(); it != c.slots.rend(); ++it) {
+                const Rect& r = it->second;
+                steps_.push_back({4, 0, r.x + r.w / 2, r.y + r.h / 2});
+                steps_.push_back({2, 3, r.x + r.w / 2, r.y + r.h / 2});
+            }
+            ch_slot_ = 1;
+        }
+        if (ch_x_since_ && now - ch_x_since_ >= ticks(kRockHold)) {
+            ch_x_since_ = 0;
+            if (auto r = rock_rect()) tap(r->x + r->w / 2, r->y + r->h / 2);
+        }
+    }
+
+    // "Let's rock": drawn by the chooser, not a widget or UI object of its own; it sits in the
+    // screen's bottom right corner (117 and 47 of 768 UI units in from it, at every shape).
+    std::optional<Rect> rock_rect() {
+        Sizes z = sizes();
+        if (!z.ok() || !live(chooser_, chooser_vtable_)) return std::nullopt;
+        float k = z.lh / 768;
+        return Rect{static_cast<std::int32_t>(z.lw - 227 * k), static_cast<std::int32_t>(z.lh - 82 * k), static_cast<std::int32_t>(220 * k),
+                    static_cast<std::int32_t>(70 * k)};
+    }
+
+    // A watched button's rect, while it's drawn.
+    std::optional<Rect> live_rect(const Seen& seen, GuestAddr vtable) {
+        GuestAddr object = live(seen, vtable);
+        if (!object) return std::nullopt;
+        Rect r = screen_rect(object);
+        if (r.w <= 0 || r.h <= 0) return std::nullopt;
+        return r;
+    }
+
+    // The chooser's box on the grid packet, the gold one on the slot LB/RB picked, the dials for B
+    // and X held, and the buttons' labels.
+    void chooser_overlay(platform::HintOverlay& out, float fx, float fy) {
+        auto c = chooser_packets();
+        auto box = [&](const Rect& r, std::uint32_t rgb, bool corners) {
+            out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), rgb, corners});
+        };
+        if (!c.grid.empty()) {
+            const Rect& r = c.grid[chooser_selected(c)].second;
+            auto [top, bottom] = chooser_view();
+            if (r.y + r.h > top && r.y < bottom) box(r, 0xFFFFFFu, true);
+        }
+        std::optional<Rect> slot;
+        if (ch_slot_ >= 1 && static_cast<std::size_t>(ch_slot_) <= c.slots.size()) {
+            slot = c.slots[ch_slot_ - 1].second;
+            box(*slot, platform::kHintBorder, false);
+        }
+        auto now = now_ticks();
+        auto start = rock_rect();
+        auto view = live_rect(view_, view_vtable_);
+        if (ch_b_since_ && slot && now - ch_b_since_ >= ticks(std::chrono::milliseconds(250))) {
+            float held = static_cast<float>(now - ch_b_since_) / ticks(kClearHold);
+            int radius = std::max(6, static_cast<int>(slot->h * fy) / 6);
+            out.meters.push_back({static_cast<int>((slot->x + slot->w) * fx), static_cast<int>(slot->y * fy), radius, held, 0xFF4040u});
+        }
+        if (ch_x_since_ && start) {
+            float held = static_cast<float>(now - ch_x_since_) / ticks(kRockHold);
+            int radius = std::max(6, static_cast<int>(start->h * fy) / 5);
+            out.meters.push_back({static_cast<int>((start->x + start->w) * fx), static_cast<int>(start->y * fy), radius, held, 0x60E040u});
+        }
+        if (!pad_hints_) return;
+        auto label = [&](platform::PadButton action, const Rect& r) {
+            std::size_t i = 0;
+            while (i < kPadButtons && action_of_[i] != action) ++i;
+            if (i == kPadButtons) return;
+            PadLabel l = pad_label(static_cast<platform::PadButton>(i), pad_type_);
+            out.labels.push_back({l.text, static_cast<int>((r.x + r.w) * fx), static_cast<int>((r.y + r.h) * fy), platform::HintLabel::Anchor::BottomRight, l.rgb});
+        };
+        if (start) label(platform::PadButton::X, *start);
+        if (view) label(platform::PadButton::Y, *view);
+    }
+
     // Off the lawn: the pause menu's box, or the cursor.
     void off_lawn_overlay(platform::HintOverlay& out) {
         Mode m = mode();
         Sizes z = sizes();
         if (!z.ok()) return;
         float fx = z.sw / z.lw, fy = z.sh / z.lh;
-        if (m == Mode::Menu) {
+        if (m == Mode::Chooser) {
+            chooser_overlay(out, fx, fy);
+        } else if (m == Mode::Menu) {
             GuestAddr dialog = pause_dialog();
             auto items = dialog ? menu_items(dialog) : std::vector<MenuItem>{};
             if (items.empty()) return;
@@ -1099,6 +1333,14 @@ private:
     // scroll the d-pad drags.
     GuestAddr pause_vtable_ = 0, slider_vtable_ = 0, button_vtable_ = 0;
     GuestAddr menu_sel_ = 0;
+    // The seed chooser and its buttons; the grid packet the box is on, the slot LB/RB picked (from
+    // 1), and when B or X went down there.
+    GuestAddr chooser_vtable_ = 0, view_vtable_ = 0;
+    Seen chooser_, view_;
+    GuestAddr ch_sel_ = 0;
+    int ch_slot_ = 1;
+    std::int64_t ch_b_since_ = 0, ch_x_since_ = 0;
+    static constexpr auto kClearHold = std::chrono::seconds(2), kRockHold = std::chrono::seconds(1);
     float cursor_x_ = -1, cursor_y_ = -1;
     float stick_x_ = 0, stick_y_ = 0;
     bool cursor_down_ = false;

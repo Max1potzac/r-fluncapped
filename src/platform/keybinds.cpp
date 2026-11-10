@@ -1,6 +1,7 @@
 #include "platform/keybinds.h"
 
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 
 namespace rfu::platform {
@@ -50,8 +51,9 @@ constexpr float kEdge = 0.02f;
 constexpr float kRoom = 0.12f;
 }  // namespace
 
-ScrollDrag::ScrollDrag(const KeyBind& bind, int width, int height, float x, float y)
+ScrollDrag::ScrollDrag(const KeyBind& bind, int width, int height, float x, float y, float stroke)
     : w_(width), h_(height), start_x_(std::clamp(x, w_ * 0.05f, w_ * 0.95f)), start_y_(std::clamp(y, h_ * 0.05f, h_ * 0.95f)) {
+    stroke_ = stroke * height;
     float speed = bind.speed_fraction ? bind.speed * height : bind.speed;
     dx_ = -bind.dir_x * speed;
     dy_ = -bind.dir_y * speed;
@@ -74,7 +76,8 @@ std::vector<ScrollDrag::Step> ScrollDrag::frame() {
     x_ += dx_;
     y_ += dy_;
     // At the edge: lift here; the next frame starts over.
-    if (x_ < w_ * kEdge || x_ > w_ * (1 - kEdge) || y_ < h_ * kEdge || y_ > h_ * (1 - kEdge)) {
+    bool far = stroke_ > 0 && std::hypot(x_ - start_x_, y_ - start_y_) >= stroke_;
+    if (far || x_ < w_ * kEdge || x_ > w_ * (1 - kEdge) || y_ < h_ * kEdge || y_ > h_ * (1 - kEdge)) {
         down_ = false;
         return {{Step::Move, x_, y_}, {Step::Up, x_, y_}};
     }

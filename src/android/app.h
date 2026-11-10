@@ -32,6 +32,7 @@ struct AppOptions {
     std::function<void(const platform::GameKeyInput&)> game_keys;  // seed and shovel keybinds (game/game_keys.h)
     std::function<bool(const platform::PadInput&)> game_pad;  // the controller (game/game_keys.h); true: Android's back
     std::function<void()> game_frame;                         // once a frame, before the game's
+    std::function<void()> game_mouse;                         // the mouse was used (the pad's overlay goes)
     std::function<platform::HintOverlay()> overlay;           // drawn over each frame: keybind hints, the pad's cursor
 };
 

@@ -127,12 +127,21 @@ CONTROLLER
     B                   take the slot's packet out
     B (hold 2 seconds)  empty every slot
     Y                   look at the lawn (again to come back)
+    LT                  pick last level's packets again
+    RT                  almanac
     X (hold 1 second)   Let's Rock
   Everywhere else (the world map, the menus...):
     Right stick         move a cursor (faster the further it's pushed)
     A                   touch where the cursor is (hold to drag)
     D-pad / left stick  scroll
     B                   back
+  On the world map, also:
+    LT                  almanac
+    RT                  Zen Garden
+    Start               settings
+    Y                   shop
+  Using the mouse hides the controller's cursor and labels; they come back
+  when the controller is used.
   With keybind hints on, the buttons are labelled for the controller
   plugged in (Xbox's when it isn't recognised).
   "Controller settings" shows the controllers plugged in, lights up their

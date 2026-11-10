@@ -162,15 +162,31 @@ empty slot's at 0, 0). The d-pad moves a box over the packets to pick; one out o
 (about 0.445 to 0.975 of the screen's height) is scrolled to with a slow drag that's held still
 before it lets go, so the list doesn't fling. A taps the packet, LB/RB pick a slot, B taps the
 slot's packet (which takes it out; held two seconds, every slot's from the bottom), Y taps
-`ViewBoardOrZombiesButton`, and X held a second taps "let's rock", which the chooser draws itself
-in the screen's bottom right corner (117 and 47 of 768 UI units in, at every shape).
+`ViewBoardOrZombiesButton`, LT taps `ReloadLayoutButton` (last level's packets, where the slot
+count puts it), RT the almanac button (286, 37 of 768 UI units from the top left), and X held a
+second taps "let's rock", which the chooser draws itself in the screen's bottom right corner (117
+and 47 of 768 UI units in, at every shape). A d-pad held doesn't move the box while a scroll's
+drag is still going, so the box keeps up with the list.
 
 Everywhere else the right stick moves a cursor (a
 dot, faster the further the stick is pushed: `PadInput` also brings each stick's position as
 `LStick`/`RStick`), A holds a finger down there until it's let go (it drags as the cursor moves),
 the d-pad or left stick held scrolls what's under the cursor (a `ScrollDrag`, as the scroll
-keybinds do), and B is Android's back (not in a level, where B is the shovel; Start and L3 still
-press pause and fast-forward when a banner keeps the lawn from taking touches).
+keybinds do, each stroke lifted after a tenth of the screen's height), and B is Android's back
+(not in a level, where B is the shovel; Start and L3 still press pause and fast-forward when a
+banner keeps the lawn from taking touches). On the world map (the `WorldMap` widget is under the
+screen's middle) the map draws its buttons itself, with no widgets to find, so LT, RT, Start and Y
+tap where they're anchored, in 768ths of the screen's height: the almanac at (134, 38), the Zen
+Garden at (301, 38) and the settings at (382, 38) from the top left, the shop 75 in from the right
+at 53 down. A mouse click (any `TouchInput`) hides the cursor and the pad's labels until the pad is
+used again.
+
+The pad's touches go to LawnApp's handlers (`TouchBegan`/`Moved`/`Ended` thunks, 0x14e8568,
+0x14e8578, 0x14e8570) as a struct laid out like the ones Android's events become: the pointer id at
++0, the point at +0x10, the event before's point at +0x18 (the down point on a began), 1 and 8 at
++0x20, the time in seconds (a double, steady clock) at +0x28, the phase at +0x30 and 13 at +0x34.
+The almanac's lists measure a drag from the previous point and the time: with the current point
+there, and no time, they never scrolled.
 
 `--pad-binds` moves actions to other buttons (each button is translated to the action it does
 before anything else sees it, and the labels show the button that does each action now).

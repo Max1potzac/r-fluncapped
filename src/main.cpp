@@ -373,6 +373,7 @@ int main(int argc, char** argv) {
             app.game_keys = keys.key;
             app.game_pad = keys.pad;
             app.game_frame = keys.frame;
+            app.game_mouse = keys.mouse;
             app.overlay = keys.overlay;
         }
         for (const auto& name : trace_classes) rfu::trace_class(rt, pvz2, name);

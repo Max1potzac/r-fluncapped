@@ -221,7 +221,8 @@ public:
 
         watch(bank->functions[kUpdateSlot], bank_vtable_, bank_, "game keys: seed bank");
         // The seed chooser and its look at the lawn button (each drawn once a frame).
-        for (auto [name, vtable, seen] : {std::tuple{"SeedChooser", &chooser_vtable_, &chooser_}, std::tuple{"ViewBoardOrZombiesButton", &view_vtable_, &view_}}) {
+        for (auto [name, vtable, seen] : {std::tuple{"SeedChooser", &chooser_vtable_, &chooser_}, std::tuple{"ViewBoardOrZombiesButton", &view_vtable_, &view_},
+                                          std::tuple{"ReloadLayoutButton", &reload_vtable_, &reload_}}) {
             auto vt = find_vtable(rt_.mem(), pvz2, name);
             if (!vt || vt->functions.size() <= kUpdateSlot) continue;
             *vtable = vt->address;
@@ -249,6 +250,7 @@ public:
             if (!aim || aim->functions.empty()) continue;
             aim_cursors_.emplace_back(std::piecewise_construct, std::forward_as_tuple(aim->address), std::forward_as_tuple());
         }
+        if (auto map = find_vtable(rt_.mem(), pvz2, "WorldMap")) map_vtable_ = map->address;
         // The pause menu: its dialog, sliders and buttons (Sexy widgets).
         auto pause = find_vtable(rt_.mem(), pvz2, "PauseDialog");
         auto slider = find_vtable(rt_.mem(), pvz2, "Sexy::Slider");
@@ -479,7 +481,8 @@ public:
         }
     }
 
-    // A game key is pressed: the keyboard is in use again, so its hints come back.
+    // A game key is pressed or the mouse clicks: the keyboard and mouse are in use again, so the
+    // pad's cursor and labels go (until the pad's used) and the keys' hints come back.
     void keyboard() { pad_active_ = false; }
 
     void key(const platform::GameKeyInput& k) {
@@ -807,6 +810,21 @@ private:
         using platform::PadButton;
         // Back, but not in a level, where B is the shovel and back would pause.
         if (p.button == PadButton::B) return !button_rect(platform::KeyBind::Action::Pause);
+        // On the world map: shortcuts to its buttons.
+        if (on_map()) {
+            std::optional<std::pair<float, float>> at;
+            if (p.button == PadButton::LT) at = kMapAlmanac;
+            else if (p.button == PadButton::RT) at = kMapZenGarden;
+            else if (p.button == PadButton::Start) at = kMapSettings;
+            if (at) {
+                tap_anchored(at->first, at->second, false);
+                return false;
+            }
+            if (p.button == PadButton::Y) {
+                tap_anchored(kMapShop.first, kMapShop.second, true);
+                return false;
+            }
+        }
         // The level's buttons still work while the lawn isn't taking touches (a banner's up).
         if (p.button == PadButton::Start || p.button == PadButton::L3) {
             if (auto r = button_rect(p.button == PadButton::Start ? platform::KeyBind::Action::Pause : platform::KeyBind::Action::FastForward))
@@ -862,7 +880,7 @@ private:
                 bind.action = platform::KeyBind::Action::Scroll;
                 bind.dir_x = dx;
                 bind.dir_y = dy;
-                scroll_.emplace(bind, static_cast<int>(z.lw), static_cast<int>(z.lh), cursor_x_, cursor_y_);
+                scroll_.emplace(bind, static_cast<int>(z.lw), static_cast<int>(z.lh), cursor_x_, cursor_y_, kScrollStroke);
                 scroll_dx_ = dx;
                 scroll_dy_ = dy;
             }
@@ -930,6 +948,9 @@ private:
     }
 
     void chooser_move(int dx, int dy) {
+        // Not while the list is still being dragged to the last one: the packets' rects are about
+        // to change, and a held direction would run the box out of view.
+        if (!steps_.empty()) return;
         auto c = chooser_packets();
         if (c.grid.empty()) return;
         const Rect sel = c.grid[chooser_selected(c)].second;
@@ -1000,11 +1021,34 @@ private:
         case PadButton::Y:
             if (auto r = live_rect(view_, view_vtable_)) tap(r->x + r->w / 2, r->y + r->h / 2);
             break;
+        case PadButton::LT:
+            if (auto r = live_rect(reload_, reload_vtable_)) tap(r->x + r->w / 2, r->y + r->h / 2);
+            break;
+        case PadButton::RT: tap_anchored(kChooserAlmanac.first, kChooserAlmanac.second, false); break;
         case PadButton::Start:
             if (auto r = button_rect(platform::KeyBind::Action::Pause)) tap(r->x + r->w / 2, r->y + r->h / 2);
             break;
         default: break;
         }
+    }
+
+    // Buttons the game draws itself, not widgets or UI objects of their own, where they are on the
+    // screen: (x, y) in 768ths of its height, from the left edge (or the right one).
+    static constexpr std::pair<float, float> kMapAlmanac{134, 38}, kMapZenGarden{301, 38}, kMapSettings{382, 38}, kMapShop{75, 53},
+        kChooserAlmanac{286, 37};
+    void tap_anchored(float x, float y, bool from_right) {
+        Sizes z = sizes();
+        if (!z.ok()) return;
+        float k = z.lh / 768;
+        tap(static_cast<std::int32_t>(from_right ? z.lw - x * k : x * k), static_cast<std::int32_t>(y * k));
+    }
+
+    // The world map is up (what a touch in the screen's middle goes to).
+    bool on_map() {
+        Sizes z = sizes();
+        if (!map_vtable_ || !z.ok()) return false;
+        GuestAddr w = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+        return w && rt_.mem().read<std::uint64_t>(w) == map_vtable_;
     }
 
     // B let go before it cleared the slots: the slot's packet goes back.
@@ -1101,6 +1145,7 @@ private:
         };
         if (start) label(platform::PadButton::X, *start);
         if (view) label(platform::PadButton::Y, *view);
+        if (auto reload = live_rect(reload_, reload_vtable_)) label(platform::PadButton::LT, *reload);
     }
 
     // Off the lawn: the pause menu's box, or the cursor.
@@ -1286,11 +1331,21 @@ private:
         mem.write<std::int32_t>(touch_, kPointer);
         mem.write<std::int32_t>(touch_ + 0x10, x);
         mem.write<std::int32_t>(touch_ + 0x14, y);
-        mem.write<std::int32_t>(touch_ + 0x18, x);
-        mem.write<std::int32_t>(touch_ + 0x1c, y);
+        // Where it was the event before, and when (as Android's touches have them: a list's
+        // scroll measures its fling from them, and without them snaps back when let go).
+        if (phase == 0) {
+            last_x_ = x;
+            last_y_ = y;
+        }
+        mem.write<std::int32_t>(touch_ + 0x18, last_x_);
+        mem.write<std::int32_t>(touch_ + 0x1c, last_y_);
+        last_x_ = x;
+        last_y_ = y;
         mem.write<std::int32_t>(touch_ + 0x20, 1);
         mem.write<std::int32_t>(touch_ + 0x24, 8);
+        mem.write<double>(touch_ + 0x28, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
         mem.write<std::int32_t>(touch_ + 0x30, phase);
+        mem.write<std::int32_t>(touch_ + 0x34, 13);
     }
 
     Runtime& rt_;
@@ -1328,6 +1383,7 @@ private:
     std::array<Dir, 4> dirs_{{{platform::PadButton::Up, 0, -1}, {platform::PadButton::Down, 0, 1},
                               {platform::PadButton::Left, -1, 0}, {platform::PadButton::Right, 1, 0}}};
     std::deque<Step> steps_;
+    std::int32_t last_x_ = 0, last_y_ = 0;  // where the pad's finger was the event before
     // Off the lawn: the pause menu's classes and its item the box is on; the cursor (in the UI's
     // units, -1 until it's first used), the right stick, the finger A holds down there, and the
     // scroll the d-pad drags.
@@ -1335,8 +1391,8 @@ private:
     GuestAddr menu_sel_ = 0;
     // The seed chooser and its buttons; the grid packet the box is on, the slot LB/RB picked (from
     // 1), and when B or X went down there.
-    GuestAddr chooser_vtable_ = 0, view_vtable_ = 0;
-    Seen chooser_, view_;
+    GuestAddr chooser_vtable_ = 0, view_vtable_ = 0, reload_vtable_ = 0, map_vtable_ = 0;
+    Seen chooser_, view_, reload_;
     GuestAddr ch_sel_ = 0;
     int ch_slot_ = 1;
     std::int64_t ch_b_since_ = 0, ch_x_since_ = 0;
@@ -1348,6 +1404,7 @@ private:
     int scroll_dx_ = 0, scroll_dy_ = 0;
     std::int64_t last_frame_ = 0;
     static constexpr float kDeadZone = 0.2f;
+    static constexpr float kScrollStroke = 0.1f;  // a scroll's finger lifts after a tenth of the screen's height
     bool pad_active_ = false;
     platform::PadType pad_type_ = platform::PadType::Xbox;
     int col_ = 0, row_ = 2, slot_ = 1;
@@ -1406,6 +1463,7 @@ GameKeyHandlers install_game_keys(Runtime& rt, const Module& pvz2, const GameKey
         keys->keyboard();
         keys->key(k);
     };
+    handlers.mouse = [keys] { keys->keyboard(); };
     bool pad = options.controller && keys->install_pad(pvz2);
     if (options.controller) log::info("controller on the lawn: {}", pad ? "on" : "this libPVZ2.so is a build it doesn't know; left off");
     if (pad) {

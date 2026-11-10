@@ -56,7 +56,9 @@ public:
         enum Phase { Down, Move, Up } phase;
         float x, y;
     };
-    ScrollDrag(const KeyBind& bind, int width, int height, float x, float y);
+    // stroke: when not 0, the finger also lifts after going this far (a fraction of the height),
+    // so it stays in a small panel it started in.
+    ScrollDrag(const KeyBind& bind, int width, int height, float x, float y, float stroke = 0);
     // The steps for one frame: the first call puts the finger down.
     std::vector<Step> frame();
     // Lifts the finger (nothing when it's already up).
@@ -67,6 +69,7 @@ private:
     float dx_, dy_;
     float start_x_, start_y_;
     float x_ = 0, y_ = 0;
+    float stroke_ = 0;
     bool down_ = false;
 };
 

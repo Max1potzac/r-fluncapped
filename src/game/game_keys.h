@@ -58,6 +58,7 @@ struct GameKeyHandlers {
     std::function<void(const platform::GameKeyInput&)> key;  // GameKeyInput
     std::function<bool(const platform::PadInput&)> pad;      // PadInput; true when it's Android's back
     std::function<void()> frame;                             // once a frame, between frames
+    std::function<void()> mouse;                             // the mouse (or a finger) was used
     std::function<platform::HintOverlay()> overlay;          // drawn over the frame on screen
 };
 

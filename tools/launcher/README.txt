@@ -116,6 +116,12 @@ CONTROLLER
     LT / RT             vacuum up all the sun, coins and plant food
     Start               pause (again to resume)
     L3                  fast-forward
+    R3                  slowmode: the game at half speed (again to go back)
+    Right stick flick   pick a powerup: left the first, up the second,
+                        right the third (whichever the level has)
+    X (powerup in use)  hold to use it on the cursor's tile (snowballs,
+                        flamethrower, Power Zap...); press twice quickly
+                        to swipe the tile with the flick (Power Toss)
   On the pause menu a box picks the sliders and buttons instead:
     D-pad / left stick  move the box; left and right move a slider
     A                   press the button

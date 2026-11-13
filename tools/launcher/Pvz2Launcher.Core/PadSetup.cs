@@ -19,6 +19,7 @@ public static class PadSetup
         new("vacuum", "Collect everything", "lt"),
         new("vacuum2", "Collect everything (2nd)", "rt"),
         new("fastforward", "Fast-forward", "l3"),
+        new("slowmode", "Slowmode (half speed)", "r3"),
         new("pause", "Pause", "start"),
     ];
 

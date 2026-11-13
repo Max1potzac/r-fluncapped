@@ -1109,8 +1109,8 @@ private:
 
     // Buttons the game draws itself, not widgets or UI objects of their own, where they are on the
     // screen: (x, y) in 768ths of its height, from the left edge (or the right one).
-    static constexpr std::pair<float, float> kMapAlmanac{134, 38}, kMapZenGarden{301, 38}, kMapSettings{382, 38}, kMapShop{75, 53},
-        kChooserAlmanac{286, 37};
+    static constexpr std::pair<float, float> kMapAlmanac{134.0f, 38.0f}, kMapZenGarden{301.0f, 38.0f}, kMapSettings{382.0f, 38.0f},
+        kMapShop{75.0f, 53.0f}, kChooserAlmanac{286.0f, 37.0f};
     void tap_anchored(float x, float y, bool from_right) {
         Sizes z = sizes();
         if (!z.ok()) return;

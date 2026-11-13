@@ -355,6 +355,28 @@ void register_libc_misc(ShimRegistry& reg) {
     reg.add("strftime_l", strftime);
     reg.add_data("timezone", {8, [](Runtime&, GuestAddr) {}});
 
+    // --- <ctype.h> ---------------------------------------------------------------------------
+    // bionic's `const char* _ctype_`, which inline isalpha() and friends index with c + 1: it points
+    // at OpenBSD's _C_ctype_ table (the "C" locale), here laid out just after the pointer.
+    reg.add_data("_ctype_", {8 + 257, [](Runtime& rt, GuestAddr addr) {
+                     enum : std::uint8_t { U = 0x01, L = 0x02, N = 0x04, S = 0x08, P = 0x10, C = 0x20, X = 0x40, B = 0x80 };
+                     std::uint8_t table[257] = {};
+                     for (int c = 0; c < 128; ++c) {
+                         std::uint8_t v = 0;
+                         if (c >= 'A' && c <= 'Z') v |= U;
+                         if (c >= 'a' && c <= 'z') v |= L;
+                         if (c >= '0' && c <= '9') v |= N;
+                         if (c == ' ' || (c >= '\t' && c <= '\r')) v |= S;
+                         if (c < 32 || c == 127) v |= C;
+                         if (c > 32 && c < 127 && !(v & (U | L | N))) v |= P;
+                         if ((c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) v |= X;
+                         if (c == ' ') v |= B;
+                         table[1 + c] = v;
+                     }
+                     rt.mem().write_bytes(addr + 8, table, sizeof table);
+                     rt.mem().write<GuestAddr>(addr, addr + 8);
+                 }});
+
     // --- environment and identity --------------------------------------------------------
     reg.add("getenv", [](CallContext& c) {
         auto& env = environment(c.rt());

@@ -1,5 +1,6 @@
 #include "android/app.h"
 
+#include "android/apk.h"
 #include "android/java_http.h"
 #include "core/log.h"
 #include "core/trace.h"
@@ -29,7 +30,12 @@ constexpr const char* kGameApp = "com/popcap/SexyAppFramework/AndroidGameApp";
 constexpr const char* kSurfaceView = "com/popcap/SexyAppFramework/AndroidSurfaceView";
 constexpr const char* kFrameworkActivity = "com/popcap/SexyAppFramework/SexyAppFrameworkActivity";
 constexpr const char* kGameActivity = "com/popcap/PvZ2/PvZ2GameActivity";
+// PvZ2 China's fork of the framework.
+constexpr const char* kCnPackage = "com/popcap/pvz2cthddev/";
 constexpr std::uint32_t kDeadBeef = 0xDEADBEEF;
+
+// Where Android installs an APK; PvZ2 China opens its own to read its packages.
+std::string apk_path(const std::string& package) { return "/data/app/" + package + "-1/base.apk"; }
 
 std::string random_uuid() {
     std::random_device rd;
@@ -221,17 +227,50 @@ struct App {
     bool quit = false;
     std::string device_id;
 
+    // The game's Java classes: SexyAppFramework's, or PvZ2 China's fork.
+    const bool china;
+    const std::string cls_game_app, cls_surface;
+    std::unique_ptr<ApkIndex> apk;  // PvZ2 China: its assets, read out of the APK
+    std::vector<std::uint8_t> certificate;  // and the certificate it was signed with
+    GuestAddr tw_purchase = 0;              // TWPurchase.sPurchase
+    GuestAddr ui_manager = 0, audio_proxy = 0;
+    // Activity.runOnUiThread: run on the main thread before the next frame.
+    std::mutex ui_mutex;
+    std::deque<std::function<void()>> ui_tasks;
+    void run_on_ui(std::function<void()> f) {
+        std::lock_guard lock(ui_mutex);
+        ui_tasks.push_back(std::move(f));
+    }
+    void run_ui_tasks() {
+        std::deque<std::function<void()>> tasks;
+        {
+            std::lock_guard lock(ui_mutex);
+            tasks.swap(ui_tasks);
+        }
+        for (auto& t : tasks) t();
+    }
+
     App(Runtime& r, const AppOptions& o)
         : rt(r), jni(jni::get(r)), options(o), paths(android_paths(r.options().package, o.version_code)),
-          prefs(o.data_dir / "data" / "shared_prefs" / "PvZ2GameActivity.prefs") {}
+          prefs(o.data_dir / "data" / "shared_prefs" / (o.game == Game::Pvz2c ? "SexyAppActivity.prefs" : "PvZ2GameActivity.prefs")),
+          china(o.game == Game::Pvz2c),
+          cls_game_app(china ? std::string(kCnPackage) + "AndroidGameApp" : kGameApp),
+          cls_surface(china ? std::string(kCnPackage) + "AndroidSurfaceView" : kSurfaceView) {}
 
-    std::uint64_t call(const char* cls, const char* name, GuestAddr self, std::vector<std::uint64_t> args = {}) {
+    std::uint64_t call(const std::string& cls, const char* name, GuestAddr self, std::vector<std::uint64_t> args = {}) {
         log::debug("java -> native: {}.{}", cls, name);
         return jni.call_native(cls, name, self, args);
     }
     GuestAddr str(const std::string& s) { return jni.new_string(s); }
     GuestAddr nullable_str(const std::optional<std::string>& s) { return s ? jni.new_string(*s) : 0; }
 
+    void write_longs(GuestAddr array, std::initializer_list<std::int64_t> values) {
+        auto a = jni.object(array);
+        if (!a || !a->data) return;
+        std::uint64_t i = 0;
+        for (std::int64_t v : values)
+            if (i < a->length) rt.mem().write<std::int64_t>(a->data + 8 * i++, v);
+    }
     void write_ints(GuestAddr array, std::initializer_list<std::int32_t> values) {
         auto a = jni.object(array);
         if (!a || !a->data) return;
@@ -244,7 +283,7 @@ struct App {
     void try_gain_focus() {
         if (app_focused || !(got_focus_event || got_resumed_event) || !surface_exists) return;
         app_has_focus = true;  // mUIEventManager.HandleGotFocus()
-        call(kGameApp, "Native_applicationDidBecomeActive", game_app);
+        call(cls_game_app, "Native_applicationDidBecomeActive", game_app);
         app_focused = true;
         focus_state = true;
     }
@@ -255,7 +294,7 @@ struct App {
         focus_state = false;
         app_has_focus = false;
         events.cancel_touches();
-        call(kGameApp, "Native_applicationWillResignActive", game_app);
+        call(cls_game_app, "Native_applicationWillResignActive", game_app);
     }
 
     // --script: inputs and actions keyed by frame number.
@@ -287,8 +326,10 @@ struct App {
     }
 
     void implement_java();
+    void implement_java_china();
     void handle(const platform::Input& input);
     int run();
+    void start_china();
 };
 
 // Reads the script's lines from where the last call stopped. A frame written "+N" is N frames
@@ -444,69 +485,69 @@ void App::save_screenshot(const fs::path& file) {
 }
 
 void App::implement_java() {
-    auto impl = [&](const char* cls, const char* name, jni::MethodImpl f) { jni.implement(cls, name, std::move(f)); };
+    auto impl = [&](const std::string& cls, const char* name, jni::MethodImpl f) { jni.implement(cls, name, std::move(f)); };
     auto ret_str = [this](const std::string& s) { return str(s); };
 
     // --- AndroidGameApp: preferences ---------------------------------------------------
-    impl(kGameApp, "Config_ConfigKeyExists", [this](jni::JavaCall& j) -> std::uint64_t { return prefs.contains(j.string_arg(0)); });
-    impl(kGameApp, "Config_ConfigEraseKey", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "Config_ConfigKeyExists", [this](jni::JavaCall& j) -> std::uint64_t { return prefs.contains(j.string_arg(0)); });
+    impl(cls_game_app, "Config_ConfigEraseKey", [this](jni::JavaCall& j) -> std::uint64_t {
         prefs.erase(j.string_arg(0));
         return 0;
     });
-    impl(kGameApp, "Config_ConfigReadString", [this](jni::JavaCall& j) { return nullable_str(prefs.get(j.string_arg(0), 's')); });
-    impl(kGameApp, "Config_ConfigReadInteger", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "Config_ConfigReadString", [this](jni::JavaCall& j) { return nullable_str(prefs.get(j.string_arg(0), 's')); });
+    impl(cls_game_app, "Config_ConfigReadInteger", [this](jni::JavaCall& j) -> std::uint64_t {
         auto v = prefs.get(j.string_arg(0), 'i');
         return static_cast<std::uint32_t>(v ? std::stoi(*v) : 0);
     });
-    impl(kGameApp, "Config_ConfigReadBoolean", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "Config_ConfigReadBoolean", [this](jni::JavaCall& j) -> std::uint64_t {
         auto v = prefs.get(j.string_arg(0), 'b');
         return v && *v == "1";
     });
-    impl(kGameApp, "Config_ConfigWriteString", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "Config_ConfigWriteString", [this](jni::JavaCall& j) -> std::uint64_t {
         prefs.put(j.string_arg(0), 's', j.string_arg(1));
         return 1;
     });
-    impl(kGameApp, "Config_ConfigWriteInteger", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "Config_ConfigWriteInteger", [this](jni::JavaCall& j) -> std::uint64_t {
         prefs.put(j.string_arg(0), 'i', std::to_string(static_cast<std::int32_t>(j.args.at(1))));
         return 1;
     });
-    impl(kGameApp, "Config_ConfigWriteBoolean", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "Config_ConfigWriteBoolean", [this](jni::JavaCall& j) -> std::uint64_t {
         prefs.put(j.string_arg(0), 'b', (j.args.at(1) & 0xFF) ? "1" : "0");
         return 1;
     });
 
     // --- AndroidGameApp: input and the UI ----------------------------------------------
-    impl(kGameApp, "UI_ProcessEvents", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "UI_ProcessEvents", [this](jni::JavaCall& j) -> std::uint64_t {
         auto buffer = jni.object(j.args.at(0));
         if (!buffer || !buffer->data) return 0;
         return events.write(rt.mem(), buffer->data, buffer->length);
     });
-    impl(kGameApp, "UI_DidRecieveFocus", [this](jni::JavaCall&) -> std::uint64_t {
+    impl(cls_game_app, "UI_DidRecieveFocus", [this](jni::JavaCall&) -> std::uint64_t {
         if (splash_showing) log::info("the game is up (it removed the splash screen)");
         splash_showing = false;
         return 0;
     });
-    impl(kGameApp, "UI_UpdateSelection", [](jni::JavaCall&) -> std::uint64_t { return 0; });
-    impl(kGameApp, "Device_IsKeyboardShowing", [this](jni::JavaCall&) -> std::uint64_t { return keyboard_showing; });
+    impl(cls_game_app, "UI_UpdateSelection", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_game_app, "Device_IsKeyboardShowing", [this](jni::JavaCall&) -> std::uint64_t { return keyboard_showing; });
     for (const char* name : {"Device_ShowKeyboard", "Device_ShowNumericKeyboard"})
-        impl(kGameApp, name, [this](jni::JavaCall&) -> std::uint64_t {
+        impl(cls_game_app, name, [this](jni::JavaCall&) -> std::uint64_t {
             keyboard_showing = true;
             window->set_text_input(true);
             return 0;
         });
-    impl(kGameApp, "Device_HideKeyboard", [this](jni::JavaCall&) -> std::uint64_t {
+    impl(cls_game_app, "Device_HideKeyboard", [this](jni::JavaCall&) -> std::uint64_t {
         keyboard_showing = false;
         window->set_text_input(false);
         return 0;
     });
-    impl(kGameApp, "Device_ForceRotateToOrientation", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_game_app, "Device_ForceRotateToOrientation", [](jni::JavaCall&) -> std::uint64_t { return 0; });
     for (const char* name : {"Device_ExitToHome", "Device_KillApplication"})
-        impl(kGameApp, name, [this](jni::JavaCall& j) -> std::uint64_t {
+        impl(cls_game_app, name, [this](jni::JavaCall& j) -> std::uint64_t {
             log::info("the game asked to close ({})", j.member.name);
             quit = true;
             return 0;
         });
-    impl(kGameApp, "Web_SysOpenURL", [](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "Web_SysOpenURL", [](jni::JavaCall& j) -> std::uint64_t {
         std::string url = j.string_arg(0);
         log::info("opening {} in the browser", url);
 #if SDL_VERSION_ATLEAST(2, 0, 14)
@@ -514,74 +555,74 @@ void App::implement_java() {
 #endif
         return 1;
     });
-    impl(kGameApp, "isValidUrl", [](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "isValidUrl", [](jni::JavaCall& j) -> std::uint64_t {
         std::string url = j.string_arg(0);
         return url.starts_with("http://") || url.starts_with("https://");
     });
-    impl(kGameApp, "DEBUG_PauseInJava", [](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_game_app, "DEBUG_PauseInJava", [](jni::JavaCall& j) -> std::uint64_t {
         log::warn("[PauseInJava] {}({})", j.string_arg(0), static_cast<std::int32_t>(j.args.at(1)));
         return 0;
     });
 
     // --- AndroidGameApp: device and app information ------------------------------------
     const std::string package = rt.options().package;
-    impl(kGameApp, "Info_SysGetProductVersion", [this](jni::JavaCall&) -> std::uint64_t { return static_cast<std::uint32_t>(options.version_code); });
-    impl(kGameApp, "Info_SysGetProductVersionString", [this, ret_str](jni::JavaCall&) { return ret_str(options.version_name); });
-    impl(kGameApp, "GetBuildURL", [ret_str](jni::JavaCall&) { return ret_str(""); });
-    impl(kGameApp, "Info_SysGetPackageName", [ret_str, package](jni::JavaCall&) { return ret_str(package); });
-    impl(kGameApp, "Info_SysGetActivityName", [ret_str](jni::JavaCall&) { return ret_str("com.popcap.PvZ2.PvZ2GameActivity"); });
-    impl(kGameApp, "Info_SysGetIntentExtraDataString", [](jni::JavaCall&) -> std::uint64_t { return 0; });
-    impl(kGameApp, "Info_SysGetUserCurrencySymbol", [ret_str](jni::JavaCall&) { return ret_str("$"); });
-    impl(kGameApp, "Info_SysGetUserCurrencyCode", [ret_str](jni::JavaCall&) { return ret_str("USD"); });
-    impl(kGameApp, "Info_SysGetUserLocale", [ret_str](jni::JavaCall&) { return ret_str("en_US"); });
-    impl(kGameApp, "Info_SysGetCountryCodeString", [ret_str](jni::JavaCall&) { return ret_str("US"); });
-    impl(kGameApp, "Device_GetDeviceName", [ret_str](jni::JavaCall&) { return ret_str("rfu PC"); });
-    impl(kGameApp, "Device_IsTablet", [](jni::JavaCall&) -> std::uint64_t { return 0; });
-    impl(kGameApp, "Device_GetCurrentUIOrientation", [](jni::JavaCall&) -> std::uint64_t { return 4; });  // landscape left
-    impl(kGameApp, "Util_GetUUIDString", [ret_str](jni::JavaCall&) { return ret_str(random_uuid()); });
-    impl(kGameApp, "Diag_GetDeviceID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });
-    impl(kGameApp, "Diag_GetIDForAdvertisers", [ret_str](jni::JavaCall&) { return ret_str("00000000-0000-0000-0000-000000000000"); });
-    impl(kGameApp, "Diag_GetOSVersion", [ret_str](jni::JavaCall&) { return ret_str("11"); });
-    impl(kGameApp, "Diag_GetHardwareModel", [ret_str](jni::JavaCall&) { return ret_str("rfu PC"); });
-    impl(kGameApp, "Diag_GetMemoryAvailable", [](jni::JavaCall&) -> std::uint64_t { return 4ull << 30; });
-    impl(kGameApp, "Diag_GetMemoryUsed", [this](jni::JavaCall&) -> std::uint64_t { return rt.heap().bytes_in_use(); });
-    impl(kGameApp, "Diag_GetMemoryTotal", [](jni::JavaCall&) -> std::uint64_t { return 8ull << 30; });
+    impl(cls_game_app, "Info_SysGetProductVersion", [this](jni::JavaCall&) -> std::uint64_t { return static_cast<std::uint32_t>(options.version_code); });
+    impl(cls_game_app, "Info_SysGetProductVersionString", [this, ret_str](jni::JavaCall&) { return ret_str(options.version_name); });
+    impl(cls_game_app, "GetBuildURL", [ret_str](jni::JavaCall&) { return ret_str(""); });
+    impl(cls_game_app, "Info_SysGetPackageName", [ret_str, package](jni::JavaCall&) { return ret_str(package); });
+    impl(cls_game_app, "Info_SysGetActivityName", [ret_str](jni::JavaCall&) { return ret_str("com.popcap.PvZ2.PvZ2GameActivity"); });
+    impl(cls_game_app, "Info_SysGetIntentExtraDataString", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_game_app, "Info_SysGetUserCurrencySymbol", [ret_str](jni::JavaCall&) { return ret_str("$"); });
+    impl(cls_game_app, "Info_SysGetUserCurrencyCode", [ret_str](jni::JavaCall&) { return ret_str("USD"); });
+    impl(cls_game_app, "Info_SysGetUserLocale", [ret_str](jni::JavaCall&) { return ret_str("en_US"); });
+    impl(cls_game_app, "Info_SysGetCountryCodeString", [ret_str](jni::JavaCall&) { return ret_str("US"); });
+    impl(cls_game_app, "Device_GetDeviceName", [ret_str](jni::JavaCall&) { return ret_str("rfu PC"); });
+    impl(cls_game_app, "Device_IsTablet", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_game_app, "Device_GetCurrentUIOrientation", [](jni::JavaCall&) -> std::uint64_t { return 4; });  // landscape left
+    impl(cls_game_app, "Util_GetUUIDString", [ret_str](jni::JavaCall&) { return ret_str(random_uuid()); });
+    impl(cls_game_app, "Diag_GetDeviceID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });
+    impl(cls_game_app, "Diag_GetIDForAdvertisers", [ret_str](jni::JavaCall&) { return ret_str("00000000-0000-0000-0000-000000000000"); });
+    impl(cls_game_app, "Diag_GetOSVersion", [ret_str](jni::JavaCall&) { return ret_str("11"); });
+    impl(cls_game_app, "Diag_GetHardwareModel", [ret_str](jni::JavaCall&) { return ret_str("rfu PC"); });
+    impl(cls_game_app, "Diag_GetMemoryAvailable", [](jni::JavaCall&) -> std::uint64_t { return 4ull << 30; });
+    impl(cls_game_app, "Diag_GetMemoryUsed", [this](jni::JavaCall&) -> std::uint64_t { return rt.heap().bytes_in_use(); });
+    impl(cls_game_app, "Diag_GetMemoryTotal", [](jni::JavaCall&) -> std::uint64_t { return 8ull << 30; });
 
     // --- AndroidGameApp: storage ---------------------------------------------------------
-    impl(kGameApp, "Device_GetCachesDir", [this, ret_str](jni::JavaCall&) { return ret_str(paths.internal + "/cache"); });
-    impl(kGameApp, "Resources_GetResourceFolder", [this, ret_str](jni::JavaCall&) { return ret_str(paths.internal + "/files"); });
+    impl(cls_game_app, "Device_GetCachesDir", [this, ret_str](jni::JavaCall&) { return ret_str(paths.internal + "/cache"); });
+    impl(cls_game_app, "Resources_GetResourceFolder", [this, ret_str](jni::JavaCall&) { return ret_str(paths.internal + "/files"); });
     for (const char* name : {"Resources_GetUserDataFolder", "Resources_GetCacheDataFolder", "Resources_GetAppSupportDataFolder"})
-        impl(kGameApp, name, [this, ret_str](jni::JavaCall&) { return ret_str(paths.external + "/files"); });
-    impl(kGameApp, "Resources_GetExternalStorageDirectory", [ret_str](jni::JavaCall&) { return ret_str("/storage/emulated/0"); });
-    impl(kGameApp, "Resources_GetAssetFileInfo", [](jni::JavaCall&) -> std::uint64_t { return 0; });  // the APK has no game assets
-    impl(kGameApp, "Resources_GetAssetFileSize", [](jni::JavaCall&) -> std::uint64_t { return ~0ull; });
-    impl(kGameApp, "Resources_GetFileSystemBlockCount", [](jni::JavaCall&) -> std::uint64_t { return 64ull << 20; });
-    impl(kGameApp, "Resources_GetFileSystemBlocksFree", [](jni::JavaCall&) -> std::uint64_t { return 32ull << 20; });
-    impl(kGameApp, "Resources_GetFileSystemBlockSize", [](jni::JavaCall&) -> std::uint64_t { return 4096; });
+        impl(cls_game_app, name, [this, ret_str](jni::JavaCall&) { return ret_str(paths.external + "/files"); });
+    impl(cls_game_app, "Resources_GetExternalStorageDirectory", [ret_str](jni::JavaCall&) { return ret_str("/storage/emulated/0"); });
+    impl(cls_game_app, "Resources_GetAssetFileInfo", [](jni::JavaCall&) -> std::uint64_t { return 0; });  // the APK has no game assets
+    impl(cls_game_app, "Resources_GetAssetFileSize", [](jni::JavaCall&) -> std::uint64_t { return ~0ull; });
+    impl(cls_game_app, "Resources_GetFileSystemBlockCount", [](jni::JavaCall&) -> std::uint64_t { return 64ull << 20; });
+    impl(cls_game_app, "Resources_GetFileSystemBlocksFree", [](jni::JavaCall&) -> std::uint64_t { return 32ull << 20; });
+    impl(cls_game_app, "Resources_GetFileSystemBlockSize", [](jni::JavaCall&) -> std::uint64_t { return 4096; });
 
     // --- AndroidSurfaceView ---------------------------------------------------------------
-    impl(kSurfaceView, "Graphics_SetFramerate", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_surface, "Graphics_SetFramerate", [this](jni::JavaCall& j) -> std::uint64_t {
         framerate = std::max(1, static_cast<std::int32_t>(j.args.at(0)));
         return 0;
     });
-    impl(kSurfaceView, "EglContextIsValid", [](jni::JavaCall&) -> std::uint64_t { return 1; });
-    impl(kSurfaceView, "Graphics_GetGLViewSysFBO", [](jni::JavaCall&) -> std::uint64_t { return 0; });
-    impl(kSurfaceView, "Graphics_CanSetGLViewScaleFactor", [](jni::JavaCall&) -> std::uint64_t { return 1; });
-    impl(kSurfaceView, "Graphics_GetGLViewScaleFactor", [this](jni::JavaCall&) -> std::uint64_t { return std::bit_cast<std::uint32_t>(view_scale); });
-    impl(kSurfaceView, "Graphics_SetGLViewScaleFactor", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_surface, "EglContextIsValid", [](jni::JavaCall&) -> std::uint64_t { return 1; });
+    impl(cls_surface, "Graphics_GetGLViewSysFBO", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_surface, "Graphics_CanSetGLViewScaleFactor", [](jni::JavaCall&) -> std::uint64_t { return 1; });
+    impl(cls_surface, "Graphics_GetGLViewScaleFactor", [this](jni::JavaCall&) -> std::uint64_t { return std::bit_cast<std::uint32_t>(view_scale); });
+    impl(cls_surface, "Graphics_SetGLViewScaleFactor", [this](jni::JavaCall& j) -> std::uint64_t {
         view_scale = j.float_arg(0);
         return 0;
     });
     for (const char* name : {"Graphics_GetScreenSizeInPixels", "Graphics_GetScreenSizeInPoints"})
-        impl(kSurfaceView, name, [this](jni::JavaCall& j) -> std::uint64_t {
+        impl(cls_surface, name, [this](jni::JavaCall& j) -> std::uint64_t {
             write_ints(j.args.at(0), {window->width(), window->height()});
             return 0;
         });
-    impl(kSurfaceView, "Graphics_GetSafeRect", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl(cls_surface, "Graphics_GetSafeRect", [this](jni::JavaCall& j) -> std::uint64_t {
         write_ints(j.args.at(0), {0, 0, 0, 0});
         return 0;
     });
-    impl(kSurfaceView, "Graphics_GetPointSizeInPixels", [](jni::JavaCall&) -> std::uint64_t { return std::bit_cast<std::uint32_t>(1.0f); });
+    impl(cls_surface, "Graphics_GetPointSizeInPixels", [](jni::JavaCall&) -> std::uint64_t { return std::bit_cast<std::uint32_t>(1.0f); });
 
     // --- AndroidHttpProxy -----------------------------------------------------------------
     impl("com/popcap/SexyAppFramework/AndroidHttpProxy", "GetNetworkStatus", [this](jni::JavaCall&) -> std::uint64_t {
@@ -623,6 +664,251 @@ void App::implement_java() {
     }
 }
 
+// PvZ2 China's Java side (com.popcap.pvz2cthddev.*), where it differs from SexyAppFramework's:
+// implement_java() has answered the methods both share, under this game's class names.
+void App::implement_java_china() {
+    auto impl = [&](const std::string& cls, const char* name, jni::MethodImpl f) { jni.implement(cls, name, std::move(f)); };
+    auto ret_str = [this](const std::string& s) { return str(s); };
+    const std::string pkg = kCnPackage;
+    const std::string package = rt.options().package;
+    const std::string files = paths.internal + "/files", external_files = paths.external + "/files";
+
+    // --- AndroidGameApp ----------------------------------------------------------------------
+    // The version code comes back as a string here.
+    impl(cls_game_app, "Info_SysGetProductVersion", [this, ret_str](jni::JavaCall&) { return ret_str(std::to_string(options.version_code)); });
+    impl(cls_game_app, "Info_SysGetUserCurrencySymbol", [ret_str](jni::JavaCall&) { return ret_str("\xC2\xA5"); });  // ¥
+    impl(cls_game_app, "Util_GetPackageName", [ret_str, package](jni::JavaCall&) { return ret_str(package); });
+    impl(cls_game_app, "Util_GetElapsedRealtime", [](jni::JavaCall&) -> std::uint64_t {
+        using namespace std::chrono;
+        return static_cast<std::uint64_t>(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+    });
+    // The user data, cache and app support folders are all Context.getFilesDir() here, and only the
+    // "external files" folder is on the SD card.
+    for (const char* name : {"Resources_GetUserDataFolder", "GetUserDataFolder", "Resources_GetCacheDataFolder", "Resources_GetAppSupportDataFolder"})
+        impl(cls_game_app, name, [ret_str, files](jni::JavaCall&) { return ret_str(files); });
+    for (const char* name : {"Resources_GetExternalFilesDirectory", "GetExternalFilesDirectory"})
+        impl(cls_game_app, name, [ret_str, external_files](jni::JavaCall&) { return ret_str(external_files); });
+    // Resources_GetAssetFileInfo(name, long[2] {offset, length}): a file that exists is itself, at
+    // offset 0; anything else is an asset, "<6 characters>/<path>" -> "assets/<path>.smf" in the
+    // APK (AndroidAssetUtils.GetAssetNameFromFileName), and the answer is the APK's path.
+    auto asset_name = [](std::string name) {
+        if (name.size() <= 6) return std::string();
+        name = name.substr(6);
+        std::replace(name.begin(), name.end(), '\\', '/');
+        return name + ".smf";
+    };
+    impl(cls_game_app, "Resources_GetAssetFileInfo", [this, asset_name](jni::JavaCall& j) -> std::uint64_t {
+        std::string name = j.string_arg(0);
+        if (name.empty()) return 0;
+        std::error_code ec;
+        if (auto host = rt.vfs().to_host_read(name); host && fs::is_regular_file(*host, ec)) {
+            write_longs(j.args.at(1), {0, static_cast<std::int64_t>(fs::file_size(*host, ec))});
+            return str(name);
+        }
+        auto entry = apk ? apk->find("assets/" + asset_name(name)) : std::nullopt;
+        if (!entry || !entry->stored) {
+            log::debug("asset {} ({}) isn't in the APK", name, asset_name(name));
+            return 0;
+        }
+        write_longs(j.args.at(1), {static_cast<std::int64_t>(entry->offset), static_cast<std::int64_t>(entry->size)});
+        return str(apk_path(rt.options().package));
+    });
+    impl(cls_game_app, "Resources_GetAssetFileSize", [this, asset_name](jni::JavaCall& j) -> std::uint64_t {
+        auto entry = apk ? apk->find("assets/" + asset_name(j.string_arg(0))) : std::nullopt;
+        return entry && entry->stored ? entry->size : ~0ull;
+    });
+    impl(cls_game_app, "Resources_InstallApk", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    for (const char* name : {"Device_ShowKeyboard", "Device_HideKeyboard"})
+        impl(cls_game_app, name, [this, name](jni::JavaCall&) -> std::uint64_t {
+            keyboard_showing = name[7] == 'S';
+            window->set_text_input(keyboard_showing);
+            return 1;
+        });
+    impl(cls_game_app, "Device_IsSupportedUIOrientation", [](jni::JavaCall& j) -> std::uint64_t { return j.args.at(0) == 3 || j.args.at(0) == 4; });
+    for (const char* name : {"Device_ExitApp", "UI_ShowExitGame"})
+        impl(cls_game_app, name, [this](jni::JavaCall& j) -> std::uint64_t {
+            log::info("the game asked to close ({})", j.member.name);
+            quit = true;
+            return 0;
+        });
+    impl(cls_game_app, "UI_ShowAlertDialog", [](jni::JavaCall& j) -> std::uint64_t {
+        log::warn("the game shows a dialog: {}: {} [{}]", j.string_arg(0), j.string_arg(1), j.string_arg(2));
+        return 0;
+    });
+    impl(cls_game_app, "UI_Dip2Pixels", [](jni::JavaCall& j) -> std::uint64_t { return j.args.at(0); });
+    impl(cls_game_app, "SetFPS", [this](jni::JavaCall& j) -> std::uint64_t {
+        framerate = (j.args.at(0) & 0xFF) ? 60 : 30;
+        return 0;
+    });
+    impl(cls_game_app, "IsHighFPS", [this](jni::JavaCall&) -> std::uint64_t { return framerate > 30; });
+    impl(cls_game_app, "IsEmulator", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_game_app, "Util_IsAutosmoking", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_game_app, "Util_CallNativeCrashed", [](jni::JavaCall& j) -> std::uint64_t {
+        log::error("the game reports a crash: {}", j.string_arg(0));
+        return 0;
+    });
+    for (const char* name : {"LogBugly", "LogBuglyUserId", "UploadTracking", "Util_NotifyDecompressStage", "Util_StartPNS", "UI_StartShowProgressbar",
+                             "UI_FinishShowProgressBar", "Device_Vibrate", "Device_VibrateWithPattern", "Device_CancelVibrate"})
+        impl(cls_game_app, name, [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_game_app, "Device_CopyToClipBoard", [](jni::JavaCall& j) -> std::uint64_t {
+        SDL_SetClipboardText(j.string_arg(0).c_str());
+        return 0;
+    });
+    impl(cls_game_app, "Config_ConfigReadStringEx", [this](jni::JavaCall& j) { return nullable_str(prefs.get(j.string_arg(0), 's')); });
+    // Device details. No phone, no SIM card, no notch.
+    for (const char* name : {"Diag_GetDeviceIMEI", "Diag_GetDeviceIMSI"})
+        impl(cls_game_app, name, [ret_str](jni::JavaCall&) { return ret_str(""); });
+    impl(cls_game_app, "Diag_GetUniqueCharacterID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });
+    impl(cls_game_app, "Diag_GetPrimaryMACAddress", [ret_str](jni::JavaCall&) { return ret_str("02:00:00:00:00:00"); });
+    impl(cls_game_app, "Diag_GetDeviceBRAND", [ret_str](jni::JavaCall&) { return ret_str("rfu"); });
+    impl(cls_game_app, "Diag_GetDeviceMODEL", [ret_str](jni::JavaCall&) { return ret_str("rfu PC"); });
+    impl(cls_game_app, "Diag_GetNetworkType", [this, ret_str](jni::JavaCall&) { return ret_str(rt.options().network ? "WIFI" : ""); });
+    for (const char* name : {"Diag_GetMobileCardType", "Diag_GetSimProvince", "Diag_GetNotchHeight", "Diag_GetNotchWidth", "Diag_HasNotchInScreen", "Diag_IsBigRCorner"})
+        impl(cls_game_app, name, [](jni::JavaCall&) -> std::uint64_t { return 0; });
+    impl(cls_game_app, "Diag_GetAvailMemory", [](jni::JavaCall&) -> std::uint64_t { return 4ull << 30; });
+    impl(cls_game_app, "Diag_GetUsedMemory", [this](jni::JavaCall&) -> std::uint64_t { return rt.heap().bytes_in_use(); });
+    impl(cls_game_app, "getStatusBarHeight", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+
+    // --- AndroidSurfaceView --------------------------------------------------------------------
+    impl(cls_surface, "Graphics_IsOpenGLES20", [](jni::JavaCall&) -> std::uint64_t { return 1; });
+    impl(cls_surface, "Graphics_GetOpenGLESVersion", [](jni::JavaCall&) -> std::uint64_t { return 2; });
+    impl(cls_surface, "IsInitailized", [](jni::JavaCall&) -> std::uint64_t { return 1; });
+    impl(cls_surface, "HasDrawnFirstFrame", [this](jni::JavaCall&) -> std::uint64_t { return !splash_showing; });
+    impl(cls_surface, "IsHighFPS", [this](jni::JavaCall&) -> std::uint64_t { return framerate > 30; });
+    impl(cls_surface, "SetFPS", [this](jni::JavaCall& j) -> std::uint64_t {
+        framerate = (j.args.at(0) & 0xFF) ? 60 : 30;
+        return 0;
+    });
+
+    // --- PackageManager.getPackageInfo: the game checks the APK's signing certificate
+    // (signatures[0].hashCode()), so it gets the real one, read from the APK. --------------------
+    impl("android/content/pm/PackageManager", "getPackageInfo", [this](jni::JavaCall& j) -> std::uint64_t {
+        GuestAddr info = jni.new_instance("android/content/pm/PackageInfo");
+        jni.set_field(info, "versionCode", static_cast<std::uint32_t>(options.version_code));
+        jni.set_field(info, "versionName", str(options.version_name));
+        jni.set_field(info, "packageName", str(rt.options().package));
+        if (j.args.size() > 1 && (j.args[1] & 0x40)) {  // GET_SIGNATURES
+            GuestAddr sig = jni.new_instance("android/content/pm/Signature");
+            GuestAddr list = jni.new_array('L', 1, "android/content/pm/Signature");
+            jni.set_element(list, 0, sig);
+            jni.set_field(info, "signatures", list);
+            if (certificate.empty()) log::warn("the game checks the APK's signature, and there's no certificate in the APK");
+        }
+        return info;
+    });
+    impl("android/content/pm/Signature", "hashCode", [this](jni::JavaCall&) -> std::uint64_t {
+        std::int32_t h = 1;  // Arrays.hashCode(byte[])
+        for (std::uint8_t b : certificate) h = static_cast<std::int32_t>(31u * static_cast<std::uint32_t>(h) + static_cast<std::uint32_t>(static_cast<std::int8_t>(b)));
+        return static_cast<std::uint32_t>(h);
+    });
+    impl("android/content/pm/Signature", "toByteArray", [this](jni::JavaCall&) -> std::uint64_t {
+        GuestAddr a = jni.new_array('B', certificate.size());
+        rt.mem().write_bytes(jni.array_data(a), certificate.data(), certificate.size());
+        return a;
+    });
+    impl("android/content/pm/Signature", "toCharsString", [this](jni::JavaCall&) -> std::uint64_t {
+        std::string hex;
+        for (std::uint8_t b : certificate) hex += fmt::format("{:02x}", b);
+        return str(hex);
+    });
+
+    // --- TWPurchase: Talkweb's offline SDK, which the game starts (InitializeSDK) and logs into
+    // before it finishes loading. There's no SDK here: it starts at once and logs in as a guest
+    // (its code 3006), as TWPurchase$1$1 and $1$1$1 answer the game, on the UI thread. ------------
+    const std::string tw = pkg + "TWPurchase";
+    impl(tw, "<init>", [this, tw](jni::JavaCall& j) -> std::uint64_t {
+        GuestAddr self = jni.new_instance(tw);
+        jni.set_field(self, "mNativeDriverPtr", j.args.at(0));
+        tw_purchase = self;
+        return self;
+    });
+    impl(tw, "instance", [this](jni::JavaCall&) -> std::uint64_t { return tw_purchase; });
+    impl(tw, "InitializeSDK", [this, tw](jni::JavaCall& j) -> std::uint64_t {
+        GuestAddr self = j.self;
+        log::info("Talkweb SDK: starting (app id {}); logging in as a guest, offline", j.string_arg(0));
+        run_on_ui([this, tw, self] {
+            std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
+            call(tw, "Native_SDKInitStart", self, {driver});
+            call(tw, "Native_SDKInitEnd", self, {driver, 0});
+            call(tw, "Native_SDKLoginStart", self, {driver});
+            call(tw, "Native_SDKLoginEnd", self, {driver, 0, str("rfu-offline-" + device_id)});
+        });
+        return 0;
+    });
+    impl(tw, "GetDeviceID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });
+    impl(tw, "GetUniqueID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });
+    impl(tw, "GetUniqueCharacterID", [ret_str](jni::JavaCall&) {
+        std::string id = random_uuid();
+        id.erase(std::remove(id.begin(), id.end(), '-'), id.end());
+        return ret_str(id);
+    });
+    for (const char* name : {"GetSignature", "GetChannelID", "GetTWRequestHead", "GetDeclare", "GetGameCenterUrl", "GetChannelUpdateUrl"})
+        impl(tw, name, [ret_str](jni::JavaCall&) { return ret_str(""); });
+
+    // --- AndroidHttpProxy --------------------------------------------------------------------
+    impl(pkg + "AndroidHttpProxy", "GetNetworkStatus", [this](jni::JavaCall&) -> std::uint64_t { return rt.options().network ? 2 : 0; });
+    impl(pkg + "AndroidHttpProxy", "Startup", [](jni::JavaCall&) -> std::uint64_t { return 1; });
+
+    // --- SexyAppFrameworkActivity (statics and the instance's methods) --------------------------
+    for (const std::string cls : {pkg + "SexyAppFrameworkActivity", pkg + "SexyAppActivity"}) {
+        impl(cls, "instance", [this](jni::JavaCall&) -> std::uint64_t { return activity; });
+        impl(cls, "getGameApp", [this](jni::JavaCall&) -> std::uint64_t { return game_app; });
+        impl(cls, "getSurfaceView", [this](jni::JavaCall&) -> std::uint64_t { return gl_view; });
+        impl(cls, "getUIEventMgr", [this](jni::JavaCall&) -> std::uint64_t { return ui_manager; });
+        impl(cls, "SplashScreenShowing", [this](jni::JavaCall&) -> std::uint64_t { return splash_showing; });
+        impl(cls, "RemoveSplashScreen", [this](jni::JavaCall&) -> std::uint64_t {
+            splash_showing = false;
+            return 0;
+        });
+        impl(cls, "IsEnablePNS", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+        impl(cls, "IsFoldableDevice", [](jni::JavaCall&) -> std::uint64_t { return 0; });
+        impl(cls, "ShowExitGame", [this](jni::JavaCall&) -> std::uint64_t {
+            quit = true;
+            return 0;
+        });
+    }
+}
+
+// SexyAppActivity.onCreate (SexyAppFrameworkActivity's), onStart and onResume, then the GL thread
+// and the first window focus, in PvZ2 China's order.
+void App::start_china() {
+    const std::string pkg = kCnPackage;
+    if (!options.apk.empty()) {
+        apk = std::make_unique<ApkIndex>(options.apk);
+        certificate = apk->signing_certificate();
+        log::info("APK: {} entries, signed with a {}-byte certificate", apk->size(), certificate.size());
+    } else {
+        log::warn("no --apk: the game's packages in its assets folder can't be found");
+    }
+    activity = jni.new_instance(pkg + "SexyAppActivity");
+    ui_manager = jni.new_instance(pkg + "AndroidUIEventManager");
+    gl_view = jni.new_instance(cls_surface);
+    game_app = jni.new_instance(cls_game_app);
+    GuestAddr http_proxy = jni.new_instance(pkg + "AndroidHttpProxy");
+    GuestAddr package_manager = jni.new_instance("android/content/pm/PackageManager");
+    framerate = 30;  // AndroidRenderer: 33 ms a frame unless the game asks for high FPS
+
+    // onCreate: the GL view, then AndroidGameApp's constructor.
+    window = std::make_unique<platform::Window>(options.window);
+    if (!call(cls_game_app, "Native_GameAppInitialize", game_app, {gl_view, http_proxy, package_manager}))
+        log::warn("Native_GameAppInitialize returned false");
+    call(cls_game_app, "Native_applicationWillFinishLaunching", game_app, {0});  // onActivityCreate (no command line)
+    call(cls_game_app, "Native_applicationDidFinishLaunching", game_app);        // onStart -> onActivityStart
+
+    // onResume -> onActivityResume: TryGainFocus, then the two notifications.
+    got_resumed_event = true;
+    focus_state = app_has_focus = app_focused = true;
+    call(cls_game_app, "Native_applicationWillBecomeForeground", game_app);
+    call(cls_game_app, "Native_applicationDidBecomeActive", game_app);
+
+    // The GL thread: onSurfaceCreated, onSurfaceChanged (once only, in this renderer).
+    call(cls_surface, "Native_onSurfaceCreated", gl_view);
+    call(cls_surface, "Native_onSurfaceChanged", gl_view,
+         {static_cast<std::uint32_t>(window->width()), static_cast<std::uint32_t>(window->height())});
+    surface_exists = true;
+    got_focus_event = true;  // onWindowFocusChanged(true): already focused
+}
+
 void App::handle(const platform::Input& input) {
     std::visit(
         [this](const auto& in) {
@@ -630,11 +916,18 @@ void App::handle(const platform::Input& input) {
             if constexpr (std::is_same_v<T, platform::QuitInput>) {
                 quit = true;
             } else if constexpr (std::is_same_v<T, platform::ResizeInput>) {
-                call(kSurfaceView, "Native_onSurfaceChanged", gl_view, {static_cast<std::uint32_t>(in.width), static_cast<std::uint32_t>(in.height)});
+                call(cls_surface, "Native_onSurfaceChanged", gl_view, {static_cast<std::uint32_t>(in.width), static_cast<std::uint32_t>(in.height)});
             } else if constexpr (std::is_same_v<T, platform::FocusInput>) {
                 // Losing window focus on a PC is not the same as the app going to the
                 // background, so only the focus notification is passed on.
-                call(kGameApp, "Native_NotifyFocusChange", game_app, {in.focused ? 1u : 0u});
+                if (!china) {
+                    call(cls_game_app, "Native_NotifyFocusChange", game_app, {in.focused ? 1u : 0u});
+                } else if (in.focused) {
+                    call(cls_game_app, "Native_applicationGainFocus", game_app);  // onWindowFocusChanged(true), focus lost only
+                } else {
+                    call(cls_game_app, "Native_applicationLoseFocus", game_app);  // the activity is still resumed
+                    events.cancel_touches();
+                }
             } else if constexpr (std::is_same_v<T, platform::BackInput>) {
                 events.back();
             } else if constexpr (std::is_same_v<T, platform::TouchInput>) {
@@ -666,8 +959,12 @@ int App::run() {
         prefs.put("rfu.device_id", 's', device_id);
     }
     implement_java();
-    implement_http(rt, rt.options().network);
+    if (china) implement_java_china();
+    implement_http(rt, rt.options().network, china ? std::string(kCnPackage) + "AndroidHttpTransaction" : "com/popcap/SexyAppFramework/AndroidHttpTransaction");
 
+    if (china) {
+        start_china();
+    } else {
     // The objects the game's Java side creates.
     activity = jni.new_instance(kGameActivity);
     gl_view = jni.new_instance(kSurfaceView);
@@ -684,31 +981,32 @@ int App::run() {
 
     // PvZ2GameActivity.onCreate -> launchGame(): the GL view, then AndroidGameApp's constructor.
     window = std::make_unique<platform::Window>(options.window);
-    if (!call(kGameApp, "Native_GameAppInitialize", game_app,
+    if (!call(cls_game_app, "Native_GameAppInitialize", game_app,
               {gl_view, http_proxy, cloud, play_connect, achievements, leaderboard, notification}))
         log::warn("Native_GameAppInitialize returned false");
-    call(kGameApp, "Native_applicationWillFinishLaunching", game_app, {0});  // onActivityCreate (no command line)
-    call(kGameApp, "Native_applicationDidFinishLaunching", game_app);        // onActivityStart
+    call(cls_game_app, "Native_applicationWillFinishLaunching", game_app, {0});  // onActivityCreate (no command line)
+    call(cls_game_app, "Native_applicationDidFinishLaunching", game_app);        // onActivityStart
 
     // onResume
-    call(kGameApp, "Native_NotifyAudioGainedFocus", game_app);
+    call(cls_game_app, "Native_NotifyAudioGainedFocus", game_app);
     got_resumed_event = true;
-    call(kGameApp, "Native_NotifyAppRunning", game_app, {1});
-    call(kGameApp, "Native_applicationWillBecomeForeground", game_app);
+    call(cls_game_app, "Native_NotifyAppRunning", game_app, {1});
+    call(cls_game_app, "Native_applicationWillBecomeForeground", game_app);
     try_gain_focus();
 
     // The GL thread starts: onSurfaceCreated, onSurfaceChanged; then SurfaceHolder's
     // surfaceCreated reaches AndroidGameApp.onSurfaceCreated.
-    call(kSurfaceView, "Native_onSurfaceCreated", gl_view);
-    call(kSurfaceView, "Native_onSurfaceChanged", gl_view,
+    call(cls_surface, "Native_onSurfaceCreated", gl_view);
+    call(cls_surface, "Native_onSurfaceChanged", gl_view,
          {static_cast<std::uint32_t>(window->width()), static_cast<std::uint32_t>(window->height())});
     surface_exists = true;
-    call(kGameApp, "Native_NotifySurfaceChange", game_app, {1});
+    call(cls_game_app, "Native_NotifySurfaceChange", game_app, {1});
     try_gain_focus();
     // onWindowFocusChanged(true)
-    call(kGameApp, "Native_NotifyFocusChange", game_app, {1});
+    call(cls_game_app, "Native_NotifyFocusChange", game_app, {1});
     got_focus_event = true;
     try_gain_focus();
+    }
 
     // AndroidRenderer.onDrawFrame, forever.
     if (!options.script.empty()) load_script(options.script, 0);
@@ -743,7 +1041,8 @@ int App::run() {
             else actions.push_back(it->second.action);
         }
         if (quit) break;
-        call(kSurfaceView, "PumpMessageQueue", gl_view);
+        if (!china) call(cls_surface, "PumpMessageQueue", gl_view);
+        run_ui_tasks();
         if (options.game_frame && !splash_showing) options.game_frame();
         clear(0x4000);  // GL_COLOR_BUFFER_BIT, as the Java renderer does before every frame
         if (focus_state) {
@@ -751,7 +1050,12 @@ int App::run() {
             auto elapsed = clock::now() - last_frame;
             if (elapsed < frame_time) std::this_thread::sleep_for(frame_time - elapsed);
             last_frame = clock::now();
-            call(kSurfaceView, "Native_onDrawFrame", gl_view);
+            call(cls_surface, "Native_onDrawFrame", gl_view);
+            // PvZ2 China's renderer takes its splash screen down after the tenth frame.
+            if (china && splash_showing && frames >= 10) {
+                splash_showing = false;
+                log::info("the game is up (the splash screen is gone)");
+            }
             if (options.overlay && !splash_showing) window->draw_hints(options.overlay());
         }
         ++frames;
@@ -776,12 +1080,21 @@ int App::run() {
     }
 
     // Closing the window: onPause, then onDestroy. The game saves on the way.
+    if (china) {
+        // AndroidGameApp.onActivityPause, then onActivityStop and onActivityDestroy.
+        got_resumed_event = false;
+        call(cls_game_app, "Native_applicationWillResignActive", game_app);
+        call(cls_game_app, "Native_applicationDidEnterBackground", game_app);
+        focus_state = app_has_focus = app_focused = false;
+        call(cls_game_app, "Native_applicationWillTerminate", game_app);
+        return 0;
+    }
     got_resumed_event = false;
-    call(kGameApp, "Native_NotifyAppRunning", game_app, {0});
+    call(cls_game_app, "Native_NotifyAppRunning", game_app, {0});
     try_lose_focus();
-    call(kGameApp, "Native_applicationDidEnterBackground", game_app);
-    call(kSurfaceView, "PumpMessageQueue", gl_view);
-    call(kGameApp, "Native_applicationWillTerminate", game_app);
+    call(cls_game_app, "Native_applicationDidEnterBackground", game_app);
+    call(cls_surface, "PumpMessageQueue", gl_view);
+    call(cls_game_app, "Native_applicationWillTerminate", game_app);
     return 0;
 }
 
@@ -809,6 +1122,7 @@ void mount_storage(Runtime& rt, const AppOptions& options) {
     vfs.mount("/sdcard", sdcard);
     vfs.mount(paths.external, external);
     vfs.mount("/sdcard/Android/data/" + package, external);
+    if (!options.apk.empty()) vfs.mount(apk_path(package), options.apk);
     if (!options.obb.empty()) {
         // The OBB keeps its own name and folder on the PC; the game sees it where Android
         // would have put it.

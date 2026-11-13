@@ -64,6 +64,7 @@ add_library(rfu_app STATIC
     src/platform/http.cpp
     src/platform/opensles.cpp
     src/platform/window.cpp
+    src/android/apk.cpp
     src/android/app.cpp
     src/android/java_http.cpp
 )

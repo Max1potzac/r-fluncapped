@@ -20,8 +20,15 @@ class Runtime;
 
 namespace rfu::android {
 
+// Which game's Java side to play. PvZ2 China (com.popcap.pvz2cthdlx) has its own fork of the
+// framework (com.popcap.pvz2cthddev.*): the same native interface for the most part, but its
+// classes, a few signatures and the start-up order differ, and its data is in the APK.
+enum class Game { Pvz2, Pvz2c };
+
 struct AppOptions {
+    Game game = Game::Pvz2;
     std::filesystem::path obb;       // main.<version>.<package>.obb
+    std::filesystem::path apk;       // the APK, for games that read their data out of it (PvZ2 China)
     std::filesystem::path data_dir;  // where the game's internal and external storage live
     int version_code = 675;
     std::string version_name = "1.4.0";

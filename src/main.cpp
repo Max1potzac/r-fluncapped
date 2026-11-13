@@ -39,6 +39,7 @@ namespace {
 
 void usage() {
     std::cerr << "usage: rfu --lib-dir <dir with libPVZ2.so> --obb <main.675.com.ea.game.pvz2_rfl.obb> [options]\n"
+                 "  --apk <file>             the game's APK (PvZ2 China, whose --lib-dir has libSrc.so: its data is in the APK)\n"
                  "  --data <dir>             where the game keeps its saves and downloads (default: rfu-data)\n"
                  "  --package <name>         Android package name (default: com.ea.game.pvz2_rfl)\n"
                  "  --version-code <n>       the APK's version code, which names the OBB (default: 675)\n"
@@ -148,6 +149,7 @@ int main(int argc, char** argv) {
     std::string dump_patches;
     std::vector<std::string> trace_classes;
     bool init_only = false;
+    bool package_set = false, version_code_set = false, version_name_set = false;
     std::string log_file;
     rfu::android::AppOptions app;
     app.data_dir = "rfu-data";
@@ -186,6 +188,7 @@ int main(int argc, char** argv) {
                 app.window.title = value();
             } else if (arg == "--version-name") {
                 app.version_name = value();
+                version_name_set = true;
             } else if (arg == "--hover") {
                 app.window.hover = true;
             } else if (arg == "--fix-animations") {
@@ -208,12 +211,16 @@ int main(int argc, char** argv) {
                 options.network = false;
             } else if (arg == "--obb") {
                 app.obb = rfu::path_from_utf8(value());
+            } else if (arg == "--apk") {
+                app.apk = rfu::path_from_utf8(value());
             } else if (arg == "--data") {
                 app.data_dir = rfu::path_from_utf8(value());
             } else if (arg == "--package") {
                 options.package = value();
+                package_set = true;
             } else if (arg == "--version-code") {
                 app.version_code = std::stoi(value());
+                version_code_set = true;
             } else if (arg == "--window") {
                 std::string v = value();
                 auto x = v.find('x');
@@ -258,7 +265,20 @@ int main(int argc, char** argv) {
             }
         }
         if (options.lib_dir.empty()) throw std::invalid_argument("--lib-dir is required");
-        if (!init_only && app.obb.empty()) throw std::invalid_argument("--obb is required (or --init-only)");
+        // PvZ2 China: the whole game is libSrc.so, and its data is in the APK, not an OBB.
+        if (!std::filesystem::exists(options.lib_dir / "libPVZ2.so") && std::filesystem::exists(options.lib_dir / "libSrc.so")) {
+            app.game = rfu::android::Game::Pvz2c;
+            if (!package_set) options.package = "com.popcap.pvz2cthdlx";
+            if (!version_code_set) app.version_code = 1875;
+            if (!version_name_set) app.version_name = "4.2.4";
+            if (app.window.title == "Plants vs. Zombies 2") app.window.title = "Plants vs. Zombies 2 (China)";
+        }
+        if (app.game == rfu::android::Game::Pvz2c) {
+            if (!init_only && app.apk.empty()) throw std::invalid_argument("--apk is required for PvZ2 China (or --init-only)");
+            if (!app.apk.empty() && !std::filesystem::exists(app.apk)) throw std::invalid_argument("no APK at " + rfu::path_to_utf8(app.apk));
+        } else if (!init_only && app.obb.empty()) {
+            throw std::invalid_argument("--obb is required (or --init-only)");
+        }
         if (!app.obb.empty() && !std::filesystem::exists(app.obb))
             throw std::invalid_argument("no OBB at " + rfu::path_to_utf8(app.obb));
     } catch (const std::exception& e) {
@@ -313,19 +333,21 @@ int main(int argc, char** argv) {
         // dependencies), JNI_OnLoad on each library that has one, then the mod's own library
         // (Reflourished's libRFLib, AltverZ's libSnowie), which looks for libPVZ2 in
         // /proc/self/maps and patches it.
-        auto& pvz2 = rt.linker().load(options.lib_dir / "libPVZ2.so");
+        const bool china = app.game == rfu::android::Game::Pvz2c;
+        const char* main_lib = china ? "libSrc.so" : "libPVZ2.so";
+        auto& pvz2 = rt.linker().load(options.lib_dir / main_lib);
         CodeSnapshot snapshot;
         snapshot.take(rt.mem(), pvz2);
         rt.run_initializers();
         rfu::GuestAddr vm = rfu::jni::get(rt).vm();
-        for (const char* name : {"libNimble.so", "libPVZ2.so"}) {
+        for (const char* name : {"libNimble.so", main_lib}) {
             auto* m = rt.linker().find_module(name);
             auto onload = m ? m->find_export("JNI_OnLoad") : std::nullopt;
             if (!onload) continue;
             auto version = rt.call(*onload, {vm, 0});
             rfu::log::info("{}: JNI_OnLoad returned {:#x}", name, version & 0xFFFFFFFF);
         }
-        if (load_mod_libs) {
+        if (load_mod_libs && !china) {
             auto mod_libs = mod_libraries(options.lib_dir);
             if (mod_libs.empty()) rfu::log::info("no mod libraries in {}; running the game's own code only", rfu::path_to_utf8(options.lib_dir));
             for (const auto& path : mod_libs) {

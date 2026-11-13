@@ -78,6 +78,18 @@ put them elsewhere). The game's own folders are inside it: `external/files` is w
 `/sdcard/Android/data/com.ea.game.pvz2_rfl/files`, so custom levels go in
 `external/files/No_Backup/CDN.9.6/levels`.
 
+**PvZ2 China** (`com.popcap.pvz2cthdlx`, work in progress): take `lib/arm64-v8a/` out of the APK
+(the whole game is `libSrc.so`) and point rfu at the APK itself, where the game's packages live:
+
+```
+rfu --lib-dir path/to/arm64-v8a --apk path/to/pvz2c.apk
+```
+
+rfu sees `libSrc.so` and plays PvZ2 China's own Java side (`com.popcap.pvz2cthddev.*`): it reads the
+packages out of the APK as Android's `openFd` would, answers the game's APK signature check with the
+APK's real certificate, and answers the Talkweb SDK with an offline guest login. The game unpacks
+its packages and loads; it then waits on its cloud save sync, which is next.
+
 Or use the launcher (`tools/launcher`): a menu for each game you have (Reflourished, AltverZ...)
 that takes the libraries out of the APK, checks for a new version the way the game does, and
 starts `rfu` with your settings, keybinds, code patches and custom content. See its README.txt.

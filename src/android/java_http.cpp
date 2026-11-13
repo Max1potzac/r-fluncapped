@@ -16,7 +16,6 @@ namespace rfu::android {
 
 namespace {
 
-constexpr const char* kTransaction = "com/popcap/SexyAppFramework/AndroidHttpTransaction";
 constexpr int kWorkers = 4;
 
 struct Transaction {
@@ -31,6 +30,7 @@ struct Transaction {
 
 struct HttpState {
     Runtime* rt = nullptr;
+    std::string cls;  // the game's AndroidHttpTransaction class
     bool online = true;
     std::mutex mutex;
     std::condition_variable cv;
@@ -53,7 +53,7 @@ void run(HttpState& s, Transaction& t) {
         if (!native) return;
         std::vector<std::uint64_t> args{native};
         args.insert(args.end(), extra.begin(), extra.end());
-        jni.call_native(kTransaction, name, t.self, args);
+        jni.call_native(s.cls, name, t.self, args);
     };
     // For testing against a local copy of a server: RFU_URL_REWRITE=<prefix>=<replacement>.
     if (const char* rw = std::getenv("RFU_URL_REWRITE")) {
@@ -113,19 +113,20 @@ void worker(HttpState& s) {
 
 }  // namespace
 
-void implement_http(Runtime& rt, bool online) {
+void implement_http(Runtime& rt, bool online, const std::string& transaction_class) {
     auto& s = rt.state<HttpState>();
     s.rt = &rt;
+    s.cls = transaction_class;
     s.online = online && platform::http_available();
     if (online && !platform::http_available()) log::warn("rfu has no HTTP client on this platform: the game's own web requests will fail");
     auto& jni = jni::get(rt);
-    auto impl = [&](const char* name, jni::MethodImpl f) { jni.implement(kTransaction, name, std::move(f)); };
     HttpState* sp = &s;
+    auto impl = [&](const char* name, jni::MethodImpl f) { jni.implement(sp->cls, name, std::move(f)); };
 
     impl("<init>", [sp](jni::JavaCall& j) -> std::uint64_t {
         // (long nativeTransaction, String method, String url)
         auto t = std::make_shared<Transaction>();
-        t->self = j.jni.new_instance(kTransaction);
+        t->self = j.jni.new_instance(sp->cls);
         t->native = j.args.at(0);
         t->request.method = j.string_arg(1);
         t->request.url = j.string_arg(2);
@@ -200,7 +201,7 @@ void implement_http(Runtime& rt, bool online) {
         if (!t) return 0;
         std::uint64_t native = t->native.exchange(0);
         t->cancel = true;
-        if (native) j.jni.call_native(kTransaction, "HttpTransactionCleanup", j.self, {native});
+        if (native) j.jni.call_native(sp->cls, "HttpTransactionCleanup", j.self, {native});
         std::lock_guard lock(sp->mutex);
         sp->transactions.erase(j.self);
         return 0;

@@ -63,6 +63,12 @@ void run(HttpState& s, Transaction& t) {
             t.request.url = std::string(v.substr(eq + 1)) + t.request.url.substr(eq);
     }
     log::debug("http: {} {}", t.request.method, t.request.url);
+    // RFU_HTTP_LOG=1: the headers and body too, to study a server's protocol.
+    static const bool log_bodies = std::getenv("RFU_HTTP_LOG") != nullptr;
+    if (log_bodies) {
+        for (const auto& [k, v] : t.request.headers) log::info("http:   {}: {}", k, v);
+        if (t.request.has_body) log::info("http:   body ({} bytes): {}", t.request.body.size(), std::string(t.request.body.begin(), t.request.body.end()));
+    }
     if (!s.online) {
         fire("HttpTransactionError");
         return;

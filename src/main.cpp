@@ -7,6 +7,7 @@
 // the runtime doesn't implement.
 
 #include "android/app.h"
+#include "core/hooks.h"
 #include "core/patches.h"
 #include "core/trace.h"
 #include "game/anim_fix.h"
@@ -399,6 +400,34 @@ int main(int argc, char** argv) {
             app.overlay = keys.overlay;
         }
         for (const auto& name : trace_classes) rfu::trace_class(rt, pvz2, name);
+        // RFU_HOOK_LOG=<offset>,<offset>...: log x0-x3 (and what they point at) whenever the game's
+        // code reaches those offsets of its main library. A study aid, like --trace-class.
+        if (const char* list = std::getenv("RFU_HOOK_LOG")) {
+            std::string all = list;
+            for (std::size_t p = 0; p < all.size();) {
+                std::size_t comma = all.find(',', p);
+                std::string item = all.substr(p, comma == std::string::npos ? std::string::npos : comma - p);
+                p = comma == std::string::npos ? all.size() : comma + 1;
+                std::uint64_t off = std::stoull(item, nullptr, 16);
+                rfu::GuestAddr base = pvz2.base();
+                rfu::hook(rt, base + off, item, [item, base, &rt](rfu::CallContext& c) {
+                    std::string line = fmt::format("hook {}: lr +{:#x}", item, c.x(30) - base);
+                    for (int i = 0; i < 4; ++i) {
+                        std::uint64_t v = c.x(i);
+                        line += fmt::format(" | x{}={:#x}", i, v);
+                        if (rt.mem().is_committed(v, 48)) {
+                            std::string bytes;
+                            for (int k = 0; k < 48; ++k) {
+                                auto ch = rt.mem().read<std::uint8_t>(v + k);
+                                bytes += ch >= 32 && ch < 127 ? static_cast<char>(ch) : '.';
+                            }
+                            line += " [" + bytes + "]";
+                        }
+                    }
+                    rfu::log::info("{}", line);
+                });
+            }
+        }
 
         const auto& missing = rt.linker().missing();
         rfu::log::info("{} imports have no implementation yet", missing.size());

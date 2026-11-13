@@ -56,6 +56,14 @@ constexpr std::uint64_t kLogicalSize = 0xf4, kSurfaceSize = 0x744;
 constexpr std::uint64_t kGame = 0x2593760, kBoardOfGame = 0x9a8;
 constexpr std::uint64_t kBoardPos = 0x44, kGridCols = 0xd8, kGridOrigin = 0x440, kGridSize = 0x448, kBoardZoom = 0x460, kBoardCentre = 0x464;
 constexpr std::uint64_t kAppScale = 0x980;
+// TimeMgr (a lazy singleton): each frame's step is the time since the last one (at most 0.04 s)
+// times its scale, a float that's 1, or 1.5 while fast-forward's on.
+constexpr std::uint64_t kTimeMgr = 0x256a010, kTimeScale = 0x30;
+constexpr float kSlowScale = 0.5f;  // slowmode's
+// PowerupManager: the powerup in use, a handle (null when there's none). A powerup's button
+// (PowerupTimeUI, a child of PowerupHolderUI) names its PowerupType at +0x1a0, whose class name
+// (PowerupSnowball, PowerupFlickZombie...) is a std::string at +0x20.
+constexpr std::uint64_t kManagerActive = 0x28, kButtonType = 0x1a0, kTypeClass = 0x20;
 // Board's world Rect to UI one, whose maths Lawn::ui copies, and the world x to column it checks against.
 constexpr Known kWorldToUi{0xab23d0, {0xFC1D0FE8, 0xF90007F5, 0xA9014FF4}};
 constexpr Known kWorldToColumn{0x9b17d0, {0xD0008F08, 0xBD47D101, 0xD0008F08}};
@@ -264,6 +272,21 @@ public:
         }
         for (auto& a : aim_cursors_)
             watch(rt_.mem().read<std::uint64_t>(a.first), a.first, a.second, "controller: aiming cursor");
+        // The powerups: the holder of their buttons and the manager (each updated once a frame),
+        // and the flick's class, which wants a swipe rather than a finger held.
+        auto holder = find_vtable(rt_.mem(), pvz2, "PowerupHolderUI");
+        auto power_button = find_vtable(rt_.mem(), pvz2, "PowerupTimeUI");
+        auto manager = find_vtable(rt_.mem(), pvz2, "PowerupManager");
+        if (holder && power_button && manager && holder->functions.size() > kUpdateSlot && manager->functions.size() > kUpdateSlot) {
+            holder_vtable_ = holder->address;
+            power_button_vtable_ = power_button->address;
+            manager_vtable_ = manager->address;
+            watch(holder->functions[kUpdateSlot], holder_vtable_, holder_, "controller: powerups");
+            watch(manager->functions[kUpdateSlot], manager_vtable_, manager_, "controller: powerup manager");
+            if (auto flick = find_vtable(rt_.mem(), pvz2, "PowerupFlickZombie")) flick_vtable_ = flick->address;
+        } else {
+            log::warn("controller: the powerups' classes aren't there; their controls are off");
+        }
         return true;
     }
 
@@ -272,7 +295,9 @@ public:
     // second digs, Y feeds plant food (held two seconds, it buys one through the "+" by the plant
     // food bar), X taps the tile (a plant's own ability, or the target
     // once one asks for it; held a second in the first column, the mower), LT/RT sweep the lawn
-    // for sun and coins, Start pauses, L3 fast-forwards.
+    // for sun and coins, Start pauses, L3 fast-forwards, R3 turns slowmode on and off. The right
+    // stick flicked left, up or right picks the first, second or third powerup; while one's in use,
+    // X holds a finger on the tile (twice quickly, the flick's swipe).
     //
     // Off the lawn: on the pause menu the d-pad picks a slider or button (left and right move a
     // slider), A presses it and B or Start resume; on the seed chooser the d-pad picks a packet and
@@ -289,6 +314,7 @@ public:
                     pad_type_ = pressed.type;
                     pad_active_ = true;
                 }
+                power_flick();
             }
             return false;
         }
@@ -346,6 +372,10 @@ public:
                 tap_tile(*lawn);
             }
             if (!p.down) y_since_ = 0;
+            return;
+        }
+        if (p.button == PadButton::X && (power_down_ || (p.down && lawn && active_powerup()))) {
+            power_x(p.down, *lawn);
             return;
         }
         if (p.button == PadButton::X) {
@@ -407,7 +437,39 @@ public:
         case PadButton::L3:
             if (auto r = button_rect(platform::KeyBind::Action::FastForward)) tap(r->x + r->w / 2, r->y + r->h / 2);
             break;
+        case PadButton::R3:
+            slow_ = !slow_;
+            log::info("controller: slowmode {}", slow_ ? "on" : "off");
+            break;
         default: break;
+        }
+    }
+
+    // In a level, past the seed chooser: the Board's there and in its state for play or after.
+    bool in_level() {
+        auto& mem = rt_.mem();
+        GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
+        GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
+        if (!board || !board_vtable_ || mem.read<std::uint64_t>(board) != board_vtable_) return false;
+        return mem.read<std::int32_t>(board + kBoardState) > 3;
+    }
+
+    // Slowmode: the game's time scale (TimeMgr +0x30, which fast-forward sets to 1.5) is held at
+    // half while it's on; it goes back to what the game had when it's turned off or the level's over.
+    void slow_frame() {
+        if (slow_ && !in_level()) slow_ = false;
+        auto& mem = rt_.mem();
+        GuestAddr time = mem.read<std::uint64_t>(base_ + kTimeMgr);
+        if (!time) return;
+        float scale = mem.read<float>(time + kTimeScale);
+        if (slow_) {
+            if (scale != kSlowScale) {
+                game_scale_ = scale;  // fast-forward, pressed while slow, comes back when it's off
+                mem.write<float>(time + kTimeScale, kSlowScale);
+            }
+        } else if (game_scale_) {
+            if (scale == kSlowScale) mem.write<float>(time + kTimeScale, *game_scale_);
+            game_scale_.reset();
         }
     }
 
@@ -457,6 +519,12 @@ public:
             }
         }
         if (sweep_ >= 0) sweep();
+        slow_frame();
+        // The powerup ran out while X held its finger down: it comes up.
+        if (power_down_ && !active_powerup()) {
+            if (auto lawn = this->lawn()) steps_.push_back({1, 3, tile_x(*lawn, col_), tile_y(*lawn, row_)});
+            power_down_ = false;
+        }
         // A plant started aiming (its cursor is up): a finger goes down on the cursor's tile and
         // stays, as on a phone the reticle shows under a finger held on the lawn. If the game
         // drops the aiming by itself, the finger comes up.
@@ -570,6 +638,13 @@ public:
         for (auto [action, b] : kOnButtons)
             if (auto r = button_rect(action))
                 label(b, static_cast<int>((r->x + r->w) * fx), static_cast<int>((r->y + r->h) * fy), platform::HintLabel::Anchor::BottomRight);
+        // The right stick's flicks on the powerups they pick: left, up, right.
+        auto powers = power_buttons();
+        const char kArrows[] = {platform::kGlyphLeft, platform::kGlyphUp, platform::kGlyphRight};
+        for (std::size_t i = 0; i < powers.size() && i < 3; ++i) {
+            const Rect& r = powers[i].rect;
+            out.labels.push_back({std::string("R") + kArrows[i], static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), platform::HintLabel::Anchor::TopLeft, 0xFFFFFF});
+        }
         return out;
     }
 
@@ -1183,6 +1258,102 @@ private:
             aim_y_ = tile_y(*lawn, row_);
             steps_.push_back({1, 1, aim_x_, aim_y_});
         }
+        // So does the finger a powerup's held with.
+        if (power_down_) steps_.push_back({1, 1, tile_x(*lawn, col_), tile_y(*lawn, row_)});
+    }
+
+    // The powerups' buttons, left to right, and what each is (its class's name).
+    struct PowerButton {
+        Rect rect;
+        std::string kind;
+    };
+    std::vector<PowerButton> power_buttons() {
+        std::vector<PowerButton> out;
+        GuestAddr holder = live(holder_, holder_vtable_);
+        if (!holder) return out;
+        auto& mem = rt_.mem();
+        GuestAddr begin = mem.read<std::uint64_t>(holder + kChildren), end = mem.read<std::uint64_t>(holder + kChildren + 8);
+        if (end < begin || end - begin > 16 * 8) return out;
+        for (GuestAddr h = begin; h < end; h += 8) {
+            GuestAddr button = resolve(h);
+            if (!button || mem.read<std::uint64_t>(button) != power_button_vtable_) continue;
+            Rect r = screen_rect(button);
+            if (r.w <= 0 || r.h <= 0) continue;
+            GuestAddr type = resolve(button + kButtonType);
+            out.push_back({r, type ? guest_string(type + kTypeClass) : std::string()});
+        }
+        std::stable_sort(out.begin(), out.end(), [](const PowerButton& a, const PowerButton& b) { return a.rect.x < b.rect.x; });
+        return out;
+    }
+
+    // A libc++ std::string in guest memory.
+    std::string guest_string(GuestAddr at) {
+        auto& mem = rt_.mem();
+        std::uint8_t first = mem.read<std::uint8_t>(at);
+        std::uint64_t size = (first & 1) ? mem.read<std::uint64_t>(at + 8) : first >> 1;
+        GuestAddr data = (first & 1) ? mem.read<std::uint64_t>(at + 16) : at + 1;
+        if (size > 256) return {};
+        std::string out(size, '\0');
+        for (std::uint64_t i = 0; i < size; ++i) out[i] = static_cast<char>(mem.read<std::uint8_t>(data + i));
+        return out;
+    }
+
+    // The powerup in use, if one is: the manager's handle to it.
+    GuestAddr active_powerup() {
+        GuestAddr manager = live(manager_, manager_vtable_);
+        if (!manager) return 0;
+        if (!rt_.mem().read<std::uint64_t>(manager + kManagerActive)) return 0;
+        return resolve(manager + kManagerActive);
+    }
+
+    // The right stick flicked left, up or right picks the first, second or third powerup (its
+    // button's tapped, as a finger would); it has to come back to the middle before the next.
+    void power_flick() {
+        float mag = std::hypot(stick_x_, stick_y_);
+        if (mag < kDeadZone) {
+            flicked_ = false;
+            return;
+        }
+        if (flicked_ || mag < kFlick || !lawn()) return;
+        int index = -1;
+        if (std::abs(stick_x_) > std::abs(stick_y_)) index = stick_x_ < 0 ? 0 : 2;
+        else if (stick_y_ < 0) index = 1;
+        if (index < 0) return;
+        flicked_ = true;
+        auto buttons = power_buttons();
+        if (static_cast<std::size_t>(index) >= buttons.size()) return;
+        const Rect& r = buttons[index].rect;
+        tap(r.x + r.w / 2, r.y + r.h / 2);
+    }
+
+    // X while a powerup's in use, on the cursor's tile. The flick (Power Toss) wants a swipe, which
+    // X pressed twice quickly gives: a finger across the tile, left to right, so its zombies fly
+    // back. Every other one (snowballs, the flamethrower, Power Zap, a mod's own) is a finger held
+    // down while X is, which follows the cursor.
+    void power_x(bool down, const Lawn& lawn) {
+        GuestAddr active = active_powerup();
+        bool flick = active && flick_vtable_ && rt_.mem().read<std::uint64_t>(active) == flick_vtable_;
+        std::int32_t x = tile_x(lawn, col_), y = tile_y(lawn, row_);
+        if (!down) {
+            if (power_down_) steps_.push_back({1, 3, x, y});
+            power_down_ = false;
+            return;
+        }
+        if (!flick) {
+            steps_.push_back({1, 0, x, y});
+            power_down_ = true;
+            return;
+        }
+        std::int64_t now = now_ticks();
+        if (x_tapped_ && now - x_tapped_ <= ticks(kDoublePress)) {
+            x_tapped_ = 0;
+            auto half = static_cast<std::int32_t>(lawn.tw * lawn.zoom * 0.5f);
+            steps_.push_back({1, 0, x - half * 2, y});
+            for (int i = 1; i <= 4; ++i) steps_.push_back({1, 1, x - half * 2 + half * 2 * i, y});
+            steps_.push_back({1, 3, x + half * 6, y});
+        } else {
+            x_tapped_ = now;
+        }
     }
 
     // A plant's aiming cursor is up.
@@ -1412,6 +1583,15 @@ private:
     int sweep_ = -1;
     bool mower_down_ = false;  // a finger held on a mower, while X is
     std::int32_t mower_x_ = 0, mower_y_ = 0;  // the vacuum's next line, while it sweeps
+    GuestAddr holder_vtable_ = 0, power_button_vtable_ = 0, manager_vtable_ = 0, flick_vtable_ = 0;
+    Seen holder_, manager_;
+    bool flicked_ = false;        // the right stick's out from a flick, not back yet
+    bool power_down_ = false;     // X holds a finger down for a powerup
+    std::int64_t x_tapped_ = 0;   // when X was pressed for the flick, waiting for a second press
+    static constexpr float kFlick = 0.7f;  // how far the right stick goes to pick a powerup
+    static constexpr std::chrono::milliseconds kDoublePress{400};
+    bool slow_ = false;                 // slowmode (R3) is on
+    std::optional<float> game_scale_;   // the game's own time scale, while slowmode holds it
 };
 
 }  // namespace
@@ -1422,7 +1602,7 @@ std::vector<PadBind> parse_pad_binds(const std::string& text, std::string& error
         {"plant", PadButton::A},     {"dig", PadButton::B},     {"use", PadButton::X},
         {"plantfood", PadButton::Y}, {"prevseed", PadButton::LB}, {"nextseed", PadButton::RB},
         {"vacuum", PadButton::LT},   {"vacuum2", PadButton::RT}, {"fastforward", PadButton::L3},
-        {"pause", PadButton::Start}};
+        {"pause", PadButton::Start}, {"slowmode", PadButton::R3}};
     static const std::pair<const char*, PadButton> kButtonNames[] = {
         {"a", PadButton::A},   {"b", PadButton::B},       {"x", PadButton::X},       {"y", PadButton::Y},         {"lb", PadButton::LB},
         {"rb", PadButton::RB}, {"lt", PadButton::LT},     {"rt", PadButton::RT},     {"l3", PadButton::L3},       {"r3", PadButton::R3},

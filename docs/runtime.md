@@ -135,6 +135,22 @@ Board's focus byte, +0x72, isn't used: it can stay off after the window loses th
 next level.) It's also hidden until the level starts (Board +0xe0, the state: 1 for the pan, 3
 for the seed chooser, 5 in play).
 
+Slowmode (R3) holds the game's time scale at half: `TimeMgr` (a lazy singleton at 0x256a010)
+steps each frame by the time since the last one (at most 0.04 s) times the float at +0x30, which is
+1, or 1.5 while fast-forward's on. While slowmode's on the scale is written back to 0.5 each frame
+it differs (fast-forward pressed meanwhile is remembered), and the game's own value goes back when
+it's turned off or the level's over (the Board gone, or back at the seed chooser).
+
+The powerups are whatever the level has. Their buttons are `PowerupTimeUI`s, the children of
+`PowerupHolderUI` (seen through its draw), taken left to right; each names its `PowerupType` with
+a handle at +0x1a0, whose class name (`PowerupSnowball`, `PowerupFlamethrower`,
+`PowerupFlickZombie`, `PowerupWizardFinger` for Power Zap, or a mod's own) is a std::string at
++0x20, after its alias at +0x8. A right-stick flick (past 0.7, then back under the dead zone before
+the next) taps the button: left the first, up the second, right the third. `PowerupManager` (seen
+through its draw) holds a handle to the powerup in use at +0x28, null when there's none. While one
+is, X holds a finger down on the tile until it's let go (following the cursor, and lifted if the
+powerup runs out); for the flick, two presses within 0.4 s swipe the tile left to right instead.
+
 A plant that aims (Banana Launcher, Missile Toe, the launchers, Escape Root) puts up a cursor of
 its own (`BananaTargetCursor`, `MissileToeTargetCursor`, `PlantLauncherTargetCursor`,
 `EscapeRootCursor`, seen through their vtables' first function, as `PlantCursor` is). While one

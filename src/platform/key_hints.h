@@ -14,6 +14,8 @@ namespace rfu::platform {
 
 // The pad's face button symbols (PlayStation), as characters of a label's text.
 constexpr char kGlyphCross = 5, kGlyphCircle = 6, kGlyphSquare = 7, kGlyphTriangle = 8;
+// Arrows, as characters of a label's text.
+constexpr char kGlyphUp = 1, kGlyphDown = 2, kGlyphLeft = 3, kGlyphRight = 4;
 
 struct HintLabel {
     enum class Anchor { TopLeft, BottomLeft, BottomRight };  // the badge's corner that sits on (x, y)

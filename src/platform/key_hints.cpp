@@ -11,7 +11,7 @@ namespace rfu::platform {
 namespace {
 
 // The arrow keys' glyphs, outside printable ASCII.
-constexpr char kUp = 1, kDown = 2, kLeft = 3, kRight = 4;
+constexpr char kUp = kGlyphUp, kDown = kGlyphDown, kLeft = kGlyphLeft, kRight = kGlyphRight;
 
 // 5x7 glyphs, a row a byte from the top, the leftmost pixel in bit 4.
 struct Glyph {

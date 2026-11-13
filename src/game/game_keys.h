@@ -21,7 +21,8 @@
 // the grid's tiles that the d-pad moves, and buttons that tap the packet, the shovel or plant food
 // and then the tile. The tiles come from the Board's grid (origin and tile size in world units)
 // and the zoom it draws the lawn with, the same maths as the game's own (Board, 0xab23d0); the
-// cursor is a box drawn with the hints. Off the lawn, the pause menu's sliders and buttons are
+// cursor is a box drawn with the hints. R3 halves the game's speed (slowmode), and right-stick
+// flicks pick the level's powerups, which X then uses on the tile. Off the lawn, the pause menu's sliders and buttons are
 // picked with the d-pad, the seed chooser's packets and slots with the d-pad and LB/RB, and
 // elsewhere the right stick moves a cursor that A touches with.
 
@@ -37,8 +38,8 @@ class Runtime;
 class Module;
 
 // --pad-binds: the button for each of the lawn's actions, as "plant=a,dig=b,use=x,plantfood=y,
-// prevseed=lb,nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start". An action is the
-// button that does it by default (A for plant...); a bound action's default button does nothing
+// prevseed=lb,nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start,slowmode=r3". An action
+// is the button that does it by default (A for plant...); a bound action's default button does nothing
 // unless it's bound to something too.
 struct PadBind {
     platform::PadButton action;  // the action, as its default button

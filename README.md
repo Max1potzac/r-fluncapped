@@ -1,8 +1,8 @@
 # r-fluncapped
 
-A native Windows runtime for Plants vs. Zombies 2 Reflourished.
+A native Windows runtime for Plants vs. Zombies 2 and its many versions.
 
-The plan: load the game's own Android libraries (`libPVZ2.so`, `libRFLib.so`) on the PC through an
+The plan: load the game's own Android libraries (`libPVZ2.so`) on the PC through an
 ARM64 recompiler and a shim layer, so the game is fully playable early, then replace its code with
 native C++ one function at a time.
 
@@ -11,11 +11,11 @@ them from your own copy of the game.
 
 ## Status
 
-`rfu` runs the game. It loads Reflourished's own Android libraries, opens a window and plays the
+`rfu` runs the game. It loads PVZ2's own Android libraries, opens a window and plays the
 part of the game's Java side, so the game boots, loads its OBB, shows the EA welcome dialog, the
 main menu and its intro, and takes mouse, touch and keyboard input. In detail, `rfu`:
 
-- maps `libPVZ2.so`, `libRFLib.so`, `libc++_shared.so` and `libNimble.so` into one guest address
+- maps `libPVZ2.so`, `libc++_shared.so` and `libNimble.so` into one guest address
   space, links them the way Android's linker would, and runs them on an x86-64 PC through
   [dynarmic](https://github.com/azahar-emu/dynarmic), with bionic's libc, libm, libdl and zlib
   provided by host code (`src/shims`);

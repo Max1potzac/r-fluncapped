@@ -336,6 +336,16 @@ std::int64_t guest_pread(Runtime& rt, int fd, void* buf, std::uint64_t n, std::i
     return got;
 }
 
+// The FILE* variable for stdin (0), stdout or stderr.
+template <int Fd>
+void std_stream(Runtime& rt, GuestAddr addr) {
+    auto& f = files(rt);
+    GuestAddr fp = rt.heap().alloc_zeroed(android::kSizeofFile);
+    std::lock_guard lock(f.mutex);
+    f.streams[fp] = Fd;
+    rt.mem().write<GuestAddr>(addr, fp);
+}
+
 void register_libc_stdio(ShimRegistry& reg) {
     reg.add_data("__sF", {3 * android::kSizeofFile, [](Runtime& rt, GuestAddr addr) {
                               auto& f = files(rt);
@@ -343,6 +353,11 @@ void register_libc_stdio(ShimRegistry& reg) {
                               f.sF = addr;
                               for (int i = 0; i < 3; ++i) f.streams[addr + android::kSizeofFile * static_cast<unsigned>(i)] = i;
                           }});
+    // Since API 23 bionic exports stdin, stdout and stderr as FILE* variables of their own, which
+    // newer builds (PvZ2 China's libSrc) import instead of __sF: each points at a FILE for its fd.
+    reg.add_data("stdin", {8, std_stream<0>});
+    reg.add_data("stdout", {8, std_stream<1>});
+    reg.add_data("stderr", {8, std_stream<2>});
 
     // --- fd level ------------------------------------------------------------------------
     auto open = [](CallContext& c) {

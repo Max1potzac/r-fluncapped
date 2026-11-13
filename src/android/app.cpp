@@ -845,6 +845,14 @@ void App::implement_java_china() {
     for (const char* name : {"GetSignature", "GetChannelID", "GetTWRequestHead", "GetDeclare", "GetGameCenterUrl", "GetChannelUpdateUrl"})
         impl(tw, name, [ret_str](jni::JavaCall&) { return ret_str(""); });
 
+    // --- AndroidUIEventManager: the native engine drains the input queue through this, not
+    // AndroidGameApp.UI_ProcessEvents; the byte layout is the one UiEvents::write already writes. ---
+    impl(pkg + "AndroidUIEventManager", "ProcessEvents", [this](jni::JavaCall& j) -> std::uint64_t {
+        auto buffer = jni.object(j.args.at(0));
+        if (!buffer || !buffer->data) return 0;
+        return events.write(rt.mem(), buffer->data, buffer->length);
+    });
+
     // --- AndroidHttpProxy --------------------------------------------------------------------
     impl(pkg + "AndroidHttpProxy", "GetNetworkStatus", [this](jni::JavaCall&) -> std::uint64_t { return rt.options().network ? 2 : 0; });
     impl(pkg + "AndroidHttpProxy", "Startup", [](jni::JavaCall&) -> std::uint64_t { return 1; });

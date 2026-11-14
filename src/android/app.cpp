@@ -120,7 +120,8 @@ private:
 class UiEvents {
 public:
     void touch(const platform::TouchInput& t) {
-        if (tracing() && t.phase != platform::TouchInput::Moved)
+        static const bool touch_log = std::getenv("RFU_TOUCH_LOG") != nullptr;
+        if ((tracing() || touch_log) && t.phase != platform::TouchInput::Moved)
             log::info("trace: touch {} at {:.0f}, {:.0f}", t.phase == platform::TouchInput::Began ? "down" : "up", t.x, t.y);
         auto& prev = touches_[t.id];
         if (t.phase == platform::TouchInput::Began) prev = {t.x, t.y};
@@ -172,6 +173,8 @@ public:
         }
         if (capacity >= 4) mem.write<std::int32_t>(buffer, count);
         if (count) log::debug("UI_ProcessEvents: {} event(s) into a {}-byte buffer", count, capacity);
+        static const bool touch_log = std::getenv("RFU_TOUCH_LOG") != nullptr;
+        if (count && touch_log) log::info("trace: drained {} event(s) into {}-byte buffer", count, capacity);
         return !queue_.empty();
     }
 
@@ -624,19 +627,24 @@ void App::implement_java() {
     });
     impl(cls_surface, "Graphics_GetPointSizeInPixels", [](jni::JavaCall&) -> std::uint64_t { return std::bit_cast<std::uint32_t>(1.0f); });
 
+    // The game sees the network as reachable when it really is, or when the cloud stub is on:
+    // PvZ2 China checks this before its cloud login and shows a "network failure" dialog if it
+    // reads "not reachable", so an offline run with the stub still needs to look online here.
+    auto net_reachable = [this] { return rt.options().network || std::getenv("RFU_CLOUD_STUB") != nullptr; };
+
     // --- AndroidHttpProxy -----------------------------------------------------------------
-    impl("com/popcap/SexyAppFramework/AndroidHttpProxy", "GetNetworkStatus", [this](jni::JavaCall&) -> std::uint64_t {
-        return rt.options().network ? 2 : 0;  // NET_REACHABLE_WIFI / NET_NOT_REACHABLE
+    impl("com/popcap/SexyAppFramework/AndroidHttpProxy", "GetNetworkStatus", [net_reachable](jni::JavaCall&) -> std::uint64_t {
+        return net_reachable() ? 2 : 0;  // NET_REACHABLE_WIFI / NET_NOT_REACHABLE
     });
 
     // --- Nimble's Network component: Network.Status is an enum (UNKNOWN, NONE, DEAD, OK), which
     // the game reads with ordinal(). -------------------------------------------------------------
-    impl("com/ea/nimble/INetwork", "getStatus", [this](jni::JavaCall& j) -> std::uint64_t {
+    impl("com/ea/nimble/INetwork", "getStatus", [this, net_reachable](jni::JavaCall& j) -> std::uint64_t {
         GuestAddr status = j.jni.new_instance("com/ea/nimble/Network$Status");
-        j.jni.set_field(status, "ordinal", rt.options().network ? 3 : 1);
+        j.jni.set_field(status, "ordinal", net_reachable() ? 3 : 1);
         return status;
     });
-    impl("com/ea/nimble/INetwork", "isNetworkWifi", [this](jni::JavaCall&) -> std::uint64_t { return rt.options().network; });
+    impl("com/ea/nimble/INetwork", "isNetworkWifi", [net_reachable](jni::JavaCall&) -> std::uint64_t { return net_reachable(); });
     impl("java/lang/Enum", "ordinal", [](jni::JavaCall& j) -> std::uint64_t { return j.jni.field(j.self, "ordinal").value_or(0); });
 
     // --- AndroidNotification ---------------------------------------------------------------
@@ -762,7 +770,9 @@ void App::implement_java_china() {
     impl(cls_game_app, "Diag_GetPrimaryMACAddress", [ret_str](jni::JavaCall&) { return ret_str("02:00:00:00:00:00"); });
     impl(cls_game_app, "Diag_GetDeviceBRAND", [ret_str](jni::JavaCall&) { return ret_str("rfu"); });
     impl(cls_game_app, "Diag_GetDeviceMODEL", [ret_str](jni::JavaCall&) { return ret_str("rfu PC"); });
-    impl(cls_game_app, "Diag_GetNetworkType", [this, ret_str](jni::JavaCall&) { return ret_str(rt.options().network ? "WIFI" : ""); });
+    impl(cls_game_app, "Diag_GetNetworkType", [this, ret_str](jni::JavaCall&) {
+        return ret_str((rt.options().network || std::getenv("RFU_CLOUD_STUB") != nullptr) ? "WIFI" : "");
+    });
     for (const char* name : {"Diag_GetMobileCardType", "Diag_GetSimProvince", "Diag_GetNotchHeight", "Diag_GetNotchWidth", "Diag_HasNotchInScreen", "Diag_IsBigRCorner"})
         impl(cls_game_app, name, [](jni::JavaCall&) -> std::uint64_t { return 0; });
     impl(cls_game_app, "Diag_GetAvailMemory", [](jni::JavaCall&) -> std::uint64_t { return 4ull << 30; });
@@ -870,7 +880,11 @@ void App::implement_java_china() {
     });
 
     // --- AndroidHttpProxy --------------------------------------------------------------------
-    impl(pkg + "AndroidHttpProxy", "GetNetworkStatus", [this](jni::JavaCall&) -> std::uint64_t { return rt.options().network ? 2 : 0; });
+    // PvZ2 China checks this before its cloud login and shows a "network failure" dialog if it
+    // reads "not reachable", so an offline run with the cloud stub still needs to look online here.
+    impl(pkg + "AndroidHttpProxy", "GetNetworkStatus", [this](jni::JavaCall&) -> std::uint64_t {
+        return (rt.options().network || std::getenv("RFU_CLOUD_STUB") != nullptr) ? 2 : 0;
+    });
     impl(pkg + "AndroidHttpProxy", "Startup", [](jni::JavaCall&) -> std::uint64_t { return 1; });
 
     // --- SexyAppFrameworkActivity (statics and the instance's methods) --------------------------

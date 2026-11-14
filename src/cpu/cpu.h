@@ -99,7 +99,10 @@ public:
 
     // Calls guest function `fn` with integer arguments and returns x0. Safe to call
     // from inside a shim (the interrupted guest state is saved and restored).
-    std::uint64_t call(GuestAddr fn, const std::vector<std::uint64_t>& args);
+    // `x8` (optional) sets the indirect-result / sret register for functions that
+    // return a large value through a caller-provided buffer.
+    std::uint64_t call(GuestAddr fn, const std::vector<std::uint64_t>& args,
+                       std::optional<std::uint64_t> x8 = std::nullopt);
 
     Dynarmic::A64::Jit& jit() { return *jit_; }
     GuestThread& thread() { return thread_; }

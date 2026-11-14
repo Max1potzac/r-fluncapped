@@ -73,8 +73,10 @@ public:
     // "libPVZ2.so+0x1234", or the bare address outside every module.
     std::string describe(GuestAddr addr) const;
 
-    // Calls a guest function on the calling thread.
-    std::uint64_t call(GuestAddr fn, const std::vector<std::uint64_t>& args = {});
+    // Calls a guest function on the calling thread. `x8` sets the indirect-result
+    // (sret) register for functions that return a large value via a caller buffer.
+    std::uint64_t call(GuestAddr fn, const std::vector<std::uint64_t>& args = {},
+                       std::optional<std::uint64_t> x8 = std::nullopt);
 
     // --- thunks ------------------------------------------------------------------------
     GuestAddr return_thunk() const { return GuestMemory::kThunkBase; }

@@ -121,8 +121,9 @@ GuestThread* Runtime::thread_by_handle(GuestAddr handle) {
     return nullptr;
 }
 
-std::uint64_t Runtime::call(GuestAddr fn, const std::vector<std::uint64_t>& args) {
-    return current_thread().cpu->call(fn, args);
+std::uint64_t Runtime::call(GuestAddr fn, const std::vector<std::uint64_t>& args,
+                            std::optional<std::uint64_t> x8) {
+    return current_thread().cpu->call(fn, args, x8);
 }
 
 void Runtime::invalidate_code(GuestAddr addr, std::uint64_t size) {

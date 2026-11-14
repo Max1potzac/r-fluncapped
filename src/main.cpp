@@ -448,6 +448,42 @@ int main(int argc, char** argv) {
             }
         }
 
+        // RFU_GEN_PROFILE=1: when the new-player welcome dialog is about to be created
+        // (offset 0x34ca090, which only runs when GetProfileCount()==0 and all profile
+        // systems are up), create a fresh profile the way the dialog's OK button would and
+        // save it to disk, bypassing the dialog's broken offline "server-comm" gate. This
+        // writes userdata/user0/pp.dat so a valid profile exists. A bring-up aid for PVZ2C.
+        if (std::getenv("RFU_GEN_PROFILE")) {
+            rfu::GuestAddr base = pvz2.base();
+            rfu::hook(rt, base + 0x34ca090, "gen-profile", [&rt, base](rfu::CallContext& c) {
+                static bool done = false;
+                if (done) return;
+                done = true;
+                const rfu::GuestAddr OPNEW = base + 0x584cc20;      // operator new(size)
+                const rfu::GuestAddr CREATE = base + 0x4018fec;     // CreateProfile(name, 0, &out[x8])
+                const rfu::GuestAddr SAVE = base + 0x24055e4;        // saveCurrentProfile(PlayerInfo*)
+                // Build a libc++ SSO std::string for the profile name (byte0 = len<<1, chars at +1).
+                const std::string nm = "RFUSave";
+                rfu::GuestAddr name = rt.call(OPNEW, {32});
+                rt.mem().write<std::uint8_t>(name, static_cast<std::uint8_t>(nm.size() << 1));
+                for (std::size_t i = 0; i < nm.size(); ++i)
+                    rt.mem().write<std::uint8_t>(name + 1 + i, static_cast<std::uint8_t>(nm[i]));
+                rt.mem().write<std::uint8_t>(name + 1 + nm.size(), 0);
+                rfu::GuestAddr out = rt.call(OPNEW, {16});
+                rt.mem().write<std::uint64_t>(out, 0);
+                rt.mem().write<std::uint64_t>(out + 8, 0);
+                rt.call(CREATE, {name, 0}, out);                     // x8 = out (sret)
+                rfu::GuestAddr pi = rt.mem().read<std::uint64_t>(out);
+                rfu::log::info("gen-profile: CreateProfile -> out={:#x} playerinfo={:#x}", out, pi);
+                if (pi) {
+                    rt.mem().write<std::uint8_t>(pi + 0x3b0, 1);     // mark dirty so the writer flushes
+                    rt.call(SAVE, {pi, 0, 0});
+                    rfu::log::info("gen-profile: saveCurrentProfile called on {:#x}", pi);
+                }
+            });
+            rfu::log::info("gen-profile: armed on welcome-dialog creation");
+        }
+
         const auto& missing = rt.linker().missing();
         rfu::log::info("{} imports have no implementation yet", missing.size());
         std::vector<std::string> called;

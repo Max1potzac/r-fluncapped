@@ -72,7 +72,8 @@ void Cpu::restore(const State& s) {
     jit_->SetPstate(s.pstate);
 }
 
-std::uint64_t Cpu::call(GuestAddr fn, const std::vector<std::uint64_t>& args) {
+std::uint64_t Cpu::call(GuestAddr fn, const std::vector<std::uint64_t>& args,
+                        std::optional<std::uint64_t> x8) {
 
     std::optional<State> outer;
     GuestAddr sp = thread_.stack_hi;
@@ -89,6 +90,7 @@ std::uint64_t Cpu::call(GuestAddr fn, const std::vector<std::uint64_t>& args) {
         for (std::size_t i = 0; i < slots; ++i) rt_.mem().write<std::uint64_t>(sp + 8 * i, args[8 + i]);
     }
     for (std::size_t i = 0; i < args.size() && i < 8; ++i) jit_->SetRegister(i, args[i]);
+    if (x8) jit_->SetRegister(8, *x8);
     jit_->SetRegister(29, 0);
     jit_->SetRegister(30, rt_.return_thunk());
     jit_->SetSP(sp);

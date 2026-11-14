@@ -828,6 +828,8 @@ void App::implement_java_china() {
         log::info("Talkweb SDK: starting (app id {}); logging in as a guest, offline", j.string_arg(0));
         std::uint64_t login_code = 0;
         if (const char* c = std::getenv("RFU_SDK_CODE")) login_code = std::strtoull(c, nullptr, 0);
+        int relogin = 0;
+        if (const char* r = std::getenv("RFU_SDK_RELOGIN")) relogin = std::atoi(r);
         run_on_ui([this, tw, self, login_code] {
             std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
             call(tw, "Native_SDKInitStart", self, {driver});
@@ -835,6 +837,18 @@ void App::implement_java_china() {
             call(tw, "Native_SDKLoginStart", self, {driver});
             call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str("rfu-offline-" + device_id)});
         });
+        // Experiment: re-fire the login-complete callback on later frames, in case the welcome
+        // dialog subscribes to it only after our first (early) fire. Self-reschedules `relogin` times.
+        if (relogin > 0) {
+            auto refire = std::make_shared<std::function<void(int)>>();
+            *refire = [this, tw, self, login_code, refire](int n) {
+                std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
+                call(tw, "Native_SDKLoginStart", self, {driver});
+                call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str("rfu-offline-" + device_id)});
+                if (n > 1) run_on_ui([refire, n] { (*refire)(n - 1); });
+            };
+            run_on_ui([refire, relogin] { (*refire)(relogin); });
+        }
         return 0;
     });
     impl(tw, "GetDeviceID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });

@@ -20,6 +20,7 @@ var tests = new (string Name, Action Run)[]
     ("rton round trip", RtonRoundTrip),
     ("versions", Versions),
     ("game folder", GameFolderTest),
+    ("china game", ChinaGameTest),
     ("mods", ModsTest),
     ("level pack", LevelPackTest),
     ("update check", UpdateCheckTest),
@@ -74,6 +75,30 @@ GameFolder MakeGame(string name, string version = "1.4.2")
     File.WriteAllText(Path.Combine(dir, "_apk_manifest.json"),
         $$"""{"package":"com.ea.game.pvz2_rfl","version_name":"{{version}}","version_code":"675","obb":"main.675.com.ea.game.pvz2_rfl.obb"}""");
     return GameFolder.Open(dir);
+}
+
+// PvZ2 China: libSrc.so, an APK, no OBB. The manifest's obb is null (pvz2conv writes it null).
+GameFolder MakeChinaGame(string name)
+{
+    string dir = Path.Combine(root, "games", name);
+    Directory.CreateDirectory(Path.Combine(dir, "lib", "arm64-v8a"));
+    File.WriteAllText(Path.Combine(dir, "lib", "arm64-v8a", "libSrc.so"), "");
+    File.WriteAllText(Path.Combine(dir, "pvz2cthdlx.apk"), "");
+    File.WriteAllText(Path.Combine(dir, "_apk_manifest.json"),
+        """{"package":"com.popcap.pvz2cthdlx","version_name":"4.2.4","version_code":"1875","obb":null}""");
+    return GameFolder.Open(dir);
+}
+
+void ChinaGameTest()
+{
+    var g = MakeChinaGame("PVZ2C");
+    Expect(g.IsChina, "detected as PvZ2 China");
+    Expect(g.LibrariesReady, "libSrc.so counts as the game's library");
+    Expect(g.Problem() == null, $"no OBB needed for China: {g.Problem()}");
+    var args = RfuCommand.Build(g, []);
+    Expect(args.Contains("--apk") && !args.Contains("--obb"), $"China runs with --apk, not --obb: {string.Join(" ", args)}");
+    int ai = args.IndexOf("--apk");
+    Expect(ai >= 0 && args[ai + 1].EndsWith(".apk"), "the APK path follows --apk");
 }
 
 void GameFolderTest()

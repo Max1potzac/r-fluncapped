@@ -40,7 +40,23 @@ public sealed class GameFolder
     public bool HasIcon => File.Exists(IconPath);
     /// The mod's own libraries (libRFLib, libSnowie...): part of the game, so always loaded.
     public IReadOnlyList<string> ModLibraries => Info?.ModLibraries ?? [];
-    public bool LibrariesReady => File.Exists(Path.Combine(LibDir, "libPVZ2.so"));
+    public bool LibrariesReady => File.Exists(Path.Combine(LibDir, "libPVZ2.so")) || File.Exists(Path.Combine(LibDir, "libSrc.so"));
+
+    /// PvZ2 China: a single library (libSrc.so) whose data is in the APK, with no OBB. rfu runs it
+    /// from --lib-dir plus --apk instead of --lib-dir plus --obb.
+    public bool IsChina => File.Exists(Path.Combine(LibDir, "libSrc.so")) || Info?.Package == "com.popcap.pvz2cthdlx";
+
+    /// Whether an APK is PvZ2 China (libSrc.so and no libPVZ2.so), by peeking its arm64 libraries.
+    /// Lets the "Add game" flow skip asking for an OBB the China game doesn't have.
+    public static bool ApkIsChina(string apkPath)
+    {
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(apkPath);
+            return zip.GetEntry("lib/arm64-v8a/libSrc.so") != null && zip.GetEntry("lib/arm64-v8a/libPVZ2.so") == null;
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { return false; }
+    }
 
     /// The APK's libraries need taking out: there are none yet, or the APK is newer than them.
     public bool NeedsApkUnpack =>
@@ -92,12 +108,13 @@ public sealed class GameFolder
     /// What stops the game from starting, or null.
     public string? Problem()
     {
-        if (Obb == null) return "There's no .obb in this game's folder. Put the game's OBB (main.<number>.<package>.obb) there.";
+        // PvZ2 China has no OBB (its data is in the APK), so it skips the OBB checks.
+        if (!IsChina && Obb == null) return "There's no .obb in this game's folder. Put the game's OBB (main.<number>.<package>.obb) there.";
         if (!LibrariesReady)
             return Apk == null
                 ? "The game's libraries are missing. Put the game's .apk in its folder and the launcher takes them out."
                 : "The game's libraries haven't been taken out of the APK yet.";
-        if (Info?.Obb != null && !string.Equals(Info.Obb, Path.GetFileName(Obb), StringComparison.OrdinalIgnoreCase))
+        if (!IsChina && Info?.Obb != null && !string.Equals(Info.Obb, Path.GetFileName(Obb), StringComparison.OrdinalIgnoreCase))
             return $"The APK expects {Info.Obb}, but the OBB here is {Path.GetFileName(Obb)}. Use the OBB from the same version.";
         return null;
     }

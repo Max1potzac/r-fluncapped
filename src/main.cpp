@@ -7,6 +7,7 @@
 // the runtime doesn't implement.
 
 #include "android/app.h"
+#include "core/hooks.h"
 #include "core/patches.h"
 #include "core/trace.h"
 #include "game/anim_fix.h"
@@ -399,6 +400,89 @@ int main(int argc, char** argv) {
             app.overlay = keys.overlay;
         }
         for (const auto& name : trace_classes) rfu::trace_class(rt, pvz2, name);
+        // RFU_HOOK_LOG=<offset>,<offset>...: log x0-x3 (and what they point at) whenever the game's
+        // code reaches those offsets of its main library. A study aid, like --trace-class.
+        if (const char* list = std::getenv("RFU_HOOK_LOG")) {
+            std::string all = list;
+            for (std::size_t p = 0; p < all.size();) {
+                std::size_t comma = all.find(',', p);
+                std::string item = all.substr(p, comma == std::string::npos ? std::string::npos : comma - p);
+                p = comma == std::string::npos ? all.size() : comma + 1;
+                std::uint64_t off = std::stoull(item, nullptr, 16);
+                rfu::GuestAddr base = pvz2.base();
+                rfu::hook(rt, base + off, item, [item, base, &rt](rfu::CallContext& c) {
+                    std::string line = fmt::format("hook {}: lr +{:#x}", item, c.x(30) - base);
+                    for (int i = 0; i < 4; ++i) {
+                        std::uint64_t v = c.x(i);
+                        line += fmt::format(" | x{}={:#x}", i, v);
+                        if (rt.mem().is_committed(v, 48)) {
+                            std::string bytes;
+                            for (int k = 0; k < 48; ++k) {
+                                auto ch = rt.mem().read<std::uint8_t>(v + k);
+                                bytes += ch >= 32 && ch < 127 ? static_cast<char>(ch) : '.';
+                            }
+                            line += " [" + bytes + "]";
+                        }
+                    }
+                    rfu::log::info("{}", line);
+                });
+            }
+        }
+        // RFU_FORCE_RET=<off>=<val>,...: force the guest function at each offset of the main library
+        // to return <val> immediately (skip its body). A lever for bypassing gates (e.g. a profile
+        // count check). Offset is hex; value is hex (0x..) or decimal. A study/bring-up aid.
+        if (const char* list = std::getenv("RFU_FORCE_RET")) {
+            std::string all = list;
+            for (std::size_t p = 0; p < all.size();) {
+                std::size_t comma = all.find(',', p);
+                std::string item = all.substr(p, comma == std::string::npos ? std::string::npos : comma - p);
+                p = comma == std::string::npos ? all.size() : comma + 1;
+                std::size_t eq = item.find('=');
+                std::uint64_t off = std::stoull(item.substr(0, eq), nullptr, 16);
+                std::uint64_t val = eq == std::string::npos ? 0 : std::stoull(item.substr(eq + 1), nullptr, 0);
+                rfu::GuestAddr base = pvz2.base();
+                rfu::hook(rt, base + off, "force-ret " + item, [val](rfu::CallContext& c) {
+                    rfu::return_now(c, val);
+                });
+                rfu::log::info("force-ret: +{:#x} -> {}", off, val);
+            }
+        }
+
+        // RFU_GEN_PROFILE=1: when the new-player welcome dialog is about to be created
+        // (offset 0x34ca090, which only runs when GetProfileCount()==0 and all profile
+        // systems are up), create a fresh profile the way the dialog's OK button would and
+        // save it to disk, bypassing the dialog's broken offline "server-comm" gate. This
+        // writes userdata/user0/pp.dat so a valid profile exists. A bring-up aid for PVZ2C.
+        if (std::getenv("RFU_GEN_PROFILE")) {
+            rfu::GuestAddr base = pvz2.base();
+            rfu::hook(rt, base + 0x34ca090, "gen-profile", [&rt, base](rfu::CallContext& c) {
+                static bool done = false;
+                if (done) return;
+                done = true;
+                const rfu::GuestAddr OPNEW = base + 0x584cc20;      // operator new(size)
+                const rfu::GuestAddr CREATE = base + 0x4018fec;     // CreateProfile(name, 0, &out[x8])
+                const rfu::GuestAddr SAVE = base + 0x24055e4;        // saveCurrentProfile(PlayerInfo*)
+                // Build a libc++ SSO std::string for the profile name (byte0 = len<<1, chars at +1).
+                const std::string nm = "RFUSave";
+                rfu::GuestAddr name = rt.call(OPNEW, {32});
+                rt.mem().write<std::uint8_t>(name, static_cast<std::uint8_t>(nm.size() << 1));
+                for (std::size_t i = 0; i < nm.size(); ++i)
+                    rt.mem().write<std::uint8_t>(name + 1 + i, static_cast<std::uint8_t>(nm[i]));
+                rt.mem().write<std::uint8_t>(name + 1 + nm.size(), 0);
+                rfu::GuestAddr out = rt.call(OPNEW, {16});
+                rt.mem().write<std::uint64_t>(out, 0);
+                rt.mem().write<std::uint64_t>(out + 8, 0);
+                rt.call(CREATE, {name, 0}, out);                     // x8 = out (sret)
+                rfu::GuestAddr pi = rt.mem().read<std::uint64_t>(out);
+                rfu::log::info("gen-profile: CreateProfile -> out={:#x} playerinfo={:#x}", out, pi);
+                if (pi) {
+                    rt.mem().write<std::uint8_t>(pi + 0x3b0, 1);     // mark dirty so the writer flushes
+                    rt.call(SAVE, {pi, 0, 0});
+                    rfu::log::info("gen-profile: saveCurrentProfile called on {:#x}", pi);
+                }
+            });
+            rfu::log::info("gen-profile: armed on welcome-dialog creation");
+        }
 
         const auto& missing = rt.linker().missing();
         rfu::log::info("{} imports have no implementation yet", missing.size());

@@ -65,8 +65,11 @@ sealed class Apk
                 string.Join(", ", zip.Entries.Where(IsInnerApk).Select(e => e.FullName)));
 
         var info = ReadManifest(manifestEntry);
-        _log($"APK {info.Package} version {info.VersionName} (code {info.VersionCode}), Android {info.MinSdk}+");
-        if (info.Package != "" && info.VersionCode != "")
+        // PvZ2 China is a single library, libSrc.so, whose data lives in the APK itself and which
+        // has no OBB; the global game (and standalone mods like AltverZ) is libPVZ2.so plus an OBB.
+        bool china = zip.GetEntry(LibDir + "libSrc.so") != null && zip.GetEntry(LibDir + "libPVZ2.so") == null;
+        _log($"APK {info.Package} version {info.VersionName} (code {info.VersionCode}), Android {info.MinSdk}+{(china ? " (PvZ2 China: no OBB)" : "")}");
+        if (!china && info.Package != "" && info.VersionCode != "")
         {
             ObbName = $"main.{info.VersionCode}.{info.Package}.obb";
             _log($"     its OBB is {ObbName}");
@@ -97,7 +100,9 @@ sealed class Apk
             {
                 // the Java side's own code isn't needed by rfu
                 if (e.FullName.EndsWith(".dex", StringComparison.OrdinalIgnoreCase)) { dex++; continue; }
-                Extract(e, Path.Combine(outDir, SafeRelative(e.FullName)));
+                // China reads its assets (the ~2 GB of *.rsb.smf) straight from the APK via rfu --apk,
+                // so there's no need to copy them out; the global game reads them from here.
+                if (!china) Extract(e, Path.Combine(outDir, SafeRelative(e.FullName)));
                 assets.Add((e.FullName["assets/".Length..], e.Length));
             }
         }
@@ -110,17 +115,23 @@ sealed class Apk
         }
 
         foreach (var l in libs) _log($"ok   {LibDir}{l.Name} ({l.Size:N0} bytes)");
-        _log($"ok   {assets.Count} files in assets/{(dex > 0 ? $" ({dex} .dex left out)" : "")}");
+        _log(china
+            ? $"ok   {assets.Count} files in assets/ left in the APK (rfu reads China's data from it){(dex > 0 ? $" ({dex} .dex left out)" : "")}"
+            : $"ok   {assets.Count} files in assets/{(dex > 0 ? $" ({dex} .dex left out)" : "")}");
         if (assets.Any(a => a.Path.EndsWith(".rsb.smf", StringComparison.OrdinalIgnoreCase)))
             _log("     the game's packages are in assets (*.rsb.smf, as in PvZ2 China): drop them onto pvz2conv to unpack them");
-        var missing = Required.Where(r => !libs.Any(l => l.Name == r)).ToList();
+        // China's game library is libSrc.so; global PvZ2 needs libPVZ2.so and what it links.
+        string[] required = china ? ["libSrc.so"] : Required;
+        var missing = required.Where(r => !libs.Any(l => l.Name == r)).ToList();
         if (missing.Count > 0) _log($"FAIL rfu needs {string.Join(", ", missing)}, which this APK doesn't have");
-        var modLibs = libs.Where(l => IsModLibrary(l.Name, l.Elf)).Select(l => l.Name).ToList();
+        // China's extra libraries (Bugly, secsdk, keyprovider) are its own SDK; rfu runs libSrc.so
+        // alone and skips them for China, so they aren't mod libraries.
+        List<string> modLibs = china ? [] : libs.Where(l => IsModLibrary(l.Name, l.Elf)).Select(l => l.Name).ToList();
         _log(modLibs.Count > 0 ? $"     the mod's own code: {string.Join(", ", modLibs)} (rfu loads it after libPVZ2)" : "     no mod libraries: the game's own code only");
 
-        WriteManifest(outDir, info, abis, libs, assets, icon);
+        WriteManifest(outDir, info, abis, libs, assets, icon, china);
         _log($"output: {outDir}");
-        _log($"     run the game with: rfu --lib-dir \"{Path.Combine(outDir, "lib", "arm64-v8a")}\"");
+        _log($"     run the game with: rfu --lib-dir \"{Path.Combine(outDir, "lib", "arm64-v8a")}\"{(china ? $" --apk \"{apkPath}\"" : "")}");
         return missing.Count == 0;
     }
 
@@ -175,7 +186,7 @@ sealed class Apk
     static string SafeRelative(string name) =>
         Path.Combine(name.Split('/').Where(p => p is not ("" or "." or "..")).ToArray());
 
-    void WriteManifest(string outDir, Info info, List<string> abis, List<(string Name, long Size, string Sha256, bool Elf)> libs, List<(string Path, long Size)> assets, string? icon)
+    void WriteManifest(string outDir, Info info, List<string> abis, List<(string Name, long Size, string Sha256, bool Elf)> libs, List<(string Path, long Size)> assets, string? icon, bool china = false)
     {
         Directory.CreateDirectory(outDir);
         using var fs = File.Create(Path.Combine(outDir, "_apk_manifest.json"));
@@ -193,7 +204,7 @@ sealed class Apk
         foreach (var a in abis) w.WriteStringValue(a);
         w.WriteEndArray();
         w.WriteStartArray("mod_libraries");
-        foreach (var l in libs.Where(l => IsModLibrary(l.Name, l.Elf))) w.WriteStringValue(l.Name);
+        if (!china) foreach (var l in libs.Where(l => IsModLibrary(l.Name, l.Elf))) w.WriteStringValue(l.Name);
         w.WriteEndArray();
         w.WriteStartArray("libraries");
         foreach (var l in libs)

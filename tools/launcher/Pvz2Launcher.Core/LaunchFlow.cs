@@ -107,23 +107,23 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
 
     /// Puts a new version's APK and OBB in the game's folder (the old ones go to old/), then
     /// takes its libraries out. Saves and settings stay.
-    public async Task<bool> InstallVersionAsync(GameFolder game, string apk, string obb)
+    public async Task<bool> InstallVersionAsync(GameFolder game, string apk, string? obb)
     {
         string old = Path.Combine(game.Dir, "old");
         Directory.CreateDirectory(old);
         foreach (var f in Directory.EnumerateFiles(game.Dir, "*.apk").Concat(Directory.EnumerateFiles(game.Dir, "*.obb")))
             File.Move(f, Path.Combine(old, Path.GetFileName(f)), true);
-        ui.Log("copying the new APK and OBB...");
+        ui.Log(string.IsNullOrEmpty(obb) ? "copying the new APK..." : "copying the new APK and OBB...");
         await Task.Run(() =>
         {
             File.Copy(apk, Path.Combine(game.Dir, Path.GetFileName(apk)), true);
-            File.Copy(obb, Path.Combine(game.Dir, Path.GetFileName(obb)), true);
+            if (!string.IsNullOrEmpty(obb)) File.Copy(obb, Path.Combine(game.Dir, Path.GetFileName(obb)), true);
         });
         return await PrepareAsync(game);
     }
 
     /// A new game folder from an APK and OBB (a standalone mod such as AltverZ, or the game itself).
-    public async Task<GameFolder?> AddGameAsync(string gamesDir, string name, string apk, string obb)
+    public async Task<GameFolder?> AddGameAsync(string gamesDir, string name, string apk, string? obb)
     {
         string dir = Path.Combine(gamesDir, string.Concat(name.Split(Path.GetInvalidFileNameChars())).Trim());
         if (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any()) { ui.ShowProblem($"{dir} already exists."); return null; }
@@ -131,7 +131,7 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         await Task.Run(() =>
         {
             File.Copy(apk, Path.Combine(dir, Path.GetFileName(apk)));
-            File.Copy(obb, Path.Combine(dir, Path.GetFileName(obb)));
+            if (!string.IsNullOrEmpty(obb)) File.Copy(obb, Path.Combine(dir, Path.GetFileName(obb)));
         });
         var game = GameFolder.Open(dir);
         if (!await PrepareAsync(game)) return game;

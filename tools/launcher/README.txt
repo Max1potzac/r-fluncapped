@@ -15,6 +15,10 @@ SETTING UP
   recognised by its APK, so standalone mods such as AltverZ work the same way
   as Reflourished, each with its own saves.
 
+  PvZ2 China (com.popcap.pvz2cthdlx, libSrc.so) has no OBB - all its data is
+  inside the APK - so it needs only the .apk. "Add game" doesn't ask for an
+  OBB once it sees a China APK, and the launcher runs it from the APK.
+
 THE MENU
   Display           assets (high 1536 / low 768), the resolution the game
                     draws at, window size, full screen, VSync, ANGLE.

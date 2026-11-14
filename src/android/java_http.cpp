@@ -1,5 +1,6 @@
 #include "android/java_http.h"
 
+#include "android/cloud_crypto.h"
 #include "core/log.h"
 #include "jni/jni.h"
 #include "platform/http.h"
@@ -8,8 +9,12 @@
 #include <cstdlib>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
+#include <sstream>
 #include <thread>
 
 namespace rfu::android {
@@ -45,6 +50,67 @@ std::shared_ptr<Transaction> find(HttpState& s, GuestAddr self) {
     return it == s.transactions.end() ? nullptr : it->second;
 }
 
+// PvZ2 China's cloud (the ditwan "cloudpvz2android"/"uuidpvz2android" hosts) is reachable only from
+// inside China and needs a Chinese account; offline, rfu answers these requests itself so the game's
+// own local profile path runs. The request is multipart/form-data with fields `req` (an endpoint
+// code), `e` (base64url(AES-256-CBC(JSON))) and `ev`. See cloud_crypto.h for the scheme.
+namespace cloud_stub {
+
+// The game's own cloud hosts. The talkyun/log hosts are telemetry (plain JSON, no reply needed).
+bool is_cloud_host(const std::string& url) {
+    static const char* hosts[] = {"cloudpvz2android.ditwan.cn", "cloudpvz2androidbeta.ditwan.cn",
+                                  "uuidpvz2android.ditwan.cn", "profileintelligent.ditwan.cn",
+                                  "pvz2androidtga.talkyun.com.cn", "iosandroidlog.ditwan.cn",
+                                  "pvz2logandroid.intelligent.popcap.com.cn"};
+    for (const char* h : hosts)
+        if (url.find(h) != std::string::npos) return true;
+    return false;
+}
+
+// Pull a named field's value out of a multipart/form-data body (boundary _{{}}_).
+std::string field(const std::string& body, const std::string& name) {
+    std::string key = "name=\"" + name + "\"";
+    auto p = body.find(key);
+    if (p == std::string::npos) return {};
+    auto nl = body.find("\r\n\r\n", p);
+    std::size_t skip = 4;
+    if (nl == std::string::npos) { nl = body.find("\n\n", p); skip = 2; }
+    if (nl == std::string::npos) return {};
+    auto start = nl + skip;
+    auto end = body.find("\r\n--", start);
+    if (end == std::string::npos) end = body.find("\n--", start);
+    if (end == std::string::npos) end = body.size();
+    std::string v = body.substr(start, end - start);
+    while (!v.empty() && (v.back() == '\r' || v.back() == '\n' || v.back() == '-' || v.back() == ' ')) v.pop_back();
+    return v;
+}
+
+// The plaintext JSON reply for an endpoint, or empty to answer with an empty body. Driven by files
+// under RFU_CLOUD_DIR (<req>.json) while the protocol is still being worked out, so responses can be
+// tuned without rebuilding; .raw next to it is sent verbatim (to try different response framings).
+std::optional<std::string> response_plain(const std::string& req, const std::string& req_json, bool& raw) {
+    raw = false;
+    if (const char* dir = std::getenv("RFU_CLOUD_DIR")) {
+        std::filesystem::path d(dir);
+        std::error_code ec;
+        if (std::filesystem::exists(d / (req + ".raw"), ec)) {
+            std::ifstream in(d / (req + ".raw"), std::ios::binary);
+            std::ostringstream ss; ss << in.rdbuf();
+            raw = true;
+            return ss.str();
+        }
+        if (std::filesystem::exists(d / (req + ".json"), ec)) {
+            std::ifstream in(d / (req + ".json"), std::ios::binary);
+            std::ostringstream ss; ss << in.rdbuf();
+            return ss.str();
+        }
+    }
+    (void)req_json;
+    return std::nullopt;
+}
+
+}  // namespace cloud_stub
+
 // AndroidHttpTransaction.run(), on a worker thread.
 void run(HttpState& s, Transaction& t) {
     auto& jni = jni::get(*s.rt);
@@ -63,6 +129,53 @@ void run(HttpState& s, Transaction& t) {
             t.request.url = std::string(v.substr(eq + 1)) + t.request.url.substr(eq);
     }
     log::debug("http: {} {}", t.request.method, t.request.url);
+    // RFU_HTTP_LOG=1: the headers and body too, to study a server's protocol.
+    static const bool log_bodies = std::getenv("RFU_HTTP_LOG") != nullptr;
+    if (log_bodies) {
+        for (const auto& [k, v] : t.request.headers) log::info("http:   {}: {}", k, v);
+        if (t.request.has_body) log::info("http:   body ({} bytes): {}", t.request.body.size(), std::string(t.request.body.begin(), t.request.body.end()));
+    }
+    // RFU_CLOUD_STUB: answer PvZ2 China's cloud hosts locally instead of over the network, so the
+    // game's offline profile path runs. Decrypts the request, builds an (encrypted) reply, and hands
+    // it back through the same callbacks a real response would use.
+    static const bool cloud_stub = std::getenv("RFU_CLOUD_STUB") != nullptr;
+    if (cloud_stub && cloud_stub::is_cloud_host(t.request.url)) {
+        std::string body(t.request.body.begin(), t.request.body.end());
+        std::string req = cloud_stub::field(body, "req");
+        std::string e = cloud_stub::field(body, "e");
+        std::string req_json;
+        if (!req.empty() && !e.empty()) req_json = cloud::decrypt(req, e);
+        log::info("cloud stub: {} req={} -> {}", t.request.url, req, req_json.empty() ? "(no payload)" : req_json);
+        if (!e.empty() && std::getenv("RFU_CLOUD_RAWE")) log::info("cloud stub: rawe req={} e={}", req, e);
+
+        bool raw = false;
+        std::optional<std::string> plain = cloud_stub::response_plain(req, req_json, raw);
+        std::string reply;  // the response body bytes to deliver
+        if (plain) {
+            reply = raw ? *plain : (req.empty() ? *plain : cloud::encrypt(req, *plain));
+            log::info("cloud stub: reply to {} ({} bytes{}): {}", req, reply.size(), raw ? ", raw" : "",
+                      raw ? std::string("<raw>") : *plain);
+        }
+        {
+            std::lock_guard lock(t.mutex);
+            t.response = platform::HttpResponse{};
+            t.response.status = 200;
+            t.response.status_line = "OK";
+            t.response.content_length = static_cast<std::int64_t>(reply.size());
+        }
+        fire("HttpReceivedResponse");
+        if (!reply.empty() && t.native.load()) {
+            std::size_t sent = 0;
+            while (sent < reply.size() && t.native.load()) {
+                std::size_t chunk = std::min<std::size_t>(reply.size() - sent, 16384);
+                s.rt->mem().write_bytes(jni.array_data(t.buffer), reply.data() + sent, chunk);
+                fire("HttpReceivedData", {t.buffer, chunk});
+                sent += chunk;
+            }
+        }
+        fire("HttpTransactionComplete");
+        return;
+    }
     if (!s.online) {
         fire("HttpTransactionError");
         return;

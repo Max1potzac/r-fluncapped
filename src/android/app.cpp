@@ -826,13 +826,29 @@ void App::implement_java_china() {
     impl(tw, "InitializeSDK", [this, tw](jni::JavaCall& j) -> std::uint64_t {
         GuestAddr self = j.self;
         log::info("Talkweb SDK: starting (app id {}); logging in as a guest, offline", j.string_arg(0));
-        run_on_ui([this, tw, self] {
+        std::uint64_t login_code = 0;
+        if (const char* c = std::getenv("RFU_SDK_CODE")) login_code = std::strtoull(c, nullptr, 0);
+        int relogin = 0;
+        if (const char* r = std::getenv("RFU_SDK_RELOGIN")) relogin = std::atoi(r);
+        run_on_ui([this, tw, self, login_code] {
             std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
             call(tw, "Native_SDKInitStart", self, {driver});
             call(tw, "Native_SDKInitEnd", self, {driver, 0});
             call(tw, "Native_SDKLoginStart", self, {driver});
-            call(tw, "Native_SDKLoginEnd", self, {driver, 0, str("rfu-offline-" + device_id)});
+            call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str("rfu-offline-" + device_id)});
         });
+        // Experiment: re-fire the login-complete callback on later frames, in case the welcome
+        // dialog subscribes to it only after our first (early) fire. Self-reschedules `relogin` times.
+        if (relogin > 0) {
+            auto refire = std::make_shared<std::function<void(int)>>();
+            *refire = [this, tw, self, login_code, refire](int n) {
+                std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
+                call(tw, "Native_SDKLoginStart", self, {driver});
+                call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str("rfu-offline-" + device_id)});
+                if (n > 1) run_on_ui([refire, n] { (*refire)(n - 1); });
+            };
+            run_on_ui([refire, relogin] { (*refire)(relogin); });
+        }
         return 0;
     });
     impl(tw, "GetDeviceID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });
@@ -844,6 +860,14 @@ void App::implement_java_china() {
     });
     for (const char* name : {"GetSignature", "GetChannelID", "GetTWRequestHead", "GetDeclare", "GetGameCenterUrl", "GetChannelUpdateUrl"})
         impl(tw, name, [ret_str](jni::JavaCall&) { return ret_str(""); });
+
+    // --- AndroidUIEventManager: the native engine drains the input queue through this, not
+    // AndroidGameApp.UI_ProcessEvents; the byte layout is the one UiEvents::write already writes. ---
+    impl(pkg + "AndroidUIEventManager", "ProcessEvents", [this](jni::JavaCall& j) -> std::uint64_t {
+        auto buffer = jni.object(j.args.at(0));
+        if (!buffer || !buffer->data) return 0;
+        return events.write(rt.mem(), buffer->data, buffer->length);
+    });
 
     // --- AndroidHttpProxy --------------------------------------------------------------------
     impl(pkg + "AndroidHttpProxy", "GetNetworkStatus", [this](jni::JavaCall&) -> std::uint64_t { return rt.options().network ? 2 : 0; });

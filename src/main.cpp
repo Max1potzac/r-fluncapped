@@ -67,6 +67,8 @@ void usage() {
                  "  --version-name <x.y.z>   the APK's version name, which the game reports (default: 1.4.0)\n"
                  "  --no-mod-libs            don't load the mod's own libraries (libRFLib, libSnowie...): vanilla code\n"
                  "  --offline                no network: the game skips its CDN update and plays offline\n"
+                 "  --cloud-stub             PvZ2 China: answer its cloud hosts locally so offline play works\n"
+                 "  --cloud-dir <dir>        tuned cloud-stub responses (<req>.json / <req>.raw) for --cloud-stub\n"
                  "  --log <level>            trace, debug, info (default), warn, error\n"
                  "  --log-file <file>        write the log (and the game's own output) to a file\n"
                  "  --init-only              stop after initialisation and list unimplemented imports\n"
@@ -95,6 +97,16 @@ std::vector<std::filesystem::path> mod_libraries(const std::filesystem::path& li
     }
     std::sort(libs.begin(), libs.end());
     return libs;
+}
+
+// Sets an environment variable so the getenv-driven levers (the cloud stub) can be switched on
+// from the command line too, which is how the launcher reaches them.
+void set_env(const char* name, const std::string& value) {
+#ifdef _WIN32
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
 }
 
 rfu::log::Level parse_level(const std::string& s) {
@@ -210,6 +222,13 @@ int main(int argc, char** argv) {
                 dump_patches = value();
             } else if (arg == "--offline") {
                 options.network = false;
+            } else if (arg == "--cloud-stub") {
+                // Answer PvZ2 China's cloud hosts locally (HTTP 200) instead of letting them fail,
+                // so the game's offline profile path runs past the "network failure" dialogs.
+                set_env("RFU_CLOUD_STUB", "1");
+            } else if (arg == "--cloud-dir") {
+                // Optional: tuned per-endpoint responses (<req>.json / <req>.raw) for the stub.
+                set_env("RFU_CLOUD_DIR", value());
             } else if (arg == "--obb") {
                 app.obb = rfu::path_from_utf8(value());
             } else if (arg == "--apk") {

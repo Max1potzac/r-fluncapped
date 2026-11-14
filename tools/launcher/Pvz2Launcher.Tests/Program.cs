@@ -99,6 +99,8 @@ void ChinaGameTest()
     Expect(args.Contains("--apk") && !args.Contains("--obb"), $"China runs with --apk, not --obb: {string.Join(" ", args)}");
     int ai = args.IndexOf("--apk");
     Expect(ai >= 0 && args[ai + 1].EndsWith(".apk"), "the APK path follows --apk");
+    Expect(g.Settings.Offline, "China defaults to offline");
+    Expect(args.Contains("--offline") && args.Contains("--cloud-stub"), $"China offline gets the cloud stub: {string.Join(" ", args)}");
 }
 
 void GameFolderTest()

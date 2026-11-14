@@ -65,6 +65,13 @@ public sealed class GameSettings
             // the URL libRFLib gives the game's CDN client
             s.CdnUrl = "https://reflourished.ducnguyen.org/cdn/{version}.main.tar";
         }
+        else if (package == "com.popcap.pvz2cthdlx")
+        {
+            // PvZ2 China has no reachable offline CDN here; default to offline play, which also
+            // turns on the cloud-host stub so it gets past its "network failure" dialogs.
+            s.DisplayName = "PvZ2 China";
+            s.Offline = true;
+        }
         return s;
     }
 }

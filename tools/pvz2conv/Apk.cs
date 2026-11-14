@@ -156,13 +156,17 @@ sealed class Apk
     {
         string[] densities = ["xxxhdpi", "xxhdpi", "xhdpi", "hdpi", "mdpi", "ldpi"];
         int Rank(string dir) { int i = Array.FindIndex(densities, d => dir.EndsWith("-" + d)); return i < 0 ? densities.Length : i; }
+        // The canonical launcher-icon names first, so a high-density third-party SDK icon that
+        // merely contains "icon" (China's APK is full of com_lenovo_*, gc_*...) can't win.
+        int Canon(string name) => name is "ic_launcher" or "icon" or "app_icon" ? 2 : name.EndsWith("launcher") ? 1 : 0;
         return zip.Entries
             .Where(e => e.FullName.StartsWith("res/") && e.FullName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) && e.FullName.Count(c => c == '/') == 2)
             .Select(e => (Entry: e, Dir: e.FullName.Split('/')[1], Name: Path.GetFileNameWithoutExtension(e.Name).ToLowerInvariant()))
             .Where(x => (x.Dir.StartsWith("mipmap") || x.Dir.StartsWith("drawable")) && (x.Name.Contains("icon") || x.Name.Contains("launcher")))
             .Where(x => !x.Name.EndsWith("_background") && !x.Name.EndsWith("_foreground") && !x.Name.EndsWith("_round") && !x.Name.EndsWith("_monochrome"))
             .Where(x => !x.Name.StartsWith("abc_") && !x.Name.StartsWith("applovin") && !x.Name.StartsWith("common_") && !x.Name.StartsWith("notification"))
-            .OrderBy(x => x.Dir.StartsWith("mipmap") ? 0 : 1)
+            .OrderByDescending(x => Canon(x.Name))
+            .ThenBy(x => x.Dir.StartsWith("mipmap") ? 0 : 1)
             .ThenBy(x => Rank(x.Dir))
             .ThenByDescending(x => x.Entry.Length)
             .Select(x => x.Entry.FullName)

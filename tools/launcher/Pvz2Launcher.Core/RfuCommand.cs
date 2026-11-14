@@ -28,6 +28,15 @@ public static class RfuCommand
         if (!s.VSync) args.Add("--no-vsync");
         if (s.Angle) args.Add("--angle");
         if (s.Offline) args.Add("--offline");
+        // China checks its cloud hosts before letting you play; offline that fails with a "network
+        // failure" dialog, so answer those hosts locally. A cloud\ folder of tuned responses
+        // (<req>.json / <req>.raw) next to the game is passed along if present.
+        if (game.IsChina && s.Offline)
+        {
+            args.Add("--cloud-stub");
+            string cloudDir = Path.Combine(game.Dir, "cloud");
+            if (Directory.Exists(cloudDir)) args.AddRange(["--cloud-dir", cloudDir]);
+        }
 
         if (s.HoverCollect) args.Add("--hover");
         if (s.FixAnimations) args.Add("--fix-animations");

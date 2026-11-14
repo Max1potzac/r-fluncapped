@@ -8,7 +8,10 @@ public static class RfuCommand
     public static List<string> Build(GameFolder game, IReadOnlyList<Mods.Overlay> overlays)
     {
         var s = game.Settings;
-        var args = new List<string> { "--lib-dir", game.LibDir, "--obb", game.Obb!, "--data", game.DataDir, "--log-file", game.LogPath };
+        var args = new List<string> { "--lib-dir", game.LibDir, "--data", game.DataDir, "--log-file", game.LogPath };
+        // China runs from the APK (its data is inside it); the global game runs from its OBB.
+        if (game.IsChina) args.AddRange(["--apk", game.Apk!]);
+        else args.AddRange(["--obb", game.Obb!]);
         if (game.Info is { } info)
         {
             if (info.Package != "") args.AddRange(["--package", info.Package]);

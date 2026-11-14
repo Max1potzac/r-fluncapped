@@ -217,7 +217,7 @@ sealed class MainForm : Form, ILaunchUi
             var info = game.Info;
             string version = info != null ? $"{info.Package}  version {info.VersionName} ({info.VersionCode})" : "";
             if (game.ModLibraries.Count > 0) version += $"\nmod code: {string.Join(", ", game.ModLibraries)}";
-            _status.Text = game.Problem() is { } problem ? $"{version}\n{problem}".Trim() : $"{version}\n{Path.GetFileName(game.Obb)}";
+            _status.Text = game.Problem() is { } problem ? $"{version}\n{problem}".Trim() : $"{version}\n{(game.IsChina ? "PvZ2 China (no OBB)" : Path.GetFileName(game.Obb))}";
             _status.ForeColor = game.Problem() != null ? Color.Firebrick : SystemColors.ControlText;
 
             _assets.SelectedIndex = s.Assets == "low" ? 1 : 0;
@@ -361,8 +361,15 @@ sealed class MainForm : Form, ILaunchUi
     {
         var apk = PickFile("The game's APK", "Android app (*.apk)|*.apk|All files|*.*");
         if (apk == null) return;
-        var obb = PickFile("The game's OBB", "Game data (*.obb)|*.obb|All files|*.*", Path.GetDirectoryName(apk));
-        if (obb == null) return;
+        string? obb = null;
+        // PvZ2 China has no OBB (its data is in the APK), so don't ask for one.
+        if (GameFolder.ApkIsChina(apk))
+            Log("PvZ2 China APK: no OBB needed, its data is in the APK.");
+        else
+        {
+            obb = PickFile("The game's OBB", "Game data (*.obb)|*.obb|All files|*.*", Path.GetDirectoryName(apk));
+            if (obb == null) return;
+        }
         var game = await _flow.AddGameAsync(_gamesDir, Path.GetFileNameWithoutExtension(apk), apk, obb);
         if (game == null) return;
         _game = game;

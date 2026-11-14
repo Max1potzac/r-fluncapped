@@ -428,6 +428,25 @@ int main(int argc, char** argv) {
                 });
             }
         }
+        // RFU_FORCE_RET=<off>=<val>,...: force the guest function at each offset of the main library
+        // to return <val> immediately (skip its body). A lever for bypassing gates (e.g. a profile
+        // count check). Offset is hex; value is hex (0x..) or decimal. A study/bring-up aid.
+        if (const char* list = std::getenv("RFU_FORCE_RET")) {
+            std::string all = list;
+            for (std::size_t p = 0; p < all.size();) {
+                std::size_t comma = all.find(',', p);
+                std::string item = all.substr(p, comma == std::string::npos ? std::string::npos : comma - p);
+                p = comma == std::string::npos ? all.size() : comma + 1;
+                std::size_t eq = item.find('=');
+                std::uint64_t off = std::stoull(item.substr(0, eq), nullptr, 16);
+                std::uint64_t val = eq == std::string::npos ? 0 : std::stoull(item.substr(eq + 1), nullptr, 0);
+                rfu::GuestAddr base = pvz2.base();
+                rfu::hook(rt, base + off, "force-ret " + item, [val](rfu::CallContext& c) {
+                    rfu::return_now(c, val);
+                });
+                rfu::log::info("force-ret: +{:#x} -> {}", off, val);
+            }
+        }
 
         const auto& missing = rt.linker().missing();
         rfu::log::info("{} imports have no implementation yet", missing.size());

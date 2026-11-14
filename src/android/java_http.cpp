@@ -146,6 +146,7 @@ void run(HttpState& s, Transaction& t) {
         std::string req_json;
         if (!req.empty() && !e.empty()) req_json = cloud::decrypt(req, e);
         log::info("cloud stub: {} req={} -> {}", t.request.url, req, req_json.empty() ? "(no payload)" : req_json);
+        if (!e.empty() && std::getenv("RFU_CLOUD_RAWE")) log::info("cloud stub: rawe req={} e={}", req, e);
 
         bool raw = false;
         std::optional<std::string> plain = cloud_stub::response_plain(req, req_json, raw);

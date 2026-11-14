@@ -246,12 +246,12 @@ int fill_stat(Runtime& rt, const std::string& path, GuestAddr st) {
     using namespace android::stat_off;
     auto& mem = rt.mem();
     std::memset(mem.host(st), 0, sizeof_stat);
-    std::uint32_t mode;
-    std::uint64_t size = 0;
-    std::int64_t mtime = 0;
+    std::uint32_t st_mode;
+    std::uint64_t st_size = 0;
+    std::int64_t st_mtime = 0;
     if (auto gen = rt.vfs().virtual_file(path)) {
-        mode = android::kS_IFREG | 0444;
-        size = (*gen)().size();
+        st_mode = android::kS_IFREG | 0444;
+        st_size = (*gen)().size();
     } else {
         auto host = rt.vfs().to_host_read(path);
         if (!host) return -android::kENOENT;
@@ -259,25 +259,25 @@ int fill_stat(Runtime& rt, const std::string& path, GuestAddr st) {
         auto status = fs::status(*host, ec);
         if (ec || !fs::exists(status)) return -android::kENOENT;
         if (fs::is_directory(status)) {
-            mode = android::kS_IFDIR | 0771;
+            st_mode = android::kS_IFDIR | 0771;
         } else {
-            mode = android::kS_IFREG | 0660;
-            size = fs::file_size(*host, ec);
+            st_mode = android::kS_IFREG | 0660;
+            st_size = fs::file_size(*host, ec);
         }
         auto t = fs::last_write_time(*host, ec);
-        if (!ec) mtime = to_unix_seconds(t);
+        if (!ec) st_mtime = to_unix_seconds(t);
     }
     mem.write<std::uint64_t>(st + ino, std::hash<std::string>{}(path));
-    mem.write<std::uint32_t>(st + android::stat_off::mode, mode);
+    mem.write<std::uint32_t>(st + mode, st_mode);
     mem.write<std::uint32_t>(st + nlink, 1);
     mem.write<std::uint32_t>(st + uid, 10000);
     mem.write<std::uint32_t>(st + gid, 10000);
-    mem.write<std::int64_t>(st + android::stat_off::size, static_cast<std::int64_t>(size));
+    mem.write<std::int64_t>(st + size, static_cast<std::int64_t>(st_size));
     mem.write<std::int32_t>(st + blksize, 4096);
-    mem.write<std::int64_t>(st + blocks, static_cast<std::int64_t>((size + 511) / 512));
-    mem.write<std::int64_t>(st + atime, mtime);
-    mem.write<std::int64_t>(st + android::stat_off::mtime, mtime);
-    mem.write<std::int64_t>(st + ctime, mtime);
+    mem.write<std::int64_t>(st + blocks, static_cast<std::int64_t>((st_size + 511) / 512));
+    mem.write<std::int64_t>(st + atime, st_mtime);
+    mem.write<std::int64_t>(st + mtime, st_mtime);
+    mem.write<std::int64_t>(st + ctime, st_mtime);
     return 0;
 }
 

@@ -826,12 +826,14 @@ void App::implement_java_china() {
     impl(tw, "InitializeSDK", [this, tw](jni::JavaCall& j) -> std::uint64_t {
         GuestAddr self = j.self;
         log::info("Talkweb SDK: starting (app id {}); logging in as a guest, offline", j.string_arg(0));
-        run_on_ui([this, tw, self] {
+        std::uint64_t login_code = 0;
+        if (const char* c = std::getenv("RFU_SDK_CODE")) login_code = std::strtoull(c, nullptr, 0);
+        run_on_ui([this, tw, self, login_code] {
             std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
             call(tw, "Native_SDKInitStart", self, {driver});
             call(tw, "Native_SDKInitEnd", self, {driver, 0});
             call(tw, "Native_SDKLoginStart", self, {driver});
-            call(tw, "Native_SDKLoginEnd", self, {driver, 0, str("rfu-offline-" + device_id)});
+            call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str("rfu-offline-" + device_id)});
         });
         return 0;
     });

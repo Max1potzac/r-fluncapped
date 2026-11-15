@@ -172,9 +172,33 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
                 ObbUpdate.ForgetTimestamp(game);  // the new OBB's version is worked out afresh
             }
         });
+        // A library the old version downloaded for itself (Reflourished's own updates, in its
+        // private files) would be loaded in place of the new APK's.
+        foreach (var f in new[] { "libRFLib.so", "_lib_boot" })
+            File.Delete(Path.Combine(game.DataDir, "data", "files", f));
+        // The name says the old version: the new one comes from the APK's file name, since
+        // Reflourished's manifest doesn't carry it (1.5.0's says 1.4.0).
+        if (RenamedForVersion(game.DisplayName, VersionInName(Path.GetFileNameWithoutExtension(apk))) is { } renamed)
+        {
+            ui.Log($"{game.DisplayName} is now called {renamed}");
+            game.Settings.DisplayName = renamed;
+            game.SaveSettings();
+        }
         if (!await PrepareAsync(game)) return false;
         if (string.IsNullOrEmpty(obb) && !game.IsChina) return await EnsureObbAsync(game, apk);
         return true;
+    }
+
+    /// The last version number in a name ("PvZ2 Reflourished 1.5.0" gives 1.5.0), or null.
+    public static string? VersionInName(string name) =>
+        System.Text.RegularExpressions.Regex.Matches(name, @"(?<![\d.])\d+(\.\d+){1,3}(?![\d.])") is { Count: > 0 } m ? m[^1].Value : null;
+
+    /// The name with its version swapped for `version`, or null when there's nothing to change.
+    public static string? RenamedForVersion(string name, string? version)
+    {
+        if (version == null || VersionInName(name) is not { } old || old == version) return null;
+        int at = name.LastIndexOf(old, StringComparison.Ordinal);
+        return name[..at] + version + name[(at + old.Length)..];
     }
 
     /// For an APK that downloads its own OBB (Reflourished 1.5.0+): the OBB it wants, downloaded or

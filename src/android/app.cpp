@@ -1201,6 +1201,32 @@ void mount_storage(Runtime& rt, const AppOptions& options) {
     }
 }
 
+std::optional<fs::path> staged_mod_library(const AppOptions& options, const std::string& name) {
+    if (name != "libRFLib.so") return std::nullopt;
+    fs::path files = options.data_dir / "data" / "files", staged = files / name, boot = files / "_lib_boot";
+    std::error_code ec;
+    if (!fs::exists(staged, ec)) return std::nullopt;
+    if (!fs::exists(files / "liboverride.txt", ec)) {
+        int boots = 0;
+        if (std::ifstream in(boot); in) in >> boots;
+        if (boots >= 3) {
+            log::warn("the downloaded {} started {} times without the game confirming it: using the APK's", name, boots);
+            fs::remove(staged, ec);
+            fs::remove(boot, ec);
+            return std::nullopt;
+        }
+        std::ofstream(boot, std::ios::trunc) << boots + 1;
+    }
+    if (fs::file_size(staged, ec) == 0 || ec) return std::nullopt;
+    return staged;
+}
+
+void drop_staged_mod_library(const AppOptions& options, const std::string& name) {
+    fs::path files = options.data_dir / "data" / "files";
+    std::error_code ec;
+    if (!fs::exists(files / "liboverride.txt", ec)) fs::remove(files / name, ec);
+}
+
 int run_app(Runtime& rt, const AppOptions& options) {
     App app(rt, options);
     return app.run();

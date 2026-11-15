@@ -1551,7 +1551,7 @@ private:
         hook(rt_, update, name, [self = shared_from_this(), vtable, &seen](CallContext& c) {
             auto& rt = self->rt_;
             GuestAddr object = c.x(0);
-            if (rt.mem().read<std::uint64_t>(object) != vtable) return;
+            if (!self->same_class(object, vtable)) return;
             seen.object = object;
             seen.when = now_ticks();
         });
@@ -1561,10 +1561,23 @@ private:
     // The seed chooser was drawn this frame or the last few.
     bool chooser_shown() const { return live(chooser_, chooser_vtable_, std::chrono::milliseconds(150)) != 0; }
 
+    // The object's of the class with this vtable: it has it, or a copy of it (Reflourished 1.5.0's
+    // libRFLib gives the seed chooser a vtable of its own, on the heap, with no type_info: the
+    // game's functions in it, some replaced).
+    bool same_class(GuestAddr object, GuestAddr vtable) const {
+        auto& mem = rt_.mem();
+        GuestAddr vt = mem.read<std::uint64_t>(object);
+        if (vt == vtable) return true;
+        if (vt < 16 || !mem.is_committed(vt, (kUpdateSlot + 1) * 8)) return false;
+        for (std::size_t i : {std::size_t{0}, std::size_t{1}, kUpdateSlot})
+            if (mem.read<std::uint64_t>(vt + i * 8) != mem.read<std::uint64_t>(vtable + i * 8)) return false;
+        return true;
+    }
+
     GuestAddr live(const Seen& seen, GuestAddr vtable, std::chrono::steady_clock::duration stale = kStale) const {
         GuestAddr object = seen.object;
         auto age = std::chrono::steady_clock::duration(now_ticks() - seen.when);
-        if (!object || age > stale || rt_.mem().read<std::uint64_t>(object) != vtable) return 0;
+        if (!object || age > stale || !same_class(object, vtable)) return 0;
         return object;
     }
 

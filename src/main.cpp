@@ -62,6 +62,7 @@ void usage() {
                  "  --pad-mappings <file>    SDL controller mappings (gamecontrollerdb.txt lines) for controllers SDL doesn't know\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
+                 "  --custom-cursor          the glove for the mouse, in place of the system's arrow\n"
                  "  --fix-animations         unfreeze plants stuck on an animation while the level isn't running\n"
                  "  --icon <file.png>        the window's icon\n"
                  "  --title <text>           the window's title\n"
@@ -191,6 +192,8 @@ int main(int argc, char** argv) {
             } else if (arg == "--version-name") {
                 app.version_name = value();
                 version_name_set = true;
+            } else if (arg == "--custom-cursor") {
+                app.window.custom_cursor = true;
             } else if (arg == "--hover") {
                 app.window.hover = true;
             } else if (arg == "--fix-animations") {

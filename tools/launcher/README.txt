@@ -33,7 +33,9 @@ THE MENU
                     charged idle), keybinds, keybind hints (on by default:
                     each key in a small badge on the seed packet or button
                     it presses), controller support (on by default, see
-                    below), and each code patch in patches\.
+                    below), the glove cursor (off by default: the
+                    controller's glove for the mouse too, in place of
+                    Windows' arrow), and each code patch in patches\.
                     Offline skips the CDN and the update checks. "Download
                     OBB updates" (Reflourished, on by default) is step 3 of
                     PLAY. A mod's own
@@ -156,7 +158,9 @@ CONTROLLER
     X (powerup in use)  hold to use it on the cursor's tile (snowballs,
                         flamethrower, Power Zap...); press twice quickly
                         to swipe the tile with the flick (Power Toss)
-  On the pause menu a box picks the sliders and buttons instead:
+  When a character talks ("tap to continue"), any button moves it on.
+  On the pause menu and the settings a box picks the sliders, buttons
+  and checkboxes instead (the settings' list scrolls along):
     D-pad / left stick  move the box; left and right move a slider
     A                   press the button
     B / Start           resume
@@ -173,7 +177,8 @@ CONTROLLER
   Everywhere else (the world map, the menus...):
     Right stick         move a cursor (faster the further it's pushed)
     A                   touch where the cursor is (hold to drag)
-    D-pad / left stick  scroll
+    D-pad / left stick  scroll (on the worlds, left and right go world by
+                        world)
     B                   back
   On the world map, also:
     LT                  almanac

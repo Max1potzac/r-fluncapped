@@ -259,6 +259,24 @@ public:
             aim_cursors_.emplace_back(std::piecewise_construct, std::forward_as_tuple(aim->address), std::forward_as_tuple());
         }
         if (auto map = find_vtable(rt_.mem(), pvz2, "WorldMap")) map_vtable_ = map->address;
+        // Crazy Dave and the other characters' talk ("tap to continue") is drawn by this one,
+        // which takes the screen's touches while it's up.
+        if (auto npc = find_vtable(rt_.mem(), pvz2, "CrazyNPCManager")) npc_vtable_ = npc->address;
+        if (auto settings = find_vtable(rt_.mem(), pvz2, "SettingsDialog")) settings_vtable_ = settings->address;
+        // These two are told by their type_info: the classes have more than one vtable.
+        if (auto uni = find_vtable(rt_.mem(), pvz2, "UniverseMap")) universe_type_ = rt_.mem().read<std::uint64_t>(uni->address - 8);
+        if (auto world = find_vtable(rt_.mem(), pvz2, "UniverseWorldButton")) world_type_ = rt_.mem().read<std::uint64_t>(world->address - 8);
+        if (auto check = find_vtable(rt_.mem(), pvz2, "PVZ2UICheckBox")) check_vtable_ = check->address;
+        if (auto list = find_vtable(rt_.mem(), pvz2, "PVZ2UIScrollingWidget")) scroll_vtable_ = list->address;
+        // Reflourished 1.5.0 lays the world map's buttons out again (its libRFLib draws them):
+        // settings, almanac, arcade, Zen Garden.
+        if (const Module* rf = rt_.linker().find_module("libRFLib.so")) {
+            static const std::string_view mark = "UIWorldMapZenGardenButton";
+            for (const auto& seg : rf->segments()) {
+                const char* p = reinterpret_cast<const char*>(rt_.mem().host(seg.start));
+                if (std::string_view(p, seg.size).find(mark) != std::string_view::npos) map_150_ = true;
+            }
+        }
         // The pause menu: its dialog, sliders and buttons (Sexy widgets).
         auto pause = find_vtable(rt_.mem(), pvz2, "PauseDialog");
         auto slider = find_vtable(rt_.mem(), pvz2, "Sexy::Slider");
@@ -324,6 +342,13 @@ public:
         p.button = *action;
         pad_type_ = p.type;
         pad_active_ = true;
+        // While a character talks, any button is the tap that moves it on, and nothing else
+        // happens (the chooser's or the lawn's controls start once it's done).
+        if (p.down && mode() == Mode::Dialogue) {
+            Sizes z = sizes();
+            tap(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+            return false;
+        }
         auto dir = std::find_if(dirs_.begin(), dirs_.end(), [&](const Dir& d) { return d.button == p.button; });
         if (dir != dirs_.end()) {
             dir->held = p.down;
@@ -351,6 +376,7 @@ public:
         case Mode::Menu: return menu_pad(p);
         case Mode::Cursor: return cursor_pad(p);
         case Mode::Chooser: chooser_pad(p); return false;
+        case Mode::Dialogue:
         case Mode::None: return false;
         }
         return false;
@@ -582,6 +608,7 @@ public:
             out.labels = hints();
             return out;
         }
+        if (dialogue()) return out;
         auto lawn = this->lawn();
         if (!lawn) {
             off_lawn_overlay(out);
@@ -677,6 +704,8 @@ public:
 
 private:
     static constexpr auto kRepeatDelay = std::chrono::milliseconds(300), kRepeatEvery = std::chrono::milliseconds(110);
+    // Held left or right on the worlds' carousel: a world now, the next after this, then one every this.
+    static constexpr auto kWorldFirstRepeat = std::chrono::milliseconds(450), kWorldRepeat = std::chrono::milliseconds(300);
     static constexpr auto kDigHold = std::chrono::seconds(1), kBuyHold = std::chrono::seconds(2);
     static constexpr auto kMowerHold = std::chrono::milliseconds(250);  // X held this long in the first column is for the mower
     static constexpr int kSweepStep = 40;  // between the sweep's points, in the UI's units
@@ -756,10 +785,11 @@ private:
     }
 
     // What the pad does now.
-    enum class Mode { Lawn, Menu, Cursor, Chooser, None };
+    enum class Mode { Lawn, Menu, Cursor, Chooser, Dialogue, None };
     Mode mode() {
+        if (dialogue()) return Mode::Dialogue;
         if (lawn()) return Mode::Lawn;
-        if (pause_dialog()) return Mode::Menu;
+        if (menu_dialog()) return Mode::Menu;
         // The seed chooser (and the look at the lawn from it) has controls of its own.
         auto& mem = rt_.mem();
         GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
@@ -768,16 +798,28 @@ private:
         return sizes().ok() ? Mode::Cursor : Mode::None;
     }
 
-    // The pause menu, when it's up: the dialog is what a touch in the screen's middle goes to, or
-    // holds it.
-    GuestAddr pause_dialog() {
+    // A character's talking (Crazy Dave's "tap to continue"): the screen's middle goes to the
+    // CrazyNPCManager.
+    bool dialogue() {
+        if (!npc_vtable_) return false;
+        Sizes z = sizes();
+        if (!z.ok()) return false;
+        GuestAddr w = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+        return w && rt_.mem().read<std::uint64_t>(w) == npc_vtable_;
+    }
+
+    // The pause menu or the settings, when one's up: the dialog is what a touch in the screen's
+    // middle goes to, or holds it.
+    GuestAddr menu_dialog() {
         if (!pause_vtable_) return 0;
         Sizes z = sizes();
         if (!z.ok()) return 0;
         auto& mem = rt_.mem();
         GuestAddr w = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
-        for (int i = 0; w && i < 8; ++i, w = mem.read<std::uint64_t>(w + kWidgetParent))
-            if (mem.read<std::uint64_t>(w) == pause_vtable_) return w;
+        for (int i = 0; w && i < 12; ++i, w = mem.read<std::uint64_t>(w + kWidgetParent)) {
+            GuestAddr vt = mem.read<std::uint64_t>(w);
+            if (vt == pause_vtable_ || (settings_vtable_ && vt == settings_vtable_)) return w;
+        }
         return 0;
     }
 
@@ -787,12 +829,14 @@ private:
         Rect r;
         bool slider;
         int row;
+        std::optional<Rect> view;  // the scrolling list it's in (the settings'), where it shows
     };
     std::vector<MenuItem> menu_items(GuestAddr dialog) {
         std::vector<MenuItem> items;
         auto& mem = rt_.mem();
         // Sexy::WidgetContainer: its children in a std::list, positions relative to the parent.
-        auto collect = [&](auto& self, GuestAddr container, std::int32_t ax, std::int32_t ay, int depth) -> void {
+        Sizes z = sizes();
+        auto collect = [&](auto& self, GuestAddr container, std::int32_t ax, std::int32_t ay, int depth, std::optional<Rect> view) -> void {
             GuestAddr end = container + kWidgetList;
             GuestAddr node = mem.read<std::uint64_t>(end + 8);
             for (int n = 0; node && node != end && n < 64; ++n, node = mem.read<std::uint64_t>(node + 8)) {
@@ -800,12 +844,16 @@ private:
                 if (!w || !mem.read<std::uint8_t>(w + kWidgetVisible)) continue;
                 Rect r{ax + mem.read<std::int32_t>(w + kWidgetRect), ay + mem.read<std::int32_t>(w + kWidgetRect + 4),
                        mem.read<std::int32_t>(w + kWidgetRect + 8), mem.read<std::int32_t>(w + kWidgetRect + 12)};
+                // A page waiting off the screen's side (the settings slide their sub-pages in).
+                if (depth == 0 && (r.x < 0 || r.x + r.w > z.lw)) continue;
                 GuestAddr vt = mem.read<std::uint64_t>(w);
-                if ((vt == slider_vtable_ || vt == button_vtable_) && r.w > 0 && r.h > 0) items.push_back({w, r, vt == slider_vtable_, 0});
-                if (depth < 4) self(self, w, r.x, r.y, depth + 1);
+                bool check = check_vtable_ && vt == check_vtable_;
+                if ((vt == slider_vtable_ || vt == button_vtable_ || check) && r.w > 0 && r.h > 0) items.push_back({w, r, vt == slider_vtable_, 0, view});
+                std::optional<Rect> inner = scroll_vtable_ && vt == scroll_vtable_ ? std::optional<Rect>(r) : view;
+                if (depth < 7) self(self, w, r.x, r.y, depth + 1, inner);
             }
         };
-        collect(collect, dialog, mem.read<std::int32_t>(dialog + kWidgetRect), mem.read<std::int32_t>(dialog + kWidgetRect + 4), 0);
+        collect(collect, dialog, mem.read<std::int32_t>(dialog + kWidgetRect), mem.read<std::int32_t>(dialog + kWidgetRect + 4), 0, std::nullopt);
         std::stable_sort(items.begin(), items.end(), [](const MenuItem& a, const MenuItem& b) {
             return a.r.y + a.r.h / 2 != b.r.y + b.r.h / 2 ? a.r.y + a.r.h / 2 < b.r.y + b.r.h / 2 : a.r.x < b.r.x;
         });
@@ -829,7 +877,7 @@ private:
     }
 
     void menu_move(int dx, int dy) {
-        GuestAddr dialog = pause_dialog();
+        GuestAddr dialog = menu_dialog();
         if (!dialog) return;
         auto items = menu_items(dialog);
         if (items.empty()) return;
@@ -845,13 +893,36 @@ private:
                 int d = std::abs(items[i].r.x + items[i].r.w / 2 - mid);
                 if (!best || d < std::abs(items[*best].r.x + items[*best].r.w / 2 - mid)) best = i;
             }
-            if (best) menu_sel_ = items[*best].widget;
+            if (best) {
+                menu_sel_ = items[*best].widget;
+                scroll_into_view(items[*best]);
+            }
         } else if (dx && sel.slider) {
             slide(sel, dx);
         } else if (dx) {
             std::size_t next = at + (dx > 0 ? 1 : -1);
             if (next < items.size() && items[next].row == sel.row) menu_sel_ = items[next].widget;
         }
+    }
+
+    // An item of a scrolling list that's (partly) out of its view: a finger drags the list until
+    // it's in, from the list's left edge (clear of the sliders), and holds still before letting go
+    // so the list doesn't coast on.
+    void scroll_into_view(const MenuItem& item) {
+        if (!item.view) return;
+        const Rect& v = *item.view;
+        int margin = item.r.h / 4;
+        int d = 0;
+        if (item.r.y < v.y) d = item.r.y - v.y - margin;
+        else if (item.r.y + item.r.h > v.y + v.h) d = item.r.y + item.r.h - (v.y + v.h) + margin;
+        if (!d) return;
+        d = std::clamp(d, -v.h * 3 / 4, v.h * 3 / 4);
+        std::int32_t x = v.x + std::min(24, v.w / 8), y0 = v.y + v.h / 2 + d / 2;
+        steps_.push_back({1, 0, x, y0});
+        constexpr int kSteps = 8;
+        for (int i = 1; i <= kSteps; ++i) steps_.push_back({1, 1, x, y0 - d * i / kSteps});
+        steps_.push_back({8, 1, x, y0 - d});
+        steps_.push_back({1, 3, x, y0 - d});
     }
 
     // A slider a tenth along, the way a finger moves it: down on its thumb, across, up.
@@ -872,7 +943,7 @@ private:
         using platform::PadButton;
         if (p.button == PadButton::B || p.button == PadButton::Start) return true;  // back: the game resumes
         if (p.button != PadButton::A) return false;
-        GuestAddr dialog = pause_dialog();
+        GuestAddr dialog = menu_dialog();
         if (!dialog) return false;
         auto items = menu_items(dialog);
         if (items.empty()) return false;
@@ -888,9 +959,9 @@ private:
         // On the world map: shortcuts to its buttons.
         if (on_map()) {
             std::optional<std::pair<float, float>> at;
-            if (p.button == PadButton::LT) at = kMapAlmanac;
-            else if (p.button == PadButton::RT) at = kMapZenGarden;
-            else if (p.button == PadButton::Start) at = kMapSettings;
+            if (p.button == PadButton::LT) at = map_150_ ? kMapAlmanac150 : kMapAlmanac;
+            else if (p.button == PadButton::RT) at = map_150_ ? kMapZenGarden150 : kMapZenGarden;
+            else if (p.button == PadButton::Start) at = map_150_ ? kMapSettings150 : kMapSettings;
             if (at) {
                 tap_anchored(at->first, at->second, false);
                 return false;
@@ -941,6 +1012,16 @@ private:
             return;
         }
         cursor_place();
+        // The worlds' carousel settles on a world whenever a finger lets go, so a drag held
+        // across it (let go and put down again every stroke) jerks: there, left and right step
+        // from world to world instead, a tap on the next one, which the game glides to.
+        if (dx && !dy && !cursor_down_ && world_step(dx, now)) {
+            stop_scroll();
+            dx = 0;
+        } else if (!dx) {
+            world_target_ = 0;
+            world_next_ = 0;
+        }
         if (mag > kDeadZone) {
             // Faster the further it's pushed: across the screen's height in about a second at full tilt.
             float speed = z.lh * 1.1f * std::pow((std::min(mag, 1.0f) - kDeadZone) / (1 - kDeadZone), 2.0f);
@@ -963,6 +1044,65 @@ private:
         } else {
             stop_scroll();
         }
+    }
+
+    // An object's type_info, through its vtable.
+    GuestAddr type_of(GuestAddr obj) {
+        auto& mem = rt_.mem();
+        GuestAddr vt = mem.read<std::uint64_t>(obj);
+        return vt >= 8 && mem.is_committed(vt - 8, 8) ? mem.read<std::uint64_t>(vt - 8) : 0;
+    }
+
+    // The worlds' buttons on the carousel (UniverseMap), left to right, in the UI's units.
+    std::vector<std::pair<GuestAddr, Rect>> world_buttons() {
+        std::vector<std::pair<GuestAddr, Rect>> out;
+        if (!universe_type_ || !world_type_) return out;
+        Sizes z = sizes();
+        auto& mem = rt_.mem();
+        GuestAddr map = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+        for (int i = 0; map && i < 8 && type_of(map) != universe_type_; ++i) map = mem.read<std::uint64_t>(map + kWidgetParent);
+        if (!map || type_of(map) != universe_type_) return out;
+        auto collect = [&](auto& self, GuestAddr c, std::int32_t ax, std::int32_t ay, int depth) -> void {
+            GuestAddr end = c + kWidgetList;
+            GuestAddr node = mem.read<std::uint64_t>(end + 8);
+            for (int n = 0; node && node != end && n < 128; ++n, node = mem.read<std::uint64_t>(node + 8)) {
+                GuestAddr w = mem.read<std::uint64_t>(node + 16);
+                if (!w || !mem.read<std::uint8_t>(w + kWidgetVisible)) continue;
+                Rect r{ax + mem.read<std::int32_t>(w + kWidgetRect), ay + mem.read<std::int32_t>(w + kWidgetRect + 4),
+                       mem.read<std::int32_t>(w + kWidgetRect + 8), mem.read<std::int32_t>(w + kWidgetRect + 12)};
+                if (type_of(w) == world_type_) out.push_back({w, r});
+                else if (depth < 3) self(self, w, r.x, r.y, depth + 1);
+            }
+        };
+        collect(collect, map, mem.read<std::int32_t>(map + kWidgetRect), mem.read<std::int32_t>(map + kWidgetRect + 4), 0);
+        std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.second.x < b.second.x; });
+        return out;
+    }
+
+    // Left or right held on the worlds' carousel: a step to the next world now, and again every
+    // so often while it's held. False: not on the carousel.
+    bool world_step(int dx, std::int64_t now) {
+        auto worlds = world_buttons();
+        if (worlds.empty()) return false;
+        if (now < world_next_) return true;
+        Sizes z = sizes();
+        // From the world it's heading to (it glides there), else the one in the middle.
+        std::size_t at = worlds.size();
+        for (std::size_t i = 0; i < worlds.size(); ++i)
+            if (worlds[i].first == world_target_) at = i;
+        if (at == worlds.size()) {
+            at = 0;
+            for (std::size_t i = 1; i < worlds.size(); ++i)
+                if (std::abs(worlds[i].second.x + worlds[i].second.w / 2 - z.lw / 2) < std::abs(worlds[at].second.x + worlds[at].second.w / 2 - z.lw / 2)) at = i;
+        }
+        std::size_t next = dx > 0 ? std::min(at + 1, worlds.size() - 1) : at > 0 ? at - 1 : 0;
+        if (next != at) {
+            const Rect& r = worlds[next].second;
+            tap(r.x + r.w / 2, r.y + r.h / 2);
+            world_target_ = worlds[next].first;
+        }
+        world_next_ = now + ticks(world_next_ ? kWorldRepeat : kWorldFirstRepeat);
+        return true;
     }
 
     void stop_scroll() {
@@ -1111,6 +1251,8 @@ private:
     // screen: (x, y) in 768ths of its height, from the left edge (or the right one).
     static constexpr std::pair<float, float> kMapAlmanac{134.0f, 38.0f}, kMapZenGarden{301.0f, 38.0f}, kMapSettings{382.0f, 38.0f},
         kMapShop{75.0f, 53.0f}, kChooserAlmanac{286.0f, 37.0f};
+    // Reflourished 1.5.0's: back, settings, almanac, arcade, Zen Garden.
+    static constexpr std::pair<float, float> kMapSettings150{137.0f, 38.0f}, kMapAlmanac150{222.0f, 38.0f}, kMapZenGarden150{395.0f, 38.0f};
     void tap_anchored(float x, float y, bool from_right) {
         Sizes z = sizes();
         if (!z.ok()) return;
@@ -1232,7 +1374,7 @@ private:
         if (m == Mode::Chooser) {
             chooser_overlay(out, fx, fy);
         } else if (m == Mode::Menu) {
-            GuestAddr dialog = pause_dialog();
+            GuestAddr dialog = menu_dialog();
             auto items = dialog ? menu_items(dialog) : std::vector<MenuItem>{};
             if (items.empty()) return;
             const Rect& r = items[menu_selected(items)].r;
@@ -1240,10 +1382,9 @@ private:
             out.boxes.push_back({static_cast<int>(r.x * fx) - pad, static_cast<int>(r.y * fy) - pad, static_cast<int>(r.w * fx) + 2 * pad,
                                  static_cast<int>(r.h * fy) + 2 * pad, 0xFFFFFFu, true});
         } else if (m == Mode::Cursor && cursor_x_ >= 0) {
+            // The glove, its fingertip on the spot; it presses while A's held.
             int x = static_cast<int>(cursor_x_ * fx), y = static_cast<int>(cursor_y_ * fy);
-            int radius = std::max(6, static_cast<int>(z.sh) / 64);
-            out.meters.push_back({x, y, radius + std::max(2, radius / 3), 1.0f, 0x202020u});
-            out.meters.push_back({x, y, radius, 1.0f, cursor_down_ ? 0xFFD040u : 0xFFFFFFu});
+            out.cursor = platform::HintCursor{x, y, std::max(24, static_cast<int>(z.sh * 0.045f)), cursor_down_};
         }
     }
 
@@ -1569,7 +1710,12 @@ private:
     GuestAddr menu_sel_ = 0;
     // The seed chooser and its buttons; the grid packet the box is on, the slot LB/RB picked (from
     // 1), and when B or X went down there.
-    GuestAddr chooser_vtable_ = 0, view_vtable_ = 0, reload_vtable_ = 0, map_vtable_ = 0;
+    GuestAddr chooser_vtable_ = 0, view_vtable_ = 0, reload_vtable_ = 0, map_vtable_ = 0, npc_vtable_ = 0;
+    GuestAddr settings_vtable_ = 0, check_vtable_ = 0, scroll_vtable_ = 0;
+    GuestAddr universe_type_ = 0, world_type_ = 0;
+    GuestAddr world_target_ = 0;      // the world the pad last stepped to on the worlds' carousel
+    std::int64_t world_next_ = 0;     // when a held direction steps again
+    bool map_150_ = false;
     Seen chooser_, view_, reload_;
     GuestAddr ch_sel_ = 0;
     int ch_slot_ = 1;

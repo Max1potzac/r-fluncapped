@@ -50,6 +50,7 @@ sealed class MainForm : Form, ILaunchUi
     const string KeybindsItem = "Keybinds (keybinds.txt)";
     const string KeyHintsItem = "Show keybind hints (keys on seed packets and buttons)";
     const string ControllerItem = "Controller support (Xbox, PlayStation, Switch)";
+    const string CursorItem = "Glove cursor in place of the Windows one";
 
     public MainForm(string launcherDir)
     {
@@ -243,6 +244,7 @@ sealed class MainForm : Form, ILaunchUi
             _injections.Items.Add(KeybindsItem, s.Keybinds);
             _injections.Items.Add(KeyHintsItem, s.KeyHints);
             _injections.Items.Add(ControllerItem, s.Controller);
+            _injections.Items.Add(CursorItem, s.CustomCursor);
             foreach (var p in game.PatchFiles())
                 _injections.Items.Add(new PatchItem(p), s.Patches.Contains(p.FileName, StringComparer.OrdinalIgnoreCase));
 
@@ -285,6 +287,7 @@ sealed class MainForm : Form, ILaunchUi
                 case KeybindsItem: s.Keybinds = on; break;
                 case KeyHintsItem: s.KeyHints = on; break;
                 case ControllerItem: s.Controller = on; break;
+                case CursorItem: s.CustomCursor = on; break;
                 case PatchItem p when on: s.Patches.Add(p.Patch.FileName); break;
             }
         }

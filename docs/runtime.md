@@ -191,6 +191,14 @@ classes have more than one vtable, so they're told by their type_info. Reflouris
 libRFLib redraws the world map's buttons in another order (settings, almanac, arcade, Zen
 Garden); the shortcuts follow it when libRFLib has `UIWorldMapZenGardenButton`.
 
+Select held two seconds in a level (a dial at the screen's top) turns the free cursor on: `mode()`
+gives Cursor where it would give Lawn, the d-pad and left stick move the glove (there's nothing to
+scroll), LB/RB still pick the packet, A taps it first and then touches at the glove, and the
+right stick's powerup flick is off. Held again, the tile box is back. The title screen
+(`MainMenu`) is a menu of its `PVZ2UIButton`s, starting on the one nearest the bottom's middle
+(play); LB/RB swipe across the middle, which moves the banner carousel (`DraperCarouselAdWidget`)
+one banner.
+
 The controller's cursor off the lawn is a glove (`assets/cursor.png`, embedded by
 `tools/gen_cursor.py`; it presses while A's held), drawn like the hints: scissored clears, a run
 of one colour at a time, the edges cut at half transparency. `--custom-cursor` makes it the

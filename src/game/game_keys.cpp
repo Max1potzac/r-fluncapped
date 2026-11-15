@@ -285,6 +285,7 @@ public:
         if (auto uni = find_vtable(rt_.mem(), pvz2, "UniverseMap")) universe_type_ = rt_.mem().read<std::uint64_t>(uni->address - 8);
         if (auto world = find_vtable(rt_.mem(), pvz2, "UniverseWorldButton")) world_type_ = rt_.mem().read<std::uint64_t>(world->address - 8);
         if (auto dialog = find_vtable(rt_.mem(), pvz2, "PVZ2UIDialog")) dialog_type_ = rt_.mem().read<std::uint64_t>(dialog->address - 8);
+        if (auto title = find_vtable(rt_.mem(), pvz2, "MainMenu")) main_menu_type_ = rt_.mem().read<std::uint64_t>(title->address - 8);
         if (auto check = find_vtable(rt_.mem(), pvz2, "PVZ2UICheckBox")) check_vtable_ = check->address;
         if (auto list = find_vtable(rt_.mem(), pvz2, "PVZ2UIScrollingWidget")) scroll_vtable_ = list->address;
         // Reflourished 1.5.0 lays the world map's buttons out again (its libRFLib draws them):
@@ -366,6 +367,12 @@ public:
         if (p.down && mode() == Mode::Dialogue) {
             Sizes z = sizes();
             tap(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+            return false;
+        }
+        // Select held two seconds in a level: the free cursor in place of the lawn's tile box (and
+        // back). The level's other screens and the menus have the cursor already.
+        if (p.button == PadButton::Back) {
+            select_since_ = p.down && lawn() ? now_ticks() : 0;
             return false;
         }
         auto dir = std::find_if(dirs_.begin(), dirs_.end(), [&](const Dir& d) { return d.button == p.button; });
@@ -532,6 +539,10 @@ public:
             }
         cursor_frame(now);
         chooser_frame(now);
+        if (select_since_ && now - select_since_ >= ticks(kSelectHold)) {
+            select_since_ = 0;
+            toggle_free_cursor();
+        }
         if (b_since_ && now - b_since_ >= ticks(kDigHold)) {
             b_since_ = 0;
             if (auto lawn = this->lawn()) {
@@ -629,10 +640,21 @@ public:
         }
         if (dialogue()) return out;
         auto lawn = this->lawn();
-        if (!lawn) {
+        if (!lawn || free_cursor_) {
             off_lawn_overlay(out);
+            if (lawn) {
+                // The free cursor: the picked packet's box stays.
+                float fx = lawn->sw / lawn->lw, fy = lawn->sh / lawn->lh;
+                auto packets = packet_rects();
+                if (slot_ >= 1 && static_cast<std::size_t>(slot_) <= packets.size()) {
+                    const Rect& r = packets[slot_ - 1];
+                    out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), platform::kHintBorder});
+                }
+            }
+            select_dial(out);
             return out;
         }
+        select_dial(out);
         float fx = lawn->sw / lawn->lw, fy = lawn->sh / lawn->lh;
         // The tile, in the surface's pixels; red while B is held to dig.
         float x0 = lawn->ox + lawn->tw * col_, y0 = lawn->oy + lawn->th * row_;
@@ -725,7 +747,7 @@ private:
     static constexpr auto kRepeatDelay = std::chrono::milliseconds(300), kRepeatEvery = std::chrono::milliseconds(110);
     // Held left or right on the worlds' carousel: a world now, the next after this, then one every this.
     static constexpr auto kWorldFirstRepeat = std::chrono::milliseconds(450), kWorldRepeat = std::chrono::milliseconds(300);
-    static constexpr auto kDigHold = std::chrono::seconds(1), kBuyHold = std::chrono::seconds(2);
+    static constexpr auto kDigHold = std::chrono::seconds(1), kBuyHold = std::chrono::seconds(2), kSelectHold = std::chrono::seconds(2);
     static constexpr auto kMowerHold = std::chrono::milliseconds(250);  // X held this long in the first column is for the mower
     static constexpr int kSweepStep = 40;  // between the sweep's points, in the UI's units
     static constexpr int kPopupWait = 12;  // frames for the plant food "+"'s offer to come up
@@ -810,7 +832,7 @@ private:
     enum class Mode { Lawn, Menu, Cursor, Chooser, Dialogue, None };
     Mode mode() {
         if (dialogue()) return Mode::Dialogue;
-        if (lawn()) return Mode::Lawn;
+        if (lawn()) return free_cursor_ ? Mode::Cursor : Mode::Lawn;
         if (menu_dialog()) return Mode::Menu;
         // The seed chooser (and the look at the lawn from it) has controls of its own.
         auto& mem = rt_.mem();
@@ -842,8 +864,14 @@ private:
         if (!z.ok()) return 0;
         auto& mem = rt_.mem();
         GuestAddr w = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+        on_title_ = false;
         for (int i = 0; w && i < 12; ++i, w = mem.read<std::uint64_t>(w + kWidgetParent)) {
             GuestAddr vt = mem.read<std::uint64_t>(w);
+            // The title screen: its buttons (play, the profile, news, settings) are a menu too.
+            if (main_menu_type_ && type_of(w) == main_menu_type_) {
+                on_title_ = true;
+                return w;
+            }
             if (vt == pause_vtable_ || (settings_vtable_ && vt == settings_vtable_)) return w;
             // Any other of the game's dialogs with something to press (the level's objectives,
             // "are you sure?" and the like).
@@ -901,8 +929,16 @@ private:
     std::size_t menu_selected(const std::vector<MenuItem>& items) {
         for (std::size_t i = 0; i < items.size(); ++i)
             if (items[i].widget == menu_sel_) return i;
-        menu_sel_ = items.empty() ? 0 : items[0].widget;
-        return 0;
+        std::size_t first = 0;
+        if (on_title_) {
+            // On the title screen, "play": the button nearest the bottom's middle.
+            Sizes z = sizes();
+            auto far = [&](const MenuItem& m) { return std::hypot(m.r.x + m.r.w / 2 - z.lw / 2, m.r.y + m.r.h / 2 - z.lh); };
+            for (std::size_t i = 1; i < items.size(); ++i)
+                if (far(items[i]) < far(items[first])) first = i;
+        }
+        menu_sel_ = items.empty() ? 0 : items[first].widget;
+        return first;
     }
 
     void menu_move(int dx, int dy) {
@@ -970,6 +1006,16 @@ private:
 
     bool menu_pad(const platform::PadInput& p) {
         using platform::PadButton;
+        if (on_title_ && (p.button == PadButton::LB || p.button == PadButton::RB)) {
+            // The banners: a swipe across the middle, to the next (RB) or the last (LB).
+            Sizes z = sizes();
+            int from = static_cast<int>(z.lw * (p.button == PadButton::RB ? 0.62f : 0.38f)), to = static_cast<int>(z.lw * (p.button == PadButton::RB ? 0.38f : 0.62f));
+            std::int32_t y = static_cast<std::int32_t>(z.lh * 0.45f);
+            steps_.push_back({1, 0, from, y});
+            for (int k = 1; k <= 6; ++k) steps_.push_back({1, 1, from + (to - from) * k / 6, y});
+            steps_.push_back({1, 3, to, y});
+            return false;
+        }
         if (p.button == PadButton::B || p.button == PadButton::Start) return true;  // back: the game resumes
         if (p.button != PadButton::A) return false;
         GuestAddr dialog = menu_dialog();
@@ -1006,12 +1052,50 @@ private:
                 tap(r->x + r->w / 2, r->y + r->h / 2);
             return false;
         }
+        // The free cursor in a level: LB/RB still pick the packet, and A takes it first.
+        bool free = free_cursor_ && lawn();
+        if (free && (p.button == PadButton::LB || p.button == PadButton::RB)) {
+            int n = static_cast<int>(packet_rects().size());
+            if (n) slot_ = slot_ < 1 || slot_ > n ? 1 : (slot_ - 1 + (p.button == PadButton::RB ? 1 : n - 1)) % n + 1;
+            return false;
+        }
         if (p.button == PadButton::A && !cursor_down_ && !scroll_) {
+            if (free && slot_ > 0 && !live(plant_cursor_, cursor_vtable_, std::chrono::milliseconds(200)))
+                if (auto r = packet_rect(slot_)) tap(r->x + r->w / 2, r->y + r->h / 2);
             cursor_place();
             steps_.push_back({1, 0, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
             cursor_down_ = true;
         }
         return false;
+    }
+
+    // Select held: the free cursor goes on (at the tile the box was on) or off.
+    void toggle_free_cursor() {
+        auto lawn = this->lawn();
+        if (!lawn) return;
+        free_cursor_ = !free_cursor_;
+        stop_scroll();
+        b_since_ = y_since_ = x_since_ = 0;
+        if (cursor_down_) {
+            steps_.push_back({1, 3, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
+            cursor_down_ = false;
+        }
+        if (free_cursor_) {
+            cursor_x_ = lawn->ui_x(lawn->ox + lawn->tw * (col_ + 0.5f));
+            cursor_y_ = lawn->ui_y(lawn->oy + lawn->th * (row_ + 0.5f));
+        }
+        log::info("controller: {} cursor", free_cursor_ ? "free" : "tile");
+    }
+
+    // Select held: a dial at the top of the screen, full when the cursor switches.
+    void select_dial(platform::HintOverlay& out) {
+        auto now = now_ticks();
+        if (!select_since_ || now - select_since_ < ticks(std::chrono::milliseconds(250))) return;
+        Sizes z = sizes();
+        if (!z.ok()) return;
+        float held = static_cast<float>(now - select_since_) / ticks(kSelectHold);
+        int radius = std::max(8, static_cast<int>(z.sh * 0.035f));
+        out.meters.push_back({static_cast<int>(z.sw / 2), static_cast<int>(z.sh * 0.14f), radius, held, 0x7CB2E8u});
     }
 
     // The cursor starts in the middle of the screen.
@@ -1050,6 +1134,17 @@ private:
         } else if (!dx) {
             world_target_ = 0;
             world_next_ = 0;
+        }
+        if (free_cursor_ && (dx || dy) && lawn()) {
+            // The free cursor in a level: the d-pad and left stick move it too (there's nothing
+            // to scroll), at a steady speed.
+            stop_scroll();
+            float d = std::hypot(static_cast<float>(dx), static_cast<float>(dy));
+            float speed = z.lh * 0.7f;
+            cursor_x_ = std::clamp(cursor_x_ + static_cast<float>(dx / d * speed * dt), 0.0f, z.lw - 1);
+            cursor_y_ = std::clamp(cursor_y_ + static_cast<float>(dy / d * speed * dt), 0.0f, z.lh - 1);
+            if (cursor_down_) steps_.push_back({1, 1, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
+            dx = dy = 0;
         }
         if (mag > kDeadZone) {
             // Faster the further it's pushed: across the screen's height in about a second at full tilt.
@@ -1484,7 +1579,7 @@ private:
             flicked_ = false;
             return;
         }
-        if (flicked_ || mag < kFlick || !lawn()) return;
+        if (flicked_ || mag < kFlick || free_cursor_ || !lawn()) return;
         int index = -1;
         if (std::abs(stick_x_) > std::abs(stick_y_)) index = stick_x_ < 0 ? 0 : 2;
         else if (stick_y_ < 0) index = 1;
@@ -1758,7 +1853,8 @@ private:
     // 1), and when B or X went down there.
     GuestAddr chooser_vtable_ = 0, view_vtable_ = 0, reload_vtable_ = 0, map_vtable_ = 0, npc_vtable_ = 0;
     GuestAddr settings_vtable_ = 0, check_vtable_ = 0, scroll_vtable_ = 0;
-    GuestAddr universe_type_ = 0, world_type_ = 0, dialog_type_ = 0;
+    GuestAddr universe_type_ = 0, world_type_ = 0, dialog_type_ = 0, main_menu_type_ = 0;
+    bool on_title_ = false;  // menu_dialog() found the title screen
     GuestAddr world_target_ = 0;      // the world the pad last stepped to on the worlds' carousel
     std::int64_t world_next_ = 0;     // when a held direction steps again
     bool map_150_ = false;
@@ -1778,6 +1874,8 @@ private:
     bool pad_active_ = false;
     platform::PadType pad_type_ = platform::PadType::Xbox;
     int col_ = 0, row_ = 2, slot_ = 1;
+    std::int64_t select_since_ = 0;  // when Select went down in a level, while it's held
+    bool free_cursor_ = false;       // Select's free cursor in place of the lawn's tile box
     std::int64_t b_since_ = 0, y_since_ = 0, x_since_ = 0;  // when B, Y or X went down, while it's held and still to act
     int sweep_ = -1;
     bool mower_down_ = false;  // a finger held on a mower, while X is

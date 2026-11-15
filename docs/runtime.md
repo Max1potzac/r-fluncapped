@@ -192,6 +192,10 @@ of one colour at a time, the edges cut at half transparency. `--custom-cursor` m
 mouse's cursor too (`SDL_CreateColorCursor`), at the same size: 0.045 of the letterboxed game's
 height, remade when the window's resized. Moving the mouse hides the controller's glove.
 
+Reflourished 1.5.0's libRFLib gives the seed chooser a vtable of its own (a copy on the heap, with
+no type_info), so an object counts as one of the watched classes when its vtable is the class's or
+has the same first two slots and update slot.
+
 The seed chooser (Board state 3, or drawn in the last 150 ms whatever the state: after a
 tutorial's demonstration it comes up with the Board already in a playing state) isn't made of
 widgets: `SeedChooser` is a UI object (drawn

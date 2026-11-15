@@ -125,10 +125,22 @@ public sealed class GameFolder
             ? Directory.EnumerateFiles(PatchesDir, "*.patch").Order(StringComparer.OrdinalIgnoreCase).Select(PatchFile.Read).ToList()
             : [];
 
-    /// Writes a keybinds.txt that explains itself, if there isn't one.
+    /// Writes a keybinds.txt that explains itself, if there isn't one. One written before levels had
+    /// ten seed slots gets 0 for the tenth, unless 0 or a tenth packet has a key already.
     public void EnsureKeybindsFile()
     {
-        if (File.Exists(KeybindsPath)) return;
+        if (File.Exists(KeybindsPath))
+        {
+            var lines = File.ReadAllLines(KeybindsPath).ToList();
+            int nine = lines.FindIndex(l => l.Trim() == "9 seed 9");
+            bool taken = lines.Any(l => l.TrimStart().StartsWith("0 ") || l.Split(' ', StringSplitOptions.RemoveEmptyEntries) is [_, "seed", "10", ..]);
+            if (nine >= 0 && !taken)
+            {
+                lines.Insert(nine + 1, "0 seed 10");
+                File.WriteAllLines(KeybindsPath, lines);
+            }
+            return;
+        }
         File.WriteAllText(KeybindsPath, """
             # Keybinds: a key acts as a finger on a spot of the screen while you hold it.
             #   <key> seed <n>       the n-th seed packet, counted from 1 at the top of the seed bank
@@ -155,6 +167,7 @@ public sealed class GameFolder
             7 seed 7
             8 seed 8
             9 seed 9
+            0 seed 10
             D shovel
             F plantfood
             V fastforward

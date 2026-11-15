@@ -83,6 +83,13 @@ void test_vfs_overlay() {
     EXPECT(read("/cdn/new") == rfu::path_to_utf8(root / "mod2/new"));  // one only a mod has
     EXPECT(rfu::path_to_utf8(*vfs.to_host("/cdn/levels/a.json")) == rfu::path_to_utf8(root / "game/levels/a.json"));  // writes
     EXPECT(vfs.layers("/cdn/levels").size() == 3 && vfs.layers("/cdn/new").size() == 1 && vfs.layers("/cdn/none").empty());
+    // A file mounted on its own (the OBB) shows up in its folder's listing, if it's there.
+    write(root / "elsewhere/main.obb", "obb");
+    vfs.mount("/cdn/levels/main.obb", root / "elsewhere/main.obb");
+    vfs.mount("/cdn/levels/gone.obb", root / "elsewhere/gone.obb");
+    auto kids = vfs.mounted_children("/cdn/levels");
+    EXPECT(kids.size() == 1 && kids[0] == "main.obb");
+    EXPECT(vfs.mounted_children("/cdn").empty());
     fs::remove_all(root);
 }
 

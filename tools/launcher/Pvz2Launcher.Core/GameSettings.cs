@@ -18,6 +18,10 @@ public sealed class GameSettings
 
     // what the game does
     public bool Offline { get; set; }
+    // Reflourished 1.5.0+: download OBB updates before playing, as the game does on Android (see ObbUpdate)
+    public bool ObbUpdates { get; set; } = true;
+    // the update server's latest.json; null: the one the game uses, for the games that have one; "": none
+    public string? ObbUpdateUrl { get; set; }
 
     // code injections
     public bool HoverCollect { get; set; } = true;     // sun, coins and plant food picked up by moving the mouse over them

@@ -35,6 +35,9 @@ public:
     // The host directories that make up a guest directory, mount first, then each overlay
     // that has it, bottom to top (for listing it).
     std::vector<std::filesystem::path> layers(const std::string& guest_path) const;
+    // The names of the mounts sitting directly in guest directory `guest_path` whose host side
+    // exists (a single file mounted there, such as the OBB): its listing shows them too.
+    std::vector<std::string> mounted_children(const std::string& guest_path) const;
     std::optional<std::string> to_guest(const std::filesystem::path& host_path) const;
     const Generator* virtual_file(const std::string& guest_path) const;
     // True for "/" and the directories above a mount point ("/storage" when

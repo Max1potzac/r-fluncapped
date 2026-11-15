@@ -10,6 +10,7 @@ sealed class MainForm : Form, ILaunchUi
     readonly string _gamesDir;
     readonly LaunchFlow _flow;
     readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
+    readonly HttpClient _downloads = new() { Timeout = Timeout.InfiniteTimeSpan };  // OBB updates can be a gigabyte
 
     List<GameFolder> _games = [];
     GameFolder? _game;
@@ -32,6 +33,7 @@ sealed class MainForm : Form, ILaunchUi
     readonly CheckBox _vsync = new() { Text = "VSync", AutoSize = true };
     readonly CheckBox _angle = new() { Text = "Draw through ANGLE", AutoSize = true };
     readonly CheckBox _offline = new() { Text = "Offline (no CDN, no update check)", AutoSize = true };
+    readonly CheckBox _obbUpdates = new() { Text = "Download OBB updates (Reflourished)", AutoSize = true };
 
     readonly CheckedListBox _injections = new() { CheckOnClick = true, Height = 110, Width = 360, IntegralHeight = false };
     readonly CheckedListBox _mods = new() { CheckOnClick = true, Height = 110, Width = 360, IntegralHeight = false };
@@ -52,7 +54,7 @@ sealed class MainForm : Form, ILaunchUi
     {
         _launcherDir = launcherDir;
         _gamesDir = Path.Combine(launcherDir, "games");
-        _flow = new LaunchFlow(launcherDir, _http, this);
+        _flow = new LaunchFlow(launcherDir, _http, this, _downloads);
 
         Text = "PvZ2 Launcher";
         Size = new Size(1000, 760);
@@ -101,7 +103,7 @@ sealed class MainForm : Form, ILaunchUi
         var injections = Group("Code injections and fixes", _injections,
             Row(MakeButton("Edit keybinds", EditKeybinds), MakeButton("Controller settings...", ControllerSettings),
                 MakeButton("Patches folder", () => { if (_game != null) OpenFolder(_game.PatchesDir); })),
-            _offline);
+            Row(_offline, _obbUpdates));
 
         var content = Group("Custom content (the lowest one wins where two change the same file)", _mods,
             Row(MakeButton("Add custom content...", AddContent), MakeButton("Up", () => MoveMod(-1)), MakeButton("Down", () => MoveMod(1)),
@@ -145,6 +147,7 @@ sealed class MainForm : Form, ILaunchUi
         _vsync.CheckedChanged += (_, _) => Change(s => s.VSync = _vsync.Checked);
         _angle.CheckedChanged += (_, _) => Change(s => s.Angle = _angle.Checked);
         _offline.CheckedChanged += (_, _) => Change(s => s.Offline = _offline.Checked);
+        _obbUpdates.CheckedChanged += (_, _) => Change(s => s.ObbUpdates = _obbUpdates.Checked);
         _askContent.CheckedChanged += (_, _) => Change(s => s.AskForCustomContent = _askContent.Checked);
         // ItemCheck fires before the box changes; read the lists once it has
         _injections.ItemCheck += (_, _) => BeginInvoke(() => Change(ReadInjections));
@@ -227,6 +230,8 @@ sealed class MainForm : Form, ILaunchUi
             _vsync.Checked = s.VSync;
             _angle.Checked = s.Angle;
             _offline.Checked = s.Offline;
+            _obbUpdates.Checked = s.ObbUpdates;
+            _obbUpdates.Visible = ObbUpdate.ConfigUrl(game) != null;
             _askContent.Checked = s.AskForCustomContent;
 
             _injections.Items.Clear();
@@ -319,14 +324,14 @@ sealed class MainForm : Form, ILaunchUi
 
     // --- actions --------------------------------------------------------------------------------
 
-    async Task PlayAsync()
+    async Task PlayAsync() { if (_game != null) await PlayAsync(_game, false); }
+
+    async Task PlayAsync(GameFolder game, bool restart)
     {
-        if (_game == null) return;
-        var game = _game;
         _play.Enabled = false;
         try
         {
-            var process = await _flow.RunAsync(game);
+            var process = await _flow.RunAsync(game, restart);
             Select(game);  // the flow may have added content or a new version
             if (process == null) return;
             _running[game.Dir] = process;
@@ -348,6 +353,13 @@ sealed class MainForm : Form, ILaunchUi
     {
         _running.Remove(game.Dir);
         int code = process.ExitCode;
+        if (code == LaunchFlow.RestartExitCode)
+        {
+            // the game asked to be started again (a save imported, or its OBB patched)
+            Log($"{game.DisplayName} asked to be restarted");
+            _ = PlayAsync(game, true);
+            return;
+        }
         Log($"{game.DisplayName} closed{(code != 0 ? $" with exit code {code}" : "")}");
         if (code != 0 && File.Exists(game.LogPath))
         {
@@ -453,6 +465,19 @@ sealed class MainForm : Form, ILaunchUi
             game.SaveSettings();
         }
         return answer == choose ? PickFolder("The custom content's folder") : null;
+    }
+
+    public bool Confirm(string message)
+    {
+        var page = new TaskDialogPage
+        {
+            Caption = "PvZ2 Launcher",
+            Text = message,
+            Icon = TaskDialogIcon.Information,
+            Buttons = { TaskDialogButton.Yes, TaskDialogButton.No },
+            DefaultButton = TaskDialogButton.Yes,
+        };
+        return TaskDialog.ShowDialog(this, page) == TaskDialogButton.Yes;
     }
 
     public UpdateChoice AskAboutUpdate(GameFolder game, UpdateCheck.Result result)

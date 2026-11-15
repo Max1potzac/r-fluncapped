@@ -60,18 +60,20 @@ endif()
 find_package(SDL2 CONFIG REQUIRED)
 add_library(rfu_app STATIC
     src/platform/etc.cpp
+    src/platform/file_dialog.cpp
     src/platform/gles.cpp
     src/platform/http.cpp
     src/platform/opensles.cpp
     src/platform/window.cpp
     src/android/apk.cpp
+    src/android/file_picker.cpp
     src/android/app.cpp
     src/android/java_http.cpp
 )
 target_link_libraries(rfu_app PUBLIC rfu_core $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>)
 # The game's own (Java-side) web requests: WinHTTP on Windows, libcurl elsewhere.
 if (WIN32)
-    target_link_libraries(rfu_app PUBLIC winhttp)
+    target_link_libraries(rfu_app PUBLIC winhttp comdlg32)
 else()
     find_package(CURL)
     if (CURL_FOUND)

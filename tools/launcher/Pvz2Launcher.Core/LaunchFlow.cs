@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace Pvz2Launcher;
 
@@ -17,14 +18,22 @@ public interface ILaunchUi
     (string Apk, string Obb)? AskForNewVersion(GameFolder game);
 
     void ShowProblem(string message);
+
+    /// A yes/no question (a big download, say).
+    bool Confirm(string message);
 }
 
 public enum UpdateChoice { GetNewVersion, PlayAnyway, Cancel }
 
-/// Play, step by step: the game's folder, custom content, the update check, the mods, then rfu.
-public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui)
+/// Play, step by step: the game's folder, custom content, the update checks, the mods, then rfu.
+/// `downloads` is for the OBB update: an HttpClient with no time limit, since that can be big.
+public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui, HttpClient? downloads = null)
 {
-    public async Task<Process?> RunAsync(GameFolder game)
+    /// rfu's exit code when the game asked to be started again (after importing a save, or patching
+    /// its OBB); RunAsync(game, restart: true) does that, without asking anything.
+    public const int RestartExitCode = 3;
+
+    public async Task<Process?> RunAsync(GameFolder game, bool restart = false)
     {
         if (!await PrepareAsync(game)) return null;
         if (game.Problem() is { } problem) { ui.ShowProblem(problem); return null; }
@@ -33,7 +42,7 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         s.Mods.RemoveAll(m => !Directory.Exists(Path.Combine(game.ModsDir, m)));
 
         // Custom content: the mods switched on, or a folder picked now.
-        if (s.Mods.Count == 0 && s.AskForCustomContent && ui.AskForCustomContent(game) is { } folder)
+        if (!restart && s.Mods.Count == 0 && s.AskForCustomContent && ui.AskForCustomContent(game) is { } folder)
         {
             switch (Mods.Classify(folder))
             {
@@ -54,7 +63,7 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         game.SaveSettings();
 
         // No custom content: check the CDN for a new version, as the game would.
-        if (s.Mods.Count == 0 && !s.Offline)
+        if (!restart && s.Mods.Count == 0 && !s.Offline)
         {
             ui.Log("checking for a new version...");
             var result = await UpdateCheck.RunAsync(game, http);
@@ -73,6 +82,9 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
             }
         }
 
+        // Reflourished's own OBB updates, which it does before it starts on Android.
+        if (!restart && !s.Offline) await UpdateObbAsync(game);
+
         var overlays = new List<Mods.Overlay>();
         if (s.Mods.Count > 0)
         {
@@ -89,6 +101,36 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         var psi = new ProcessStartInfo(rfu) { WorkingDirectory = game.Dir, UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);
         return Process.Start(psi);
+    }
+
+    /// Brings the OBB up to date from the game's update server (see ObbUpdate). A failure is logged
+    /// and the game starts with the OBB it has, as the game does.
+    public async Task UpdateObbAsync(GameFolder game, CancellationToken cancel = default)
+    {
+        if (!game.Settings.ObbUpdates || game.Obb == null || ObbUpdate.ConfigUrl(game) is not { } config) return;
+        if (!ObbUpdate.GameAllowsUpdates(game)) { ui.Log("OBB update: switched off in the game's settings"); return; }
+        var client = downloads ?? http;
+        string state = ObbUpdate.StateDir(game);
+        try
+        {
+            ui.Log("OBB update: checking...");
+            var (head, plan) = await ObbUpdate.PlanAsync(config, game.Obb, state,
+                url => ObbUpdate.GetJsonAsync(http, url, cancel), path => Task.Run(() => ObbUpdate.Sha256Async(path, cancel)), ui.Log);
+            if (plan is ObbUpdate.Fresh fresh &&
+                !ui.Confirm($"This game's OBB doesn't match any recent {game.DisplayName} release (it may have been changed by hand, " +
+                            $"or be too old to patch).\n\nDownload the whole {fresh.Base.Version} OBB ({ObbUpdate.Size(ObbUpdate.DownloadSize(plan))})? " +
+                            $"The current one is kept in the game's old folder."))
+            {
+                ui.Log("OBB update: skipped; playing with the OBB as it is");
+                return;
+            }
+            await ObbUpdate.ExecuteAsync(head, plan, game.Obb, state, client, ui.Log, Path.Combine(game.Dir, "old"), cancel);
+            game.Refresh();
+        }
+        catch (Exception e) when (e is ObbUpdate.Error or HttpRequestException or IOException or JsonException or TaskCanceledException or UnauthorizedAccessException)
+        {
+            ui.Log($"OBB update failed, playing with the OBB as it is: {e.Message}");
+        }
     }
 
     /// Takes the libraries out of a new or newer APK.
@@ -117,7 +159,11 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         await Task.Run(() =>
         {
             File.Copy(apk, Path.Combine(game.Dir, Path.GetFileName(apk)), true);
-            if (!string.IsNullOrEmpty(obb)) File.Copy(obb, Path.Combine(game.Dir, Path.GetFileName(obb)), true);
+            if (!string.IsNullOrEmpty(obb))
+            {
+                File.Copy(obb, Path.Combine(game.Dir, Path.GetFileName(obb)), true);
+                ObbUpdate.ForgetTimestamp(game);  // the new OBB's version is worked out afresh
+            }
         });
         return await PrepareAsync(game);
     }

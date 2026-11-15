@@ -1478,6 +1478,13 @@ private:
             packets.push_back(r);
         }
         std::stable_sort(packets.begin(), packets.end(), [](const Rect& a, const Rect& b) { return a.y != b.y ? a.y < b.y : a.x < b.x; });
+        // Ten slots (Reflourished 1.5.0's Roman Gardens) run past the bottom of the screen: the
+        // last packet is cut off there, so its box and its touch go on the part that shows.
+        if (GuestAddr app = mem.read<std::uint64_t>(base_ + kApp)) {
+            std::int32_t ui_h = mem.read<std::int32_t>(app + kLogicalSize + 4);
+            for (auto& r : packets)
+                if (ui_h > 0 && r.y < ui_h && r.y + r.h > ui_h) r.h = ui_h - r.y;
+        }
         return packets;
     }
 

@@ -58,9 +58,26 @@ public static class ObbUpdate
     public sealed record Fresh(Node Base, IReadOnlyList<Node> Chain) : Plan;
 
     /// The update server for this game, or null for a game without automatic OBB updates.
-    public static string? ConfigUrl(GameFolder game) =>
-        game.Settings.ObbUpdateUrl is { } url ? (url.Trim() == "" ? null : url.Trim())
-        : game.Info?.Package == "com.ea.game.pvz2_rfl" && !game.IsChina ? ReflourishedConfig : null;
+    /// Only an APK that updates its own OBB gets updates (Reflourished 1.4.2 doesn't, and a 1.5 OBB
+    /// crashes it): the server its code names, or the game's ObbUpdateUrl over that ("" for none).
+    public static string? ConfigUrl(GameFolder game)
+    {
+        if (game.IsChina || game.Apk == null || CachedConfigUrlInApk(game.Apk) is not { } inApk) return null;
+        return game.Settings.ObbUpdateUrl is { } url ? (url.Trim() == "" ? null : url.Trim()) : inApk;
+    }
+
+    static readonly Dictionary<string, (DateTime Written, long Length, string? Url)> ApkCache = new(StringComparer.OrdinalIgnoreCase);
+
+    static string? CachedConfigUrlInApk(string apk)
+    {
+        var info = new FileInfo(apk);
+        if (!info.Exists) return null;
+        lock (ApkCache)
+            if (ApkCache.TryGetValue(apk, out var c) && c.Written == info.LastWriteTimeUtc && c.Length == info.Length) return c.Url;
+        string? url = ConfigUrlInApk(apk);
+        lock (ApkCache) ApkCache[apk] = (info.LastWriteTimeUtc, info.Length, url);
+        return url;
+    }
 
     /// The update server an APK's own code knows about (Reflourished 1.5.0+'s ObbUpdater keeps it as
     /// a string in its classes*.dex), or null for an APK that can't fetch its OBB.

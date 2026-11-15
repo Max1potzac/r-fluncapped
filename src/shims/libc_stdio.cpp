@@ -394,7 +394,7 @@ void register_libc_stdio(ShimRegistry& reg) {
         close_fd(c.rt(), fd);
         c.ret(0);
     });
-    reg.add("read", [](CallContext& c) {
+    static constexpr auto read = [](CallContext& c) {
         auto f = files(c.rt()).get(static_cast<int>(c.x(0)));
         if (!f) return c.fail(android::kEBADF);
         if (f->socket) {
@@ -403,6 +403,16 @@ void register_libc_stdio(ShimRegistry& reg) {
         }
         std::int64_t n = f->read(c.ptr(1), c.x(2));
         n < 0 ? c.fail(android::kEIO) : ret_int(c, n);
+    };
+    reg.add("read", read);
+    // FORTIFY's read(fd, buf, count, buf_size) (Reflourished 1.5.0's libRFLib): the same, once
+    // count fits the buffer, as bionic checks.
+    reg.add("__read_chk", [](CallContext& c) {
+        if (c.x(2) > c.x(3)) {
+            log::error("__read_chk: {} bytes into a {}-byte buffer", c.x(2), c.x(3));
+            return c.fail(android::kEINVAL);
+        }
+        read(c);
     });
     reg.add("write", [](CallContext& c) {
         auto f = files(c.rt()).get(static_cast<int>(c.x(0)));

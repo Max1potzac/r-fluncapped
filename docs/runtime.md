@@ -163,7 +163,10 @@ the game wants for launching one.
 The seed bank's packets are drawn a little up and left of their rects (about 7 and 3 UI units on
 a 119x76 packet), so the gold box and the LB/RB labels are moved by as much. A conveyor level's
 bank is a `ConveyorSeedBank` (its update the bank's own), with the same `SeedPacket`s, so LB/RB
-step through what's on the belt, top to bottom, as it moves.
+step through what's on the belt, top to bottom, as it moves. A column of packets closer together than their rects are
+tall (Reflourished 1.5.0's ten slots in Roman Gardens) is drawn smaller by as much, so the
+brackets shrink by the spacing over the height, from the top left; at the usual spacing they're
+left as they are.
 
 Off the lawn the pad does other things. On the pause menu (`PauseDialog`, found as the widget, or
 a parent of the widget, that `GetWidgetAt` gives for the screen's middle) the d-pad moves a box
@@ -178,7 +181,11 @@ first, from the list's left edge (clear of the sliders), held still before letti
 the dialog that's off the screen's side (where its sub-pages wait) is left out. Any other
 `PVZ2UIDialog` with a button in it (a level's objectives before the chooser, "are you sure?") is
 a menu the same way; the chooser's controls are only on while the chooser (or its look at the
-lawn button) is about, since Board state 3 starts before it, with the objectives up.
+lawn button) is about, since Board state 3 starts before it, with the objectives up. Lookout (the
+chooser's look at the lawn) counts as the chooser while its button back (`ViewBoardOrZombiesButton`)
+is updated and the seed bank isn't (both are while plants go down before "let's rock" in
+Reflourished), whatever the Board's state says: after a tutorial's demonstration it reads as
+playing.
 
 While a character talks (Crazy Dave's "tap to continue"), the widget under the screen's middle
 is the `CrazyNPCManager`: any button taps there, and does nothing else, so the seed chooser's or
@@ -194,7 +201,8 @@ Garden); the shortcuts follow it when libRFLib has `UIWorldMapZenGardenButton`.
 Select held two seconds in a level (a dial at the screen's top) turns the free cursor on: `mode()`
 gives Cursor where it would give Lawn, the d-pad and left stick move the glove (there's nothing to
 scroll), LB/RB still pick the packet, A taps it first and then touches at the glove, and the
-right stick's powerup flick is off. Held again, the tile box is back. The title screen
+right stick's powerup flick is off. Held again, the tile box is back. In the seed chooser it's the
+glove too (from the screen's middle), in place of the chooser's boxes. The title screen
 (`MainMenu`) is a menu of its `PVZ2UIButton`s, starting on the one nearest the bottom's middle
 (play); LB/RB swipe across the middle, which moves the banner carousel (`DraperCarouselAdWidget`)
 one banner. Its pages (`ProfilesDialog`, `EditProfileWidget`) slide in on a

@@ -374,7 +374,8 @@ public:
         // Select held two seconds in a level: the free cursor in place of the lawn's tile box (and
         // back). The level's other screens and the menus have the cursor already.
         if (p.button == PadButton::Back) {
-            select_since_ = p.down && lawn() ? now_ticks() : 0;
+            Mode m = p.down ? mode() : Mode::None;
+            select_since_ = p.down && board_up() && (m == Mode::Lawn || m == Mode::Chooser || (free_cursor_ && m == Mode::Cursor)) ? now_ticks() : 0;
             return false;
         }
         auto dir = std::find_if(dirs_.begin(), dirs_.end(), [&](const Dir& d) { return d.button == p.button; });
@@ -770,7 +771,7 @@ private:
         if (!board || !app || !board_vtable_ || mem.read<std::uint64_t>(board) != board_vtable_) return std::nullopt;
         // Not while the seed chooser's drawn, whatever the Board's state says (after a tutorial's
         // demonstration the chooser comes up in a state that takes touches).
-        if (chooser_shown()) return std::nullopt;
+        if (before_level()) return std::nullopt;
         // Not before the level starts, nor in the states where the lawn takes no touches (the
         // game's own test, in Board::TouchMoved).
         std::int32_t state = mem.read<std::int32_t>(board + kBoardState);
@@ -843,8 +844,8 @@ private:
         // Only while the chooser (or its look at the lawn) is about: in Board state 3 the level's
         // objectives can be up first, with no chooser yet.
         if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ &&
-            (chooser_shown() || (mem.read<std::int32_t>(board + kBoardState) == 3 && (live(chooser_, chooser_vtable_) || live(view_, view_vtable_)))))
-            return Mode::Chooser;
+            (before_level() || (mem.read<std::int32_t>(board + kBoardState) == 3 && (live(chooser_, chooser_vtable_) || live(view_, view_vtable_)))))
+            return free_cursor_ ? Mode::Cursor : Mode::Chooser;
         return sizes().ok() ? Mode::Cursor : Mode::None;
     }
 
@@ -1087,8 +1088,8 @@ private:
 
     // Select held: the free cursor goes on (at the tile the box was on) or off.
     void toggle_free_cursor() {
+        if (!board_up()) return;
         auto lawn = this->lawn();
-        if (!lawn) return;
         free_cursor_ = !free_cursor_;
         stop_scroll();
         b_since_ = y_since_ = x_since_ = 0;
@@ -1096,7 +1097,12 @@ private:
             steps_.push_back({1, 3, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
             cursor_down_ = false;
         }
-        if (free_cursor_) {
+        if (free_cursor_ && !lawn) {
+            // In the chooser: the middle of the screen.
+            Sizes z = sizes();
+            cursor_x_ = z.lw / 2;
+            cursor_y_ = z.lh / 2;
+        } else if (free_cursor_) {
             cursor_x_ = lawn->ui_x(lawn->ox + lawn->tw * (col_ + 0.5f));
             cursor_y_ = lawn->ui_y(lawn->oy + lawn->th * (row_ + 0.5f));
         }
@@ -1284,6 +1290,7 @@ private:
         auto order = [](const auto& a, const auto& b) { return a.second.y != b.second.y ? a.second.y < b.second.y : a.second.x < b.second.x; };
         std::stable_sort(c.grid.begin(), c.grid.end(), order);
         std::stable_sort(c.slots.begin(), c.slots.end(), order);
+        fit_to_pitch(c.slots);
         return c;
     }
 
@@ -1694,6 +1701,21 @@ private:
     // The instance last updated, if it's still about and still what it was.
     // The seed chooser was drawn this frame or the last few.
     bool chooser_shown() const { return live(chooser_, chooser_vtable_, std::chrono::milliseconds(150)) != 0; }
+    // Still choosing: the chooser's drawn, or its look at the lawn (Lookout: its button back is,
+    // and the seed bank isn't, which it is while plants go down before "let's rock"). The Board's
+    // state can say the level's on (after a tutorial's demonstration).
+    bool before_level() const {
+        if (chooser_shown()) return true;
+        bool bank = live(bank_, bank_vtable_, std::chrono::milliseconds(300)) || (conveyor_vtable_ && live(conveyor_, conveyor_vtable_, std::chrono::milliseconds(300)));
+        return live(view_, view_vtable_) != 0 && !bank;
+    }
+    // A level's Board is up (choosing or playing).
+    bool board_up() {
+        auto& mem = rt_.mem();
+        GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
+        GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
+        return board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_;
+    }
 
     // The object's of the class with this vtable: it has it, or a copy of it (Reflourished 1.5.0's
     // libRFLib gives the seed chooser a vtable of its own, on the heap, with no type_info: the
@@ -1754,6 +1776,26 @@ private:
         return Rect{bar->x + bar->w + bar->h * 35 / 100, bar->y + bar->h / 2, 1, 1};
     }
 
+    // Packets in a column closer together than their rects are tall (the ten slots of Reflourished
+    // 1.5.0's Roman Gardens) are drawn smaller, by as much, from their top left corners.
+    template <class T> static Rect& rect_of(T& p) {
+        if constexpr (std::is_same_v<T, Rect>) return p;
+        else return p.second;
+    }
+    template <class T> static void fit_to_pitch(std::vector<T>& column) {
+        if (column.size() < 2) return;
+        const Rect& a = rect_of(column[0]);
+        const Rect& b = rect_of(column[1]);
+        int pitch = b.y - a.y;
+        if (b.x != a.x || pitch <= 0 || pitch >= a.h) return;
+        float k = static_cast<float>(pitch) / a.h;
+        for (auto& p : column) {
+            Rect& r = rect_of(p);
+            r.w = static_cast<std::int32_t>(r.w * k);
+            r.h = static_cast<std::int32_t>(r.h * k);
+        }
+    }
+
     // The seed bank's packets, top to bottom, then left to right.
     std::vector<Rect> packet_rects() {
         std::vector<Rect> packets;
@@ -1775,6 +1817,7 @@ private:
             packets.push_back(r);
         }
         std::stable_sort(packets.begin(), packets.end(), [](const Rect& a, const Rect& b) { return a.y != b.y ? a.y < b.y : a.x < b.x; });
+        fit_to_pitch(packets);
         // Ten slots (Reflourished 1.5.0's Roman Gardens) run past the bottom of the screen: the
         // last packet is cut off there, so its box and its touch go on the part that shows.
         if (GuestAddr app = mem.read<std::uint64_t>(base_ + kApp)) {

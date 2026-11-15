@@ -285,6 +285,8 @@ public:
         if (auto uni = find_vtable(rt_.mem(), pvz2, "UniverseMap")) universe_type_ = rt_.mem().read<std::uint64_t>(uni->address - 8);
         if (auto world = find_vtable(rt_.mem(), pvz2, "UniverseWorldButton")) world_type_ = rt_.mem().read<std::uint64_t>(world->address - 8);
         if (auto dialog = find_vtable(rt_.mem(), pvz2, "PVZ2UIDialog")) dialog_type_ = rt_.mem().read<std::uint64_t>(dialog->address - 8);
+        if (auto pane = find_vtable(rt_.mem(), pvz2, "PVZ2UIScrollingPaneWidget")) pane_type_ = rt_.mem().read<std::uint64_t>(pane->address - 8);
+        if (auto entry = find_vtable(rt_.mem(), pvz2, "ProfilesListEntry")) entry_type_ = rt_.mem().read<std::uint64_t>(entry->address - 8);
         if (auto title = find_vtable(rt_.mem(), pvz2, "MainMenu")) main_menu_type_ = rt_.mem().read<std::uint64_t>(title->address - 8);
         if (auto check = find_vtable(rt_.mem(), pvz2, "PVZ2UICheckBox")) check_vtable_ = check->address;
         if (auto list = find_vtable(rt_.mem(), pvz2, "PVZ2UIScrollingWidget")) scroll_vtable_ = list->address;
@@ -648,7 +650,7 @@ public:
                 auto packets = packet_rects();
                 if (slot_ >= 1 && static_cast<std::size_t>(slot_) <= packets.size()) {
                     const Rect& r = packets[slot_ - 1];
-                    out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), platform::kHintBorder});
+                    out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), platform::kHintBorder, true});
                 }
             }
             select_dial(out);
@@ -680,7 +682,7 @@ public:
         auto packets = packet_rects();
         if (slot_ >= 1 && static_cast<std::size_t>(slot_) <= packets.size()) {
             const Rect& r = packets[slot_ - 1];
-            out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), platform::kHintBorder});
+            out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), platform::kHintBorder, true});
         }
         if (!pad_hints_) return out;
         using platform::PadButton;
@@ -867,6 +869,12 @@ private:
         on_title_ = false;
         for (int i = 0; w && i < 12; ++i, w = mem.read<std::uint64_t>(w + kWidgetParent)) {
             GuestAddr vt = mem.read<std::uint64_t>(w);
+            // A page of the title screen's (the profiles, a new or renamed one) first: the title
+            // screen slides them in on a scrolling pane, the others waiting off its side.
+            if (main_menu_type_ && pane_type_) {
+                GuestAddr pane = mem.read<std::uint64_t>(w + kWidgetParent);
+                if (pane && type_of(pane) == pane_type_ && type_of(mem.read<std::uint64_t>(pane + kWidgetParent)) == main_menu_type_) return w;
+            }
             // The title screen: its buttons (play, the profile, news, settings) are a menu too.
             if (main_menu_type_ && type_of(w) == main_menu_type_) {
                 on_title_ = true;
@@ -904,13 +912,21 @@ private:
                 // A page waiting off the screen's side (the settings slide their sub-pages in).
                 if (depth == 0 && (r.x < 0 || r.x + r.w > z.lw)) continue;
                 GuestAddr vt = mem.read<std::uint64_t>(w);
-                bool check = check_vtable_ && vt == check_vtable_;
+                // The profiles' rows are entries with a button (rename) in them: the row picks.
+                bool check = (check_vtable_ && vt == check_vtable_) || (entry_type_ && type_of(w) == entry_type_);
                 if ((vt == slider_vtable_ || vt == button_vtable_ || check) && r.w > 0 && r.h > 0) items.push_back({w, r, vt == slider_vtable_, 0, view});
                 std::optional<Rect> inner = scroll_vtable_ && vt == scroll_vtable_ ? std::optional<Rect>(r) : view;
                 if (depth < 7) self(self, w, r.x, r.y, depth + 1, inner);
             }
         };
-        collect(collect, dialog, mem.read<std::int32_t>(dialog + kWidgetRect), mem.read<std::int32_t>(dialog + kWidgetRect + 4), 0, std::nullopt);
+        // Where the dialog is on the screen: its position and its parents' (the profiles' dialog
+        // sits in the title screen's widgets).
+        std::int32_t ox = 0, oy = 0;
+        for (GuestAddr p = dialog; p && mem.read<std::uint64_t>(p + kWidgetParent); p = mem.read<std::uint64_t>(p + kWidgetParent)) {
+            ox += mem.read<std::int32_t>(p + kWidgetRect);
+            oy += mem.read<std::int32_t>(p + kWidgetRect + 4);
+        }
+        collect(collect, dialog, ox, oy, 0, std::nullopt);
         std::stable_sort(items.begin(), items.end(), [](const MenuItem& a, const MenuItem& b) {
             return a.r.y + a.r.h / 2 != b.r.y + b.r.h / 2 ? a.r.y + a.r.h / 2 < b.r.y + b.r.h / 2 : a.r.x < b.r.x;
         });
@@ -1461,7 +1477,7 @@ private:
         std::optional<Rect> slot;
         if (ch_slot_ >= 1 && static_cast<std::size_t>(ch_slot_) <= c.slots.size()) {
             slot = c.slots[ch_slot_ - 1].second;
-            box(*slot, platform::kHintBorder, false);
+            box(*slot, platform::kHintBorder, true);
         }
         auto now = now_ticks();
         auto start = rock_rect();
@@ -1853,7 +1869,7 @@ private:
     // 1), and when B or X went down there.
     GuestAddr chooser_vtable_ = 0, view_vtable_ = 0, reload_vtable_ = 0, map_vtable_ = 0, npc_vtable_ = 0;
     GuestAddr settings_vtable_ = 0, check_vtable_ = 0, scroll_vtable_ = 0;
-    GuestAddr universe_type_ = 0, world_type_ = 0, dialog_type_ = 0, main_menu_type_ = 0;
+    GuestAddr universe_type_ = 0, world_type_ = 0, dialog_type_ = 0, main_menu_type_ = 0, pane_type_ = 0, entry_type_ = 0;
     bool on_title_ = false;  // menu_dialog() found the title screen
     GuestAddr world_target_ = 0;      // the world the pad last stepped to on the worlds' carousel
     std::int64_t world_next_ = 0;     // when a held direction steps again

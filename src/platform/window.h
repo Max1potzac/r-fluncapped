@@ -83,7 +83,9 @@ struct PadInput {
     PadType type;
     float x = 0, y = 0;  // LStick, RStick: -1 to 1 each way, right and down positive
 };
-using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput, GameKeyInput, PadInput>;
+// The mouse moved (with or without a button down): it's in use, not the controller.
+struct MouseInput {};
+using Input = std::variant<TouchInput, KeyInput, TextInput, BackInput, ResizeInput, FocusInput, QuitInput, GameKeyInput, PadInput, MouseInput>;
 
 class Window {
 public:
@@ -127,6 +129,7 @@ private:
     void* context_ = nullptr;
     bool mouse_down_ = false;
     void* cursors_[2] = {};  // SDL_Cursor*: the glove, and pressing (custom_cursor)
+    int cursor_height_ = 0;
     void make_cursors();
     bool text_input_ = false;
     bool hover_ = false;

@@ -209,13 +209,22 @@ Window::Window(const WindowOptions& options) {
     if (options.custom_cursor) make_cursors();
 }
 
-// The glove for the mouse: about 40 pixels tall at 96 DPI, bigger on denser screens; it presses
-// while the button's down.
+// The glove for the mouse, as big as the controller's (a share of the game's picture, as the
+// window shows it), made again when the window changes size; it presses while the button's down.
+static void letterbox(int dw, int dh, int gw, int gh, int& x, int& y, int& w, int& h);
+
 void Window::make_cursors() {
-    float dpi = 96;
-    int display = SDL_GetWindowDisplayIndex(window_);
-    if (display < 0 || SDL_GetDisplayDPI(display, nullptr, &dpi, nullptr) != 0 || dpi <= 0) dpi = 96;
-    int height = std::clamp(static_cast<int>(40 * dpi / 96 + 0.5f), 32, 128);
+    int dw, dh, x, y, w, h;
+    drawable_size(dw, dh);
+    letterbox(dw, dh, game_w_, game_h_, x, y, w, h);
+    int height = std::clamp(static_cast<int>(h * kCursorHeight + 0.5f), 16, 256);
+    if (height == cursor_height_) return;
+    for (void*& c : cursors_)
+        if (c) {
+            SDL_FreeCursor(static_cast<SDL_Cursor*>(c));
+            c = nullptr;
+        }
+    cursor_height_ = height;
     for (int pressed = 0; pressed < 2; ++pressed) {
         int hx = 0, hy = 0;
         Image image = scaled_cursor(pressed != 0, height, hx, hy);
@@ -225,7 +234,7 @@ void Window::make_cursors() {
         SDL_FreeSurface(surface);
         if (!cursors_[pressed]) return log::warn("cursor: {}", SDL_GetError());
     }
-    SDL_SetCursor(static_cast<SDL_Cursor*>(cursors_[0]));
+    SDL_SetCursor(static_cast<SDL_Cursor*>(cursors_[mouse_down_ ? 1 : 0]));
     log::info("cursor: the glove, {} pixels", height);
 }
 
@@ -521,6 +530,7 @@ std::vector<Input> Window::poll() {
                 drawable_size(game_w_, game_h_);
                 out.push_back(ResizeInput{game_w_, game_h_});
             }
+            if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED && cursor_height_) make_cursors();
             else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) out.push_back(FocusInput{true});
             else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) out.push_back(FocusInput{false});
             break;
@@ -544,6 +554,7 @@ std::vector<Input> Window::poll() {
             break;
         case SDL_MOUSEMOTION:
             if (ev.motion.which == SDL_TOUCH_MOUSEID) break;
+            out.push_back(MouseInput{});
             if (mouse_down_) touch(TouchInput::Moved, 1, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
             else if (hover_) touch(TouchInput::Moved, kHoverPointer, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
             break;

@@ -4,6 +4,7 @@
 #include "core/log.h"
 #include "core/module.h"
 #include "core/rtti.h"
+#include "platform/cursor_sprites.h"
 #include "runtime.h"
 
 #include <algorithm>
@@ -725,6 +726,9 @@ private:
         GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
         GuestAddr app = mem.read<std::uint64_t>(base_ + kApp);
         if (!board || !app || !board_vtable_ || mem.read<std::uint64_t>(board) != board_vtable_) return std::nullopt;
+        // Not while the seed chooser's drawn, whatever the Board's state says (after a tutorial's
+        // demonstration the chooser comes up in a state that takes touches).
+        if (chooser_shown()) return std::nullopt;
         // Not before the level starts, nor in the states where the lawn takes no touches (the
         // game's own test, in Board::TouchMoved).
         std::int32_t state = mem.read<std::int32_t>(board + kBoardState);
@@ -794,7 +798,8 @@ private:
         auto& mem = rt_.mem();
         GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
         GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
-        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ && mem.read<std::int32_t>(board + kBoardState) == 3) return Mode::Chooser;
+        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ && (mem.read<std::int32_t>(board + kBoardState) == 3 || chooser_shown()))
+            return Mode::Chooser;
         return sizes().ok() ? Mode::Cursor : Mode::None;
     }
 
@@ -1384,7 +1389,7 @@ private:
         } else if (m == Mode::Cursor && cursor_x_ >= 0) {
             // The glove, its fingertip on the spot; it presses while A's held.
             int x = static_cast<int>(cursor_x_ * fx), y = static_cast<int>(cursor_y_ * fy);
-            out.cursor = platform::HintCursor{x, y, std::max(24, static_cast<int>(z.sh * 0.045f)), cursor_down_};
+            out.cursor = platform::HintCursor{x, y, std::max(24, static_cast<int>(z.sh * platform::kCursorHeight)), cursor_down_};
         }
     }
 
@@ -1553,6 +1558,9 @@ private:
     }
 
     // The instance last updated, if it's still about and still what it was.
+    // The seed chooser was drawn this frame or the last few.
+    bool chooser_shown() const { return live(chooser_, chooser_vtable_, std::chrono::milliseconds(150)) != 0; }
+
     GuestAddr live(const Seen& seen, GuestAddr vtable, std::chrono::steady_clock::duration stale = kStale) const {
         GuestAddr object = seen.object;
         auto age = std::chrono::steady_clock::duration(now_ticks() - seen.when);

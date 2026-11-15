@@ -10,6 +10,9 @@
 
 namespace rfu::platform {
 
+// The glove's height, of the game's picture's height (the controller's and the mouse's alike).
+constexpr float kCursorHeight = 0.045f;
+
 struct CursorSprite {
     const Image& image;
     int hot_x, hot_y;  // the fingertip, in the image's pixels

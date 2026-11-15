@@ -189,9 +189,12 @@ Garden); the shortcuts follow it when libRFLib has `UIWorldMapZenGardenButton`.
 The controller's cursor off the lawn is a glove (`assets/cursor.png`, embedded by
 `tools/gen_cursor.py`; it presses while A's held), drawn like the hints: scissored clears, a run
 of one colour at a time, the edges cut at half transparency. `--custom-cursor` makes it the
-mouse's cursor too (`SDL_CreateColorCursor`, about 40 pixels at 96 DPI).
+mouse's cursor too (`SDL_CreateColorCursor`), at the same size: 0.045 of the letterboxed game's
+height, remade when the window's resized. Moving the mouse hides the controller's glove.
 
-The seed chooser (Board state 3) isn't made of widgets: `SeedChooser` is a UI object (drawn
+The seed chooser (Board state 3, or drawn in the last 150 ms whatever the state: after a
+tutorial's demonstration it comes up with the Board already in a playing state) isn't made of
+widgets: `SeedChooser` is a UI object (drawn
 through vtable slot 13, which is how it's seen) whose children are `SeedPacket`s, both the ones to
 pick (with their rects scrolled with the list) and the ones picked, in the slots down the left (an
 empty slot's at 0, 0). The d-pad moves a box over the packets to pick; one out of the list's view

@@ -1003,6 +1003,8 @@ void App::handle(const platform::Input& input) {
             } else if constexpr (std::is_same_v<T, platform::TouchInput>) {
                 if (app_has_focus && !splash_showing) events.touch(in);
                 if (options.game_mouse) options.game_mouse();
+            } else if constexpr (std::is_same_v<T, platform::MouseInput>) {
+                if (options.game_mouse) options.game_mouse();  // hides the controller's glove
             } else if constexpr (std::is_same_v<T, platform::GameKeyInput>) {
                 if (options.game_keys && app_has_focus && !splash_showing) options.game_keys(in);
             } else if constexpr (std::is_same_v<T, platform::PadInput>) {

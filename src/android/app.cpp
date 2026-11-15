@@ -1032,7 +1032,8 @@ int App::run() {
     }
     implement_java();
     if (china) implement_java_china();
-    implement_http(rt, rt.options().network, china ? std::string(kCnPackage) + "AndroidHttpTransaction" : "com/popcap/SexyAppFramework/AndroidHttpTransaction");
+    implement_http(rt, rt.options().network, china ? std::string(kCnPackage) + "AndroidHttpTransaction" : "com/popcap/SexyAppFramework/AndroidHttpTransaction",
+                   options.data_dir / "image-cache");
 
     if (china) {
         start_china();

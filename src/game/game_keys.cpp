@@ -228,7 +228,24 @@ public:
         write_stub(rect_stub_, 0xAA0103E8, base_ + kScreenRect.offset);  // mov x8, x1
         write_stub(ref_stub_, 0xAA0203E8, base_ + kHandleRef.offset);    // mov x8, x2
 
-        watch(bank->functions[kUpdateSlot], bank_vtable_, bank_, "game keys: seed bank");
+        // A conveyor level's bank is a ConveyorSeedBank, its packets the same SeedPackets
+        // (moving up the belt).
+        auto conveyor = find_vtable(rt_.mem(), pvz2, "ConveyorSeedBank");
+        if (conveyor && conveyor->functions.size() > kUpdateSlot) conveyor_vtable_ = conveyor->address;
+        if (conveyor_vtable_ && conveyor->functions[kUpdateSlot] == bank->functions[kUpdateSlot]) {
+            hook(rt_, bank->functions[kUpdateSlot], "game keys: seed bank", [self = shared_from_this()](CallContext& c) {
+                GuestAddr object = c.x(0);
+                Seen* seen = self->same_class(object, self->bank_vtable_)       ? &self->bank_
+                             : self->same_class(object, self->conveyor_vtable_) ? &self->conveyor_
+                                                                                 : nullptr;
+                if (!seen) return;
+                seen->object = object;
+                seen->when = now_ticks();
+            });
+        } else {
+            watch(bank->functions[kUpdateSlot], bank_vtable_, bank_, "game keys: seed bank");
+            if (conveyor_vtable_) watch(conveyor->functions[kUpdateSlot], conveyor_vtable_, conveyor_, "game keys: conveyor");
+        }
         // The seed chooser and its look at the lawn button (each drawn once a frame).
         for (auto [name, vtable, seen] : {std::tuple{"SeedChooser", &chooser_vtable_, &chooser_}, std::tuple{"ViewBoardOrZombiesButton", &view_vtable_, &view_},
                                           std::tuple{"ReloadLayoutButton", &reload_vtable_, &reload_}}) {
@@ -267,6 +284,7 @@ public:
         // These two are told by their type_info: the classes have more than one vtable.
         if (auto uni = find_vtable(rt_.mem(), pvz2, "UniverseMap")) universe_type_ = rt_.mem().read<std::uint64_t>(uni->address - 8);
         if (auto world = find_vtable(rt_.mem(), pvz2, "UniverseWorldButton")) world_type_ = rt_.mem().read<std::uint64_t>(world->address - 8);
+        if (auto dialog = find_vtable(rt_.mem(), pvz2, "PVZ2UIDialog")) dialog_type_ = rt_.mem().read<std::uint64_t>(dialog->address - 8);
         if (auto check = find_vtable(rt_.mem(), pvz2, "PVZ2UICheckBox")) check_vtable_ = check->address;
         if (auto list = find_vtable(rt_.mem(), pvz2, "PVZ2UIScrollingWidget")) scroll_vtable_ = list->address;
         // Reflourished 1.5.0 lays the world map's buttons out again (its libRFLib draws them):
@@ -798,7 +816,10 @@ private:
         auto& mem = rt_.mem();
         GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
         GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
-        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ && (mem.read<std::int32_t>(board + kBoardState) == 3 || chooser_shown()))
+        // Only while the chooser (or its look at the lawn) is about: in Board state 3 the level's
+        // objectives can be up first, with no chooser yet.
+        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ &&
+            (chooser_shown() || (mem.read<std::int32_t>(board + kBoardState) == 3 && (live(chooser_, chooser_vtable_) || live(view_, view_vtable_)))))
             return Mode::Chooser;
         return sizes().ok() ? Mode::Cursor : Mode::None;
     }
@@ -824,6 +845,9 @@ private:
         for (int i = 0; w && i < 12; ++i, w = mem.read<std::uint64_t>(w + kWidgetParent)) {
             GuestAddr vt = mem.read<std::uint64_t>(w);
             if (vt == pause_vtable_ || (settings_vtable_ && vt == settings_vtable_)) return w;
+            // Any other of the game's dialogs with something to press (the level's objectives,
+            // "are you sure?" and the like).
+            if (dialog_type_ && type_of(w) == dialog_type_) return menu_items(w).empty() ? 0 : w;
         }
         return 0;
     }
@@ -1138,7 +1162,7 @@ private:
         if (end < begin || end - begin > 1024 * 8) return c;
         for (GuestAddr h = begin; h < end; h += 8) {
             GuestAddr packet = resolve(h);
-            if (!packet || mem.read<std::uint64_t>(packet) != packet_vtable_) continue;
+            if (!packet || !same_class(packet, packet_vtable_)) continue;
             Rect r = screen_rect(packet);
             if (r.w <= 0 || r.h <= 0 || (r.x == 0 && r.y == 0)) continue;
             // Drawn a little up and left of the rect, as in the seed bank.
@@ -1549,7 +1573,6 @@ private:
 
     void watch(GuestAddr update, GuestAddr vtable, Seen& seen, const std::string& name) {
         hook(rt_, update, name, [self = shared_from_this(), vtable, &seen](CallContext& c) {
-            auto& rt = self->rt_;
             GuestAddr object = c.x(0);
             if (!self->same_class(object, vtable)) return;
             seen.object = object;
@@ -1624,13 +1647,14 @@ private:
     std::vector<Rect> packet_rects() {
         std::vector<Rect> packets;
         GuestAddr bank = live(bank_, bank_vtable_);
+        if (!bank && conveyor_vtable_) bank = live(conveyor_, conveyor_vtable_);
         if (!bank) return packets;
         auto& mem = rt_.mem();
         GuestAddr begin = mem.read<std::uint64_t>(bank + kChildren), end = mem.read<std::uint64_t>(bank + kChildren + 8);
         if (end < begin || end - begin > 64 * 8) return packets;
         for (GuestAddr h = begin; h < end; h += 8) {
             GuestAddr packet = resolve(h);
-            if (!packet || mem.read<std::uint64_t>(packet) != packet_vtable_) continue;
+            if (!packet || !same_class(packet, packet_vtable_)) continue;
             Rect r = screen_rect(packet);
             if (r.w <= 0 || r.h <= 0) continue;
             // The card is drawn a little up and left of the packet's rect (by about 7 and 3 of
@@ -1690,7 +1714,8 @@ private:
 
     Runtime& rt_;
     GuestAddr base_;
-    GuestAddr bank_vtable_ = 0, packet_vtable_ = 0;
+    GuestAddr bank_vtable_ = 0, packet_vtable_ = 0, conveyor_vtable_ = 0;
+    Seen conveyor_;
     std::array<GuestAddr, kButtonCount> button_vtables_{};
     GuestAddr scratch_ = 0, touch_ = 0, rect_ = 0, ref_ = 0, rect_stub_ = 0, ref_stub_ = 0, blocked_ = 0;
     Seen bank_;
@@ -1733,7 +1758,7 @@ private:
     // 1), and when B or X went down there.
     GuestAddr chooser_vtable_ = 0, view_vtable_ = 0, reload_vtable_ = 0, map_vtable_ = 0, npc_vtable_ = 0;
     GuestAddr settings_vtable_ = 0, check_vtable_ = 0, scroll_vtable_ = 0;
-    GuestAddr universe_type_ = 0, world_type_ = 0;
+    GuestAddr universe_type_ = 0, world_type_ = 0, dialog_type_ = 0;
     GuestAddr world_target_ = 0;      // the world the pad last stepped to on the worlds' carousel
     std::int64_t world_next_ = 0;     // when a held direction steps again
     bool map_150_ = false;

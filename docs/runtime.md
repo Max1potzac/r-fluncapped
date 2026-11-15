@@ -161,7 +161,9 @@ call it off. X held in the first column holds a finger on the row's mower until 
 the game wants for launching one.
 
 The seed bank's packets are drawn a little up and left of their rects (about 7 and 3 UI units on
-a 119x76 packet), so the gold box and the LB/RB labels are moved by as much.
+a 119x76 packet), so the gold box and the LB/RB labels are moved by as much. A conveyor level's
+bank is a `ConveyorSeedBank` (its update the bank's own), with the same `SeedPacket`s, so LB/RB
+step through what's on the belt, top to bottom, as it moves.
 
 Off the lawn the pad does other things. On the pause menu (`PauseDialog`, found as the widget, or
 a parent of the widget, that `GetWidgetAt` gives for the screen's middle) the d-pad moves a box
@@ -173,7 +175,10 @@ A taps a button, and B or Start are Android's back, which resumes. The settings 
 from the world map or a level) work the same way, with their `PVZ2UICheckBox`es as buttons; their
 rows are in a `PVZ2UIScrollingWidget`, so a row moved to that's out of its view is dragged in
 first, from the list's left edge (clear of the sliders), held still before letting go. A page of
-the dialog that's off the screen's side (where its sub-pages wait) is left out.
+the dialog that's off the screen's side (where its sub-pages wait) is left out. Any other
+`PVZ2UIDialog` with a button in it (a level's objectives before the chooser, "are you sure?") is
+a menu the same way; the chooser's controls are only on while the chooser (or its look at the
+lawn button) is about, since Board state 3 starts before it, with the objectives up.
 
 While a character talks (Crazy Dave's "tap to continue"), the widget under the screen's middle
 is the `CrazyNPCManager`: any button taps there, and does nothing else, so the seed chooser's or
@@ -254,6 +259,11 @@ structs differ from Windows' (`AF_INET6`, the poll bits, `SOL_SOCKET`, errno val
 `struct addrinfo` field order), so every value is translated at the boundary. `--offline` makes
 `socket()` and `getaddrinfo()` fail and the Java HTTP requests fail, and the game takes its
 offline path.
+
+Images the game fetches this way (the title screen's banners, `cdn/*.png`) are downloaded whole
+before the game sees them, and kept in `<data>/image-cache`. When a later download fails or is
+cut off (a slow or blocked server, `--offline`), the game gets the kept copy as a 200; a good
+download replaces it, so a changed banner shows once it gets through.
 
 To test against a local copy of a server, set `RFU_URL_REWRITE=<prefix>=<replacement>`, e.g.
 `RFU_URL_REWRITE=https://reflourished.ducnguyen.org=http://127.0.0.1:8000`.

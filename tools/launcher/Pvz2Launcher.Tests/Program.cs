@@ -264,7 +264,7 @@ void UpdateCheckTest()
 void ObbUpdateTest()
 {
     var g = MakeGame("ObbGame");
-    Expect(ObbUpdate.ConfigUrl(g) == ObbUpdate.ReflourishedConfig, "Reflourished's update server by default");
+    Expect(ObbUpdate.ConfigUrl(g) == null, "an APK that doesn't update its OBB (1.4.2) gets no updates");
     string state = ObbUpdate.StateDir(g);
     Expect(state.EndsWith(Path.Combine("sdcard", "Android", "obb", "com.ea.game.pvz2_rfl")), $"the game's OBB folder: {state}");
 
@@ -313,6 +313,12 @@ void ObbUpdateTest()
     using (var zip = System.IO.Compression.ZipFile.Open(plain, System.IO.Compression.ZipArchiveMode.Create))
         using (var w = zip.CreateEntry("classes.dex").Open()) w.Write("dex\n\0https://example.com/x\0"u8);
     Expect(ObbUpdate.ConfigUrlInApk(plain) == null, "an APK without one");
+    File.Copy(apk, Path.Combine(g.Dir, "game.apk"), true);
+    g.Refresh();
+    Expect(ObbUpdate.ConfigUrl(g) == "https://rsb.example.org/live/latest.json", $"one that does: its own server: {ObbUpdate.ConfigUrl(g)}");
+    g.Settings.ObbUpdateUrl = "";
+    Expect(ObbUpdate.ConfigUrl(g) == null, "switched off with an empty ObbUpdateUrl");
+    g.Settings.ObbUpdateUrl = null;
 
     // the in-game switch (rfu's preferences file)
     Expect(ObbUpdate.GameAllowsUpdates(g), "on by default");

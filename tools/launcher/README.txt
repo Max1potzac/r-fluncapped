@@ -46,7 +46,8 @@ THE MENU
                     for one: the launcher downloads it next to the APK, or
                     brings the OBB you have up to date. The old APK and OBB
                     go to old\, saves stay. Asked for the OBB file only if
-                    the download fails.
+                    the download fails. A version number in the game's
+                    name follows the new APK's file name.
   Remove game       sends the game's folder (APK, OBB, saves, mods,
                     settings) to the Recycle Bin, after asking.
   Play              see below. "Unpack resources" unpacks the OBB into

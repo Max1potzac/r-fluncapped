@@ -283,6 +283,12 @@ call's Java arguments decoded from whichever of the three calling conventions na
   target is open (Windows won't replace a file in use), replaces it once the game closes
   (`close_guest_files`). Java's ObbUpdater, which downloads the patches, is the launcher's
   `ObbUpdate`.
+- **Library updates.** Reflourished 1.5.0+ downloads newer builds of libRFLib itself (a gzipped tar
+  from its `libcdn`), installs the `.so` as `files/libRFLib.so` and restarts. Its Java side loads
+  that copy instead of the APK's, and so does rfu (`staged_mod_library` in `src/android/app.cpp`),
+  with the same safety net: a copy that starts 3 times without the game confirming it
+  (`files/_lib_boot`) is dropped, unless `files/liboverride.txt` exists. The launcher deletes the
+  staged copy when you update the game, so an old download can't shadow the new APK's library.
 - **Web requests.** Besides its CDN client, the game makes some requests through Java
   (`AndroidHttpTransaction`, over `HttpURLConnection`). `src/android/java_http.cpp` runs them on
   four worker threads with the host's HTTP client (`src/platform/http.cpp`: WinHTTP on Windows,

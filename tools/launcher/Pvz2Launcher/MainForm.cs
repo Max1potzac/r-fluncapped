@@ -16,6 +16,7 @@ sealed class MainForm : Form, ILaunchUi
     GameFolder? _game;
     bool _loading;  // filling the controls in, not the person changing them
     readonly Dictionary<string, Process> _running = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, List<DateTime>> _restarts = new(StringComparer.OrdinalIgnoreCase);
 
     // games
     readonly ListView _list = new() { View = View.Tile, MultiSelect = false, HideSelection = false, Dock = DockStyle.Fill };
@@ -357,9 +358,18 @@ sealed class MainForm : Form, ILaunchUi
         int code = process.ExitCode;
         if (code == LaunchFlow.RestartExitCode)
         {
-            // the game asked to be started again (a save imported, or its OBB patched)
-            Log($"{game.DisplayName} asked to be restarted");
-            _ = PlayAsync(game, true);
+            // the game asked to be started again (a save imported, its OBB patched, or its own
+            // library updated), but not over and over
+            var recent = _restarts.TryGetValue(game.Dir, out var r) ? r : _restarts[game.Dir] = new List<DateTime>();
+            recent.RemoveAll(t => DateTime.Now - t > TimeSpan.FromMinutes(2));
+            if (recent.Count < 3)
+            {
+                recent.Add(DateTime.Now);
+                Log($"{game.DisplayName} asked to be restarted");
+                _ = PlayAsync(game, true);
+                return;
+            }
+            Log($"{game.DisplayName} asked to be restarted again, 3 times in 2 minutes: not starting it this time");
             return;
         }
         Log($"{game.DisplayName} closed{(code != 0 ? $" with exit code {code}" : "")}");
@@ -409,7 +419,7 @@ sealed class MainForm : Form, ILaunchUi
         try
         {
             if (await _flow.InstallVersionAsync(game, files.Apk, files.Obb))
-                Log($"{game.DisplayName} is now version {game.Info?.VersionName}");
+                Log($"{game.DisplayName} is updated");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

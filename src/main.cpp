@@ -352,8 +352,22 @@ int main(int argc, char** argv) {
         if (load_mod_libs && !china) {
             auto mod_libs = mod_libraries(options.lib_dir);
             if (mod_libs.empty()) rfu::log::info("no mod libraries in {}; running the game's own code only", rfu::path_to_utf8(options.lib_dir));
-            for (const auto& path : mod_libs) {
-                auto& m = rt.linker().load(path);
+            for (const auto& apk_path : mod_libs) {
+                // Reflourished's own library update, downloaded by the game (see app.h).
+                auto path = apk_path;
+                const std::string name = rfu::path_to_utf8(apk_path.filename());
+                if (auto staged = rfu::android::staged_mod_library(app, name)) path = *staged;
+                rfu::Module* loaded = nullptr;
+                if (path != apk_path) {
+                    try {
+                        loaded = &rt.linker().load(path);
+                        rfu::log::info("{}: the game's downloaded update, {}", name, rfu::path_to_utf8(path));
+                    } catch (const std::exception& e) {
+                        rfu::log::warn("{}: the downloaded update didn't load ({}); using the APK's", name, e.what());
+                        rfu::android::drop_staged_mod_library(app, name);
+                    }
+                }
+                auto& m = loaded ? *loaded : rt.linker().load(apk_path);
                 rt.run_initializers();
                 if (auto onload = m.find_export("JNI_OnLoad")) {
                     auto version = rt.call(*onload, {vm, 0});

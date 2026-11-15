@@ -115,9 +115,10 @@ void register_libz(ShimRegistry& reg) {
         with_stream(c, [](z_stream& h) { return inflateReset(&h); });
     });
     reg.add("inflateEnd", [](CallContext& c) {
+        GuestAddr g = c.x(0);  // read first: ret() below overwrites x0
         with_stream(c, [](z_stream& h) { return inflateEnd(&h); });
-        c.mem().write<GuestAddr>(c.x(0) + kState, 0);
-        drop_stream(c, c.x(0));
+        c.mem().write<GuestAddr>(g + kState, 0);
+        drop_stream(c, g);
     });
     // deflateInit2_(strm, level, method, windowBits, memLevel, strategy, version, size)
     reg.add("deflateInit2_", [](CallContext& c) {
@@ -134,9 +135,10 @@ void register_libz(ShimRegistry& reg) {
         with_stream(c, [](z_stream& h) { return deflateReset(&h); });
     });
     reg.add("deflateEnd", [](CallContext& c) {
+        GuestAddr g = c.x(0);  // read first: ret() below overwrites x0
         with_stream(c, [](z_stream& h) { return deflateEnd(&h); });
-        c.mem().write<GuestAddr>(c.x(0) + kState, 0);
-        drop_stream(c, c.x(0));
+        c.mem().write<GuestAddr>(g + kState, 0);
+        drop_stream(c, g);
     });
 
     reg.add("gzopen", [](CallContext& c) {

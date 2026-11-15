@@ -65,6 +65,12 @@ void Versions()
     Expect(UpdateCheck.CompareVersions("1.4", "1.4.0") == 0, "1.4 == 1.4.0");
     Expect(UpdateCheck.CompareVersions("1.10.0", "1.9.9") > 0, "1.10.0 > 1.9.9");
     Expect(UpdateCheck.CompareVersions("1.4.2", "1.5.0b") < 0, "1.4.2 < 1.5.0b");
+    Expect(LaunchFlow.VersionInName("PvZ2 Reflourished 1.5.0") == "1.5.0", "version in a name");
+    Expect(LaunchFlow.VersionInName("PvZ2 Reflourished") == null, "no version in a name");
+    Expect(LaunchFlow.RenamedForVersion("PvZ2 Reflourished 1.4.2", "1.5.0") == "PvZ2 Reflourished 1.5.0", "renamed for 1.5.0");
+    Expect(LaunchFlow.RenamedForVersion("PvZ2 Reflourished 1.5.0", "1.5.0") == null, "same version: no rename");
+    Expect(LaunchFlow.RenamedForVersion("My PvZ2", "1.5.0") == null, "no version: no rename");
+    Expect(LaunchFlow.RenamedForVersion("PvZ2 Reflourished 1.4.2", null) == null, "APK name without a version: no rename");
 }
 
 GameFolder MakeGame(string name, string version = "1.4.2")

@@ -30,7 +30,9 @@ THE MENU
                     each key in a small badge on the seed packet or button
                     it presses), controller support (on by default, see
                     below), and each code patch in patches\.
-                    Offline skips the CDN and the update check. A mod's own
+                    Offline skips the CDN and the update checks. "Download
+                    OBB updates" (Reflourished, on by default) is step 3 of
+                    PLAY. A mod's own
                     libraries (Reflourished's libRFLib, AltverZ's libSnowie)
                     are part of the game and always load; the menu lists them.
   Custom content    the mods in mods\, ticked ones in load order (the lowest
@@ -52,8 +54,22 @@ PLAY
      stay) or play anyway. New events, Pinata Parties and Penny's Challenges
      don't change MinVersion, so they never count as updates. Offline, it
      reads the CDN content the game downloaded last time.
-  3. The ticked mods are built into .launcher\overlay (only when something
+  3. Reflourished 1.5.0 and later update their OBB themselves before they
+     start (Android's Java side does it, which rfu doesn't run), so the
+     launcher does it for them: it asks the game's update server which OBB is
+     newest, and if yours is behind downloads the patches up to it into the
+     game's OBB folder (data\sdcard\Android\obb\<package>). The game applies
+     them itself as it starts, then asks to be restarted, and the launcher
+     starts it again. An OBB that matches no recent version (changed by hand,
+     or too old) can only be replaced whole: you're asked first, and the old
+     one goes to old\. Off when the game's own Settings > Automatic OBB
+     Updates is off, when "Download OBB updates" is unticked, or offline. A
+     failed update is logged and the game starts with the OBB it has.
+  4. The ticked mods are built into .launcher\overlay (only when something
      changed) and rfu starts with them laid over the game's files.
+
+  The game's Settings > Import/Export Files (custom levels, saves, quest
+  progress) opens Windows' own Open and Save As windows.
 
 CUSTOM CONTENT (mods\<name>\)
   rfu lays a mod over the game's own files without changing them: switch it
@@ -95,7 +111,8 @@ KEYBINDS (keybinds.txt)
     Space tap 640 360   in pixels of the game's screen (its resolution)
     Backspace back      Android's back button
   seed and the buttons are found wherever the level puts them. A new
-  keybinds.txt starts with 1-9 for the packets, D for the shovel, F for
+  keybinds.txt starts with 1-9 and 0 for the packets (0 is the tenth, for
+  Reflourished's ten-slot levels; an older file gets the 0 line added), D for the shovel, F for
   plant food, V for fast-forward, P for pause and the arrow keys for
   scrolling (an older one keeps what it has:
   add those lines to it). The mouse wheel scrolls too, sideways with Shift.

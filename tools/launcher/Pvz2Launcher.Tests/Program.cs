@@ -120,6 +120,12 @@ void GameFolderTest()
 
     g.EnsureKeybindsFile();
     Expect(File.ReadAllText(g.KeybindsPath).Contains("tap"), "keybinds sample");
+    Expect(File.ReadAllText(g.KeybindsPath).Contains("0 seed 10"), "keybinds sample: ten seed slots");
+    File.WriteAllText(g.KeybindsPath, File.ReadAllText(g.KeybindsPath).Replace("0 seed 10\n", ""));
+    g.EnsureKeybindsFile();
+    Expect(File.ReadAllLines(g.KeybindsPath).SkipWhile(l => l != "9 seed 9").Skip(1).FirstOrDefault() == "0 seed 10", "an older keybinds file gets 0 for the tenth slot");
+    g.EnsureKeybindsFile();
+    Expect(File.ReadAllLines(g.KeybindsPath).Count(l => l == "0 seed 10") == 1, "only once");
     Expect(File.ReadAllText(g.KeybindsPath).Contains("1 seed 1") && File.ReadAllText(g.KeybindsPath).Contains("D shovel") && File.ReadAllText(g.KeybindsPath).Contains("Right scroll right") && File.ReadAllText(g.KeybindsPath).Contains("P pause"), "keybinds sample: seeds, buttons and scrolling on");
 
     Expect(g.ModLibraries.Count == 0, "no mod libraries listed");

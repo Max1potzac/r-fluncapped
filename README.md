@@ -27,6 +27,10 @@ main menu and its intro, and takes mouse, touch and keyboard input. In detail, `
 - plays the game's sound (OpenSL ES buffer queues) through SDL audio;
 - gives the game real sockets and DNS, so its own CDN client (libcurl and OpenSSL inside libPVZ2)
   can fetch updates and live events from the Reflourished server.
+- answers Reflourished 1.5.0's `FilePickerHelper`: Settings > Import/Export Files (custom levels,
+  saves, quest progress) opens the desktop's own Open and Save As windows (zenity on Linux), and
+  the OBB patches the game applies at start-up (`<obb>.patchN`, downloaded by the launcher) find
+  the OBB in the game's OBB folder. When the game asks to be restarted, rfu exits with code 3.
 
 ## Building
 

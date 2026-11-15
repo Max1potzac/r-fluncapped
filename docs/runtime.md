@@ -268,6 +268,21 @@ call's Java arguments decoded from whichever of the three calling conventions na
   to `data/`, `/sdcard/Android/data/<package>` to `external/`, the rest of `/sdcard` to `sdcard/`,
   and the OBB to `/sdcard/Android/obb/<package>/main.<version>.<package>.obb`.
   `Activity.getPreferences()` is `data/shared_prefs/PvZ2GameActivity.prefs`.
+- **Reflourished's FilePickerHelper (1.5.0+).** `getObbDir`/`getPrivateDir` give the Android
+  paths. `importFile(name)`, `importFileToDir(dir)` and `importZip(dir)` open the desktop's Open
+  window before the next frame (`src/platform/file_dialog.cpp`: `GetOpenFileNameW`, zenity
+  elsewhere) and copy or unpack the picked file into the external files folder, where the game
+  looks for it (custom levels go to `No_Backup/CDN.<version>/levels/quests/custom<n>.json`, a save
+  to `No_Backup/pp.dat.imported`); `exportFile`/`exportFolder` open a Save As window
+  (`src/android/file_picker.cpp`). `forceFullAppRestart` closes the game with exit code 3, which
+  the launcher answers by starting it again.
+- **OBB patches.** At start-up libRFLib looks in the OBB folder for `<obb>.patch0`, `.patch1`, ...
+  (rsbpatch over VCDiff), writes the patched OBB as `<obb>.new` and renames it over the OBB. The
+  OBB is mounted on its own, so directory listings add the files mounted directly in a folder
+  (`Vfs::mounted_children`), and `rename` copies when the OBB is on another drive and, when the
+  target is open (Windows won't replace a file in use), replaces it once the game closes
+  (`close_guest_files`). Java's ObbUpdater, which downloads the patches, is the launcher's
+  `ObbUpdate`.
 - **Web requests.** Besides its CDN client, the game makes some requests through Java
   (`AndroidHttpTransaction`, over `HttpURLConnection`). `src/android/java_http.cpp` runs them on
   four worker threads with the host's HTTP client (`src/platform/http.cpp`: WinHTTP on Windows,

@@ -76,6 +76,7 @@ sealed class MainForm : Form, ILaunchUi
 
         var gameButtons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
         gameButtons.Controls.Add(MakeButton("Add game...", async () => await AddGameAsync()));
+        gameButtons.Controls.Add(MakeButton("Remove game...", async () => await RemoveGameAsync()));
         gameButtons.Controls.Add(MakeButton("Games folder", () => OpenFolder(_gamesDir)));
         gameButtons.Controls.Add(MakeButton("Refresh", async () => await RefreshGamesAsync()));
         var left = new Panel { Dock = DockStyle.Fill };
@@ -110,7 +111,8 @@ sealed class MainForm : Form, ILaunchUi
                 MakeButton("Mods folder", () => { if (_game != null) OpenFolder(_game.ModsDir); })),
             _askContent);
 
-        var actions = Row(_play, MakeButton("Unpack resources", async () => await UnpackResourcesAsync()),
+        var actions = Row(_play, MakeButton("Update game...", async () => await UpdateGameAsync()),
+            MakeButton("Unpack resources", async () => await UnpackResourcesAsync()),
             MakeButton("Game folder", () => { if (_game != null) OpenFolder(_game.Dir); }),
             MakeButton("Last log", () => { if (_game != null && File.Exists(_game.LogPath)) Open(_game.LogPath); }));
         _play.Click += async (_, _) => await PlayAsync();
@@ -373,18 +375,77 @@ sealed class MainForm : Form, ILaunchUi
     {
         var apk = PickFile("The game's APK", "Android app (*.apk)|*.apk|All files|*.*");
         if (apk == null) return;
-        string? obb = null;
-        // PvZ2 China has no OBB (its data is in the APK), so don't ask for one.
-        if (GameFolder.ApkIsChina(apk))
-            Log("PvZ2 China APK: no OBB needed, its data is in the APK.");
-        else
-        {
-            obb = PickFile("The game's OBB", "Game data (*.obb)|*.obb|All files|*.*", Path.GetDirectoryName(apk));
-            if (obb == null) return;
-        }
-        var game = await _flow.AddGameAsync(_gamesDir, Path.GetFileNameWithoutExtension(apk), apk, obb);
+        if (ObbFor(apk, "The game's OBB") is not { } obb) return;
+        var game = await _flow.AddGameAsync(_gamesDir, Path.GetFileNameWithoutExtension(apk), apk, obb == "" ? null : obb);
         if (game == null) return;
         _game = game;
+        await RefreshGamesAsync();
+    }
+
+    /// The OBB to go with an APK: "" when there's none to ask for (PvZ2 China has its data in the
+    /// APK; Reflourished 1.5.0+ downloads its own), null when the person backs out.
+    string? ObbFor(string apk, string title)
+    {
+        if (GameFolder.ApkIsChina(apk))
+        {
+            Log("PvZ2 China APK: no OBB needed, its data is in the APK.");
+            return "";
+        }
+        if (ObbUpdate.ConfigUrlInApk(apk) != null)
+        {
+            Log("this APK downloads its own OBB: the launcher does that for it.");
+            return "";
+        }
+        return PickFile(title, "Game data (*.obb)|*.obb|All files|*.*", Path.GetDirectoryName(apk));
+    }
+
+    /// A new version of the selected game: its APK, and its OBB unless the APK fetches its own.
+    async Task UpdateGameAsync()
+    {
+        if (_game is not { } game) return;
+        if (_running.ContainsKey(game.Dir)) { ShowProblem($"Close {game.DisplayName} first."); return; }
+        if (AskForNewVersion(game) is not { } files) return;
+        _play.Enabled = false;
+        try
+        {
+            if (await _flow.InstallVersionAsync(game, files.Apk, files.Obb))
+                Log($"{game.DisplayName} is now version {game.Info?.VersionName}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            ShowProblem($"Couldn't update the game: {e.Message}");
+        }
+        await RefreshGamesAsync();
+    }
+
+    /// Deletes the selected game's folder (to the Recycle Bin), saves and mods included.
+    async Task RemoveGameAsync()
+    {
+        if (_game is not { } game) return;
+        if (_running.ContainsKey(game.Dir)) { ShowProblem($"Close {game.DisplayName} first."); return; }
+        var remove = new TaskDialogButton("Remove");
+        var page = new TaskDialogPage
+        {
+            Caption = game.DisplayName,
+            Heading = $"Remove {game.DisplayName}?",
+            Text = $"Its folder ({game.Dir}) goes to the Recycle Bin: the APK, the OBB, your saves, its mods and settings. " +
+                   "Export your save from the game first (Settings > Import/Export Files) if you want to keep it apart.",
+            Icon = TaskDialogIcon.Warning,
+            Buttons = { remove, TaskDialogButton.Cancel },
+            DefaultButton = TaskDialogButton.Cancel,
+        };
+        if (TaskDialog.ShowDialog(this, page) != remove) return;
+        try
+        {
+            Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(game.Dir, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            Log($"removed {game.DisplayName} ({game.Dir} is in the Recycle Bin)");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
+        {
+            ShowProblem($"Couldn't remove {game.Dir}: {e.Message}");
+        }
+        _game = null;
         await RefreshGamesAsync();
     }
 
@@ -498,13 +559,16 @@ sealed class MainForm : Form, ILaunchUi
         return answer == update ? UpdateChoice.GetNewVersion : answer == play ? UpdateChoice.PlayAnyway : UpdateChoice.Cancel;
     }
 
-    public (string Apk, string Obb)? AskForNewVersion(GameFolder game)
+    public (string Apk, string? Obb)? AskForNewVersion(GameFolder game)
     {
         var apk = PickFile($"The new {game.DisplayName} APK", "Android app (*.apk)|*.apk|All files|*.*");
         if (apk == null) return null;
-        var obb = PickFile($"The new {game.DisplayName} OBB", "Game data (*.obb)|*.obb|All files|*.*", Path.GetDirectoryName(apk));
-        return obb == null ? null : (apk, obb);
+        if (ObbFor(apk, $"The new {game.DisplayName} OBB") is not { } obb) return null;
+        return (apk, obb == "" ? null : obb);
     }
+
+    public string? AskForObb(GameFolder game) =>
+        PickFile($"The OBB couldn't be downloaded: pick {game.Info?.Obb ?? "the game's OBB"}", "Game data (*.obb)|*.obb|All files|*.*");
 
     public void ShowProblem(string message)
     {

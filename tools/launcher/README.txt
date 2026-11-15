@@ -19,6 +19,10 @@ SETTING UP
   inside the APK - so it needs only the .apk. "Add game" doesn't ask for an
   OBB once it sees a China APK, and the launcher runs it from the APK.
 
+  Reflourished 1.5.0 and later download their own OBB, so "Add game" doesn't
+  ask for one either: the launcher downloads the newest OBB into the game's
+  folder (about 1.3 GB), and asks for the file only if that fails.
+
 THE MENU
   Display           assets (high 1536 / low 768), the resolution the game
                     draws at, window size, full screen, VSync, ANGLE.
@@ -37,6 +41,14 @@ THE MENU
                     are part of the game and always load; the menu lists them.
   Custom content    the mods in mods\, ticked ones in load order (the lowest
                     wins where two change the same file). Up / Down reorder.
+  Update game       a new version: pick its APK, then its OBB. An APK that
+                    downloads its own OBB (Reflourished 1.5.0+) isn't asked
+                    for one: the launcher downloads it next to the APK, or
+                    brings the OBB you have up to date. The old APK and OBB
+                    go to old\, saves stay. Asked for the OBB file only if
+                    the download fails.
+  Remove game       sends the game's folder (APK, OBB, saves, mods,
+                    settings) to the Recycle Bin, after asking.
   Play              see below. "Unpack resources" unpacks the OBB into
                     unpacked\ as PNG and JSON, for making content. "Last log"
                     opens rfu-log.txt from the last run.

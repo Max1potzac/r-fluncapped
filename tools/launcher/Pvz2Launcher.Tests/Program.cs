@@ -301,6 +301,19 @@ void ObbUpdateTest()
     ObbUpdate.ForgetTimestamp(g);
     Expect(ObbUpdate.ReadTimestamp(state) == 0, "forgotten");
 
+    // an APK that downloads its own OBB names its update server in its dex
+    string apk = Path.Combine(root, "obbapk.apk");
+    using (var zip = System.IO.Compression.ZipFile.Open(apk, System.IO.Compression.ZipArchiveMode.Create))
+    {
+        using (var w = zip.CreateEntry("classes.dex").Open()) w.Write("dex\n\0\u0005https://example.com/x\0\u002bhttps://rsb.example.org/live/latest.json\0more"u8);
+        using (var w = zip.CreateEntry("AndroidManifest.xml").Open()) w.Write("https://nope/latest.json\0"u8);
+    }
+    Expect(ObbUpdate.ConfigUrlInApk(apk) == "https://rsb.example.org/live/latest.json", $"update server from the dex: {ObbUpdate.ConfigUrlInApk(apk)}");
+    string plain = Path.Combine(root, "plain.apk");
+    using (var zip = System.IO.Compression.ZipFile.Open(plain, System.IO.Compression.ZipArchiveMode.Create))
+        using (var w = zip.CreateEntry("classes.dex").Open()) w.Write("dex\n\0https://example.com/x\0"u8);
+    Expect(ObbUpdate.ConfigUrlInApk(plain) == null, "an APK without one");
+
     // the in-game switch (rfu's preferences file)
     Expect(ObbUpdate.GameAllowsUpdates(g), "on by default");
     string prefs = Path.Combine(g.DataDir, "data", "shared_prefs", "PvZ2GameActivity.prefs");

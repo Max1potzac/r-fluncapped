@@ -14,8 +14,12 @@ public interface ILaunchUi
     /// A new version is out. Returns what to do.
     UpdateChoice AskAboutUpdate(GameFolder game, UpdateCheck.Result result);
 
-    /// The new version's APK and OBB, or null when the person backs out.
-    (string Apk, string Obb)? AskForNewVersion(GameFolder game);
+    /// The new version's APK and OBB, or null when the person backs out. The OBB is null when the
+    /// APK has none (PvZ2 China) or can download its own (ObbUpdate.ConfigUrlInApk).
+    (string Apk, string? Obb)? AskForNewVersion(GameFolder game);
+
+    /// The OBB, when downloading it didn't work. Null to give up.
+    string? AskForObb(GameFolder game);
 
     void ShowProblem(string message);
 
@@ -148,12 +152,15 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
     }
 
     /// Puts a new version's APK and OBB in the game's folder (the old ones go to old/), then
-    /// takes its libraries out. Saves and settings stay.
+    /// takes the libraries out. With no OBB given, the OBB stays, and an APK that can download its
+    /// OBB brings it up to date (or downloads it, when the new version wants another file).
     public async Task<bool> InstallVersionAsync(GameFolder game, string apk, string? obb)
     {
         string old = Path.Combine(game.Dir, "old");
         Directory.CreateDirectory(old);
-        foreach (var f in Directory.EnumerateFiles(game.Dir, "*.apk").Concat(Directory.EnumerateFiles(game.Dir, "*.obb")))
+        var moving = Directory.EnumerateFiles(game.Dir, "*.apk");
+        if (!string.IsNullOrEmpty(obb)) moving = moving.Concat(Directory.EnumerateFiles(game.Dir, "*.obb"));
+        foreach (var f in moving.ToList())
             File.Move(f, Path.Combine(old, Path.GetFileName(f)), true);
         ui.Log(string.IsNullOrEmpty(obb) ? "copying the new APK..." : "copying the new APK and OBB...");
         await Task.Run(() =>
@@ -165,10 +172,62 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
                 ObbUpdate.ForgetTimestamp(game);  // the new OBB's version is worked out afresh
             }
         });
-        return await PrepareAsync(game);
+        if (!await PrepareAsync(game)) return false;
+        if (string.IsNullOrEmpty(obb) && !game.IsChina) return await EnsureObbAsync(game, apk);
+        return true;
+    }
+
+    /// For an APK that downloads its own OBB (Reflourished 1.5.0+): the OBB it wants, downloaded or
+    /// brought up to date next to the APK. An APK that can't, or a failed download, asks for the file.
+    public async Task<bool> EnsureObbAsync(GameFolder game, string apk, CancellationToken cancel = default)
+    {
+        game.Refresh();
+        string want = game.Info?.Obb ?? $"main.{game.Info?.VersionCode}.{game.Info?.Package}.obb";
+        string target = Path.Combine(game.Dir, want);
+        if (ObbUpdate.ConfigUrlInApk(Path.Combine(game.Dir, Path.GetFileName(apk))) is not { } config)
+            return AskObb(game, target);
+        if (game.Settings.ObbUpdateUrl == null && config != ObbUpdate.ReflourishedConfig)
+        {
+            game.Settings.ObbUpdateUrl = config;
+            game.SaveSettings();
+        }
+        // an OBB for another version moves aside; the new one is downloaded whole
+        foreach (var f in Directory.EnumerateFiles(game.Dir, "*.obb").Where(f => !string.Equals(Path.GetFileName(f), want, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            Directory.CreateDirectory(Path.Combine(game.Dir, "old"));
+            File.Move(f, Path.Combine(game.Dir, "old", Path.GetFileName(f)), true);
+            ObbUpdate.ForgetTimestamp(game);
+        }
+        string state = ObbUpdate.StateDir(game);
+        try
+        {
+            ui.Log($"the APK downloads its own OBB: asking {config}...");
+            var (head, plan) = await ObbUpdate.PlanAsync(config, File.Exists(target) ? target : null, state,
+                url => ObbUpdate.GetJsonAsync(http, url, cancel), path => Task.Run(() => ObbUpdate.Sha256Async(path, cancel)), ui.Log);
+            if (plan is ObbUpdate.Fresh) ui.Log($"downloading the {head.Version} OBB ({ObbUpdate.Size(ObbUpdate.DownloadSize(plan))})...");
+            await ObbUpdate.ExecuteAsync(head, plan, target, state, downloads ?? http, ui.Log, Path.Combine(game.Dir, "old"), cancel);
+            game.Refresh();
+            return true;
+        }
+        catch (Exception e) when (e is ObbUpdate.Error or HttpRequestException or IOException or JsonException or TaskCanceledException or UnauthorizedAccessException)
+        {
+            ui.Log($"couldn't download the OBB: {e.Message}");
+            return AskObb(game, target);
+        }
+    }
+
+    bool AskObb(GameFolder game, string target)
+    {
+        if (File.Exists(target)) return true;
+        if (ui.AskForObb(game) is not { } obb) return false;
+        File.Copy(obb, Path.Combine(game.Dir, Path.GetFileName(obb)), true);
+        ObbUpdate.ForgetTimestamp(game);
+        game.Refresh();
+        return true;
     }
 
     /// A new game folder from an APK and OBB (a standalone mod such as AltverZ, or the game itself).
+    /// With no OBB, an APK that downloads its own gets it now (see EnsureObbAsync).
     public async Task<GameFolder?> AddGameAsync(string gamesDir, string name, string apk, string? obb)
     {
         string dir = Path.Combine(gamesDir, string.Concat(name.Split(Path.GetInvalidFileNameChars())).Trim());
@@ -183,6 +242,7 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         if (!await PrepareAsync(game)) return game;
         game.Settings.DisplayName = name;
         game.SaveSettings();
+        if (string.IsNullOrEmpty(obb) && !game.IsChina) await EnsureObbAsync(game, apk);
         return game;
     }
 }

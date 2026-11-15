@@ -62,6 +62,42 @@ public static class ObbUpdate
         game.Settings.ObbUpdateUrl is { } url ? (url.Trim() == "" ? null : url.Trim())
         : game.Info?.Package == "com.ea.game.pvz2_rfl" && !game.IsChina ? ReflourishedConfig : null;
 
+    /// The update server an APK's own code knows about (Reflourished 1.5.0+'s ObbUpdater keeps it as
+    /// a string in its classes*.dex), or null for an APK that can't fetch its OBB.
+    public static string? ConfigUrlInApk(string apk)
+    {
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(apk);
+            foreach (var e in zip.Entries)
+            {
+                if (!e.FullName.StartsWith("classes", StringComparison.Ordinal) || !e.FullName.EndsWith(".dex", StringComparison.Ordinal)) continue;
+                using var ms = new MemoryStream();
+                using (var s = e.Open()) s.CopyTo(ms);
+                if (FindConfigUrl(ms.GetBuffer().AsSpan(0, (int)ms.Length)) is { } url) return url;
+            }
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { }
+        return null;
+    }
+
+    /// The first "https://.../latest.json" string in a dex (dex strings end with a NUL).
+    public static string? FindConfigUrl(ReadOnlySpan<byte> dex)
+    {
+        ReadOnlySpan<byte> start = "https://"u8, end = "/latest.json"u8;
+        for (int at = 0; at < dex.Length;)
+        {
+            int i = dex[at..].IndexOf(start);
+            if (i < 0) return null;
+            i += at;
+            int nul = dex[i..].IndexOf((byte)0);
+            var str = nul < 0 ? dex[i..] : dex.Slice(i, nul);
+            if (str.Length < 300 && str.EndsWith(end)) return System.Text.Encoding.UTF8.GetString(str);
+            at = i + start.Length;
+        }
+        return null;
+    }
+
     /// The folder the game sees as its OBB folder (Android/obb/<package> in rfu's data folder): the
     /// patches and obbTimestamp go there. The OBB itself stays in the game's folder; rfu shows it there.
     public static string StateDir(GameFolder game) =>

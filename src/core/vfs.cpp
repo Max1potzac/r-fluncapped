@@ -105,6 +105,18 @@ std::vector<std::filesystem::path> Vfs::layers(const std::string& guest_path) co
     return out;
 }
 
+std::vector<std::string> Vfs::mounted_children(const std::string& guest_path) const {
+    std::string path = absolute(guest_path);
+    std::string prefix = path == "/" ? "/" : path + "/";
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (const auto& m : mounts_)
+        if (m.guest.size() > prefix.size() && m.guest.compare(0, prefix.size(), prefix) == 0 &&
+            m.guest.find('/', prefix.size()) == std::string::npos && std::filesystem::exists(m.host, ec))
+            out.push_back(m.guest.substr(prefix.size()));
+    return out;
+}
+
 std::optional<std::string> Vfs::to_guest(const std::filesystem::path& host_path) const {
     auto host = std::filesystem::weakly_canonical(host_path);
     for (const auto& m : mounts_) {

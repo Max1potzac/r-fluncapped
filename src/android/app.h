@@ -60,4 +60,8 @@ void mount_storage(Runtime& rt, const AppOptions& options);
 // window is closed. Returns the process exit code.
 int run_app(Runtime& rt, const AppOptions& options);
 
+// run_app's exit code when the game asked to be restarted (Reflourished does after it imports a
+// save or patches its OBB): the launcher starts it again.
+constexpr int kRestartExitCode = 3;
+
 }  // namespace rfu::android

@@ -111,6 +111,7 @@ struct Files {
     std::unordered_map<GuestAddr, int> streams;  // FILE* -> fd
     std::unordered_map<GuestAddr, std::pair<std::vector<std::string>, std::size_t>> dirs;  // DIR* -> entries, next
     GuestAddr sF = 0;
+    std::vector<std::pair<fs::path, fs::path>> deferred_renames;  // from, to: see rename
 
     Files() {
         for (int i = 0; i < 3; ++i) {
@@ -326,6 +327,24 @@ std::shared_ptr<GuestSocket> socket_at(Runtime& rt, int fd) {
 
 bool fd_is_open(Runtime& rt, int fd) { return files(rt).get(fd) != nullptr; }
 
+void close_guest_files(Runtime& rt) {
+    auto& f = files(rt);
+    std::lock_guard lock(f.mutex);
+    for (auto& [fd, file] : f.fds)
+        if (file && file->fp && !file->console) {
+            std::fclose(file->fp);
+            file->fp = nullptr;
+        }
+    for (const auto& [from, to] : f.deferred_renames) {
+        std::error_code ec;
+        fs::rename(from, to, ec);
+        if (ec && fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec)) fs::remove(from, ec);
+        if (ec) log::warn("couldn't replace {} with {}: {}", path_to_utf8(to), path_to_utf8(from), ec.message());
+        else log::info("replaced {} with {}", path_to_utf8(to), path_to_utf8(from));
+    }
+    f.deferred_renames.clear();
+}
+
 std::int64_t guest_pread(Runtime& rt, int fd, void* buf, std::uint64_t n, std::int64_t offset) {
     auto f = files(rt).get(fd);
     if (!f) return -1;
@@ -463,6 +482,22 @@ void register_libc_stdio(ShimRegistry& reg) {
         if (!from || !to) return c.fail(android::kENOENT);
         std::error_code ec;
         fs::rename(*from, *to, ec);
+        // A file mounted from elsewhere (the OBB) can be on another drive than the data folder:
+        // there rename can't move it, so copy it over and remove the original, as mv does.
+        if (std::error_code copy_ec; ec && fs::is_regular_file(*from, copy_ec)) {
+            if (fs::copy_file(*from, *to, fs::copy_options::overwrite_existing, copy_ec)) {
+                fs::remove(*from, copy_ec);
+                ec.clear();
+            } else if (fs::exists(*to, copy_ec)) {
+                // The target is open (Windows won't replace an open file): replace it once the
+                // game closes, as Android would have done now. The game restarts to use it anyway.
+                log::info("rename: {} is in use; it's replaced with {} when the game closes", path_to_utf8(*to), path_to_utf8(*from));
+                auto& f = files(c.rt());
+                std::lock_guard lock(f.mutex);
+                f.deferred_renames.emplace_back(*from, *to);
+                ec.clear();
+            }
+        }
         ec ? c.fail(map_errno(ec)) : c.ret(0);
     });
     reg.add("truncate", [](CallContext& c) {
@@ -545,6 +580,8 @@ void register_libc_stdio(ShimRegistry& reg) {
         for (const auto& layer : layers)
             for (const auto& e : fs::directory_iterator(layer, ec))
                 if (auto name = path_to_utf8(e.path().filename()); seen.insert(name).second) names.push_back(std::move(name));
+        for (auto& name : c.rt().vfs().mounted_children(guest_path(c, 0)))
+            if (seen.insert(name).second) names.push_back(std::move(name));
         GuestAddr dir = c.rt().heap().alloc_zeroed(280);  // holds the struct dirent readdir returns
         auto& f = files(c.rt());
         std::lock_guard lock(f.mutex);

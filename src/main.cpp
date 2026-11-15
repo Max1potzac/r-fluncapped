@@ -18,6 +18,7 @@
 #include "platform/gles.h"
 #include "platform/opensles.h"
 #include "runtime.h"
+#include "shims/common.h"
 
 #include <fmt/ranges.h>
 
@@ -495,7 +496,10 @@ int main(int argc, char** argv) {
         rfu::log::debug("unimplemented imports: {}", fmt::join(missing, " "));
         rfu::log::info("guest heap in use: {:.1f} MiB", rt.heap().bytes_in_use() / 1048576.0);
         if (init_only) finish(0);
-        finish(rfu::android::run_app(rt, app));
+        int code = rfu::android::run_app(rt, app);
+        rfu::close_guest_files(rt);
+        if (code == rfu::android::kRestartExitCode) rfu::log::info("the game asked to be restarted (exit code {})", code);
+        finish(code);
     } catch (const rfu::GuestFault& e) {
         rfu::log::error("guest fault: {}", e.what());
         finish(1);

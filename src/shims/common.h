@@ -23,6 +23,10 @@ const char* android_strerror(int err);
 
 // File descriptors (libc_stdio.cpp).
 std::int64_t guest_pread(Runtime& rt, int fd, void* buf, std::uint64_t n, std::int64_t offset);
+// When the game is closing: closes the files it still has open, then makes the renames that
+// couldn't happen while they were open (Windows won't replace an open file, and the game replaces
+// its OBB, which it keeps open, when it patches it).
+void close_guest_files(Runtime& rt);
 
 // Sockets (libc_net.cpp) are fds in the same table as files, so read/write/close/fcntl
 // work on them too. The socket functions return -errno on failure.

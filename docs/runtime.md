@@ -169,7 +169,27 @@ between its sliders and buttons: the dialog's Sexy widgets (`Sexy::Widget`: its 
 `std::list` at +0x8, its parent at +0x28, x, y, width and height relative to the parent at +0x44,
 shown at +0x70) that are a `Sexy::Slider` or a `PVZ2UIButton`, in rows top to bottom. Left and
 right move a slider a tenth (a finger down on its thumb, from its value at +0xc0, across and up),
-A taps a button, and B or Start are Android's back, which resumes.
+A taps a button, and B or Start are Android's back, which resumes. The settings (`SettingsDialog`,
+from the world map or a level) work the same way, with their `PVZ2UICheckBox`es as buttons; their
+rows are in a `PVZ2UIScrollingWidget`, so a row moved to that's out of its view is dragged in
+first, from the list's left edge (clear of the sliders), held still before letting go. A page of
+the dialog that's off the screen's side (where its sub-pages wait) is left out.
+
+While a character talks (Crazy Dave's "tap to continue"), the widget under the screen's middle
+is the `CrazyNPCManager`: any button taps there, and does nothing else, so the seed chooser's or
+the lawn's controls only start once the talk is over.
+
+The worlds' carousel (`UniverseMap`) settles on a world whenever a finger lets go, so a scroll
+drag held across it (let go and put down again every stroke) jerks. There left and right tap the
+next `UniverseWorldButton` instead (the game glides to it), again every 0.3 s while held. The two
+classes have more than one vtable, so they're told by their type_info. Reflourished 1.5.0's
+libRFLib redraws the world map's buttons in another order (settings, almanac, arcade, Zen
+Garden); the shortcuts follow it when libRFLib has `UIWorldMapZenGardenButton`.
+
+The controller's cursor off the lawn is a glove (`assets/cursor.png`, embedded by
+`tools/gen_cursor.py`; it presses while A's held), drawn like the hints: scissored clears, a run
+of one colour at a time, the edges cut at half transparency. `--custom-cursor` makes it the
+mouse's cursor too (`SDL_CreateColorCursor`, about 40 pixels at 96 DPI).
 
 The seed chooser (Board state 3) isn't made of widgets: `SeedChooser` is a UI object (drawn
 through vtable slot 13, which is how it's seen) whose children are `SeedPacket`s, both the ones to

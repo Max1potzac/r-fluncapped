@@ -7,6 +7,7 @@
 // tile cursor is drawn the same way, as an outlined box.
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,11 +40,19 @@ struct HintMeter {
     std::uint32_t rgb = 0xFFFFFF;
 };
 
+// The glove cursor (cursor_sprites.h), its fingertip at x, y.
+struct HintCursor {
+    int x = 0, y = 0;  // pixels of the game's surface
+    int height = 32;   // of the plain glove, in pixels
+    bool pressed = false;
+};
+
 struct HintOverlay {
     std::vector<HintLabel> labels;
     std::vector<HintBox> boxes;
     std::vector<HintMeter> meters;
-    bool empty() const { return labels.empty() && boxes.empty() && meters.empty(); }
+    std::optional<HintCursor> cursor;
+    bool empty() const { return labels.empty() && boxes.empty() && meters.empty() && !cursor; }
 };
 
 struct HintFill {

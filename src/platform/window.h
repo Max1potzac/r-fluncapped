@@ -32,6 +32,7 @@ struct WindowOptions {
     std::filesystem::path icon;  // a PNG for the window's (and taskbar's) icon
     bool controller = false;  // read game controllers (PadInput)
     std::filesystem::path pad_mappings;  // SDL controller mappings (gamecontrollerdb.txt lines) for pads SDL doesn't know
+    bool custom_cursor = false;  // the glove (cursor_sprites.h) for the mouse, in place of the system's arrow
 };
 
 // Input, in the shape the game's Java side reports it.
@@ -125,6 +126,8 @@ private:
     unsigned fbo_ = 0;  // 0: the game draws straight to the window, which then has the game's size
     void* context_ = nullptr;
     bool mouse_down_ = false;
+    void* cursors_[2] = {};  // SDL_Cursor*: the glove, and pressing (custom_cursor)
+    void make_cursors();
     bool text_input_ = false;
     bool hover_ = false;
     std::vector<std::pair<int, KeyBind>> binds_;  // by SDL key code

@@ -404,6 +404,9 @@ void RfuCommandTest()
     Expect(!args.Contains("--no-mod-libs"), "mod libraries always load");
     g.Settings.HoverCollect = false;
     Expect(!RfuCommand.Build(g, []).Contains("--hover"), "hover to collect can be switched off");
+    Expect(!RfuCommand.Build(g, []).Contains("--custom-cursor"), "the Windows cursor by default");
+    g.Settings.CustomCursor = true;
+    Expect(RfuCommand.Build(g, []).Contains("--custom-cursor"), "the glove cursor when it's on");
     g.Settings.FixAnimations = false;
     Expect(!RfuCommand.Build(g, []).Contains("--fix-animations"), "the animations fix can be switched off");
     g.Settings.KeyHints = false;

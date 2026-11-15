@@ -255,6 +255,25 @@ void run(HttpState& s, Transaction& t) {
         fire("HttpTransactionError");
         return;
     }
+    if (cache && from_cache()) {
+        // The kept copy at once (the game gives up on a slow server before the download does),
+        // then the download in the background, for the next launch.
+        std::thread([&s, request = t.request] {
+            platform::HttpResponse response;
+            std::vector<std::uint8_t> body;
+            platform::HttpHandler buffered;
+            buffered.on_response = [&](const platform::HttpResponse& r) { response = r; };
+            buffered.on_data = [&](const std::uint8_t* data, std::size_t n) { body.insert(body.end(), data, data + n); };
+            std::atomic<bool> cancel{false};
+            std::string error;
+            if (platform::http_perform(request, buffered, cancel, error) && response.status == 200 &&
+                (response.content_length < 0 || static_cast<std::size_t>(response.content_length) == body.size()))
+                write_cache(s, request.url, body);
+            else
+                log::debug("http: {}: no new copy ({})", request.url, error.empty() ? "HTTP " + std::to_string(response.status) : error);
+        }).detach();
+        return;
+    }
     if (cache) {
         // Downloaded whole before the game sees any of it, so a failure part way can still be
         // answered with the kept copy.

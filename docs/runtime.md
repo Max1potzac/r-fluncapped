@@ -197,7 +197,10 @@ scroll), LB/RB still pick the packet, A taps it first and then touches at the gl
 right stick's powerup flick is off. Held again, the tile box is back. The title screen
 (`MainMenu`) is a menu of its `PVZ2UIButton`s, starting on the one nearest the bottom's middle
 (play); LB/RB swipe across the middle, which moves the banner carousel (`DraperCarouselAdWidget`)
-one banner.
+one banner. Its pages (`ProfilesDialog`, `EditProfileWidget`) slide in on a
+`PVZ2UIScrollingPaneWidget`, the others waiting off its side, so a page under the screen's middle
+is the menu instead, its items placed by adding up its parents' positions; the profiles' rows
+(`ProfilesListEntry`) are items, a tap on the row picking it.
 
 The controller's cursor off the lawn is a glove (`assets/cursor.png`, embedded by
 `tools/gen_cursor.py`; it presses while A's held), drawn like the hints: scissored clears, a run
@@ -271,7 +274,9 @@ offline path.
 Images the game fetches this way (the title screen's banners, `cdn/*.png`) are downloaded whole
 before the game sees them, and kept in `<data>/image-cache`. When a later download fails or is
 cut off (a slow or blocked server, `--offline`), the game gets the kept copy as a 200; a good
-download replaces it, so a changed banner shows once it gets through.
+download replaces it. With a kept copy the game gets it at once (it gives up on a slow server
+before the download would), and the download carries on in the background for the next launch,
+so a changed banner shows from the launch after it gets through.
 
 To test against a local copy of a server, set `RFU_URL_REWRITE=<prefix>=<replacement>`, e.g.
 `RFU_URL_REWRITE=https://reflourished.ducnguyen.org=http://127.0.0.1:8000`.

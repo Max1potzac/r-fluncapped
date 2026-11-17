@@ -6,8 +6,10 @@
 #include "platform/http.h"
 #include "runtime.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
@@ -23,6 +25,16 @@ namespace rfu::android {
 namespace {
 
 constexpr int kWorkers = 4;
+
+// Portable byte-substring search: memmem is a GNU/BSD extension absent on MSVC.
+inline const std::uint8_t* find_bytes(const std::uint8_t* hay, std::size_t hlen, const void* needle, std::size_t nlen) {
+    if (nlen == 0) return hay;
+    if (hlen < nlen) return nullptr;
+    const auto* n = static_cast<const std::uint8_t*>(needle);
+    for (const std::uint8_t* p = hay; p <= hay + (hlen - nlen); ++p)
+        if (*p == *n && std::memcmp(p, n, nlen) == 0) return p;
+    return nullptr;
+}
 
 struct Transaction {
     GuestAddr self = 0;
@@ -216,7 +228,7 @@ void run(HttpState& s, Transaction& t) {
                         rfu::GuestAddr runEnd = a; while (runEnd < hi && mem.is_committed(runEnd, 1)) runEnd += PG; if (runEnd > hi) runEnd = hi;
                         const std::uint8_t* hp = base + a; std::size_t len = (std::size_t)(runEnd - a);
                         const std::uint8_t* f = hp; const std::uint8_t* end = hp + len;
-                        while ((f = (const std::uint8_t*)memmem(f, end - f, val.data(), val.size())) != nullptr) {
+                        while ((f = (const std::uint8_t*)find_bytes(f, (std::size_t)(end - f), val.data(), val.size())) != nullptr) {
                             rfu::GuestAddr strAddr = a + (rfu::GuestAddr)(f - hp);
                             // require preceding byte == sso0 (so this is an SSO std::string, not a payload substring)
                             if (strAddr >= 1 && mem.is_committed(strAddr - 1, 1) && base[strAddr - 1] == sso0
@@ -277,7 +289,7 @@ void run(HttpState& s, Transaction& t) {
                         std::size_t len = (std::size_t)(runEnd - a);
                         const std::uint8_t* found = hp;
                         const std::uint8_t* end = hp + len;
-                        while ((found = (const std::uint8_t*)memmem(found, end - found, n.data(), n.size())) != nullptr) {
+                        while ((found = (const std::uint8_t*)find_bytes(found, (std::size_t)(end - found), n.data(), n.size())) != nullptr) {
                             rfu::GuestAddr ga = a + (rfu::GuestAddr)(found - hp);
                             if (hits < 40) {
                                 log::info("scan hit [{}] req={}: {:#x}", n, req, ga);

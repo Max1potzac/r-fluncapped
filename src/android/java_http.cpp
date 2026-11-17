@@ -179,6 +179,57 @@ std::optional<std::string> response_plain(const std::string& req, const std::str
     return std::nullopt;
 }
 
+// Pull a JSON string field's value out of a flat JSON object: "name":"<value>". Minimal, enough for
+// the cloud .raw files (no nested quotes inside the values we read).
+std::string json_string_field(const std::string& json, const std::string& name) {
+    std::string key = "\"" + name + "\"";
+    auto p = json.find(key);
+    if (p == std::string::npos) return {};
+    p = json.find(':', p + key.size());
+    if (p == std::string::npos) return {};
+    ++p;
+    while (p < json.size() && (json[p] == ' ' || json[p] == '\t')) ++p;
+    if (p >= json.size() || json[p] != '"') return {};
+    ++p;
+    auto end = json.find('"', p);
+    if (end == std::string::npos) return {};
+    return json.substr(p, end - p);
+}
+
+// Pull a JSON integer/number field's value (as text): "name":<digits>. Stops at the first non-digit.
+std::string json_number_field(const std::string& json, const std::string& name) {
+    std::string key = "\"" + name + "\"";
+    auto p = json.find(key);
+    if (p == std::string::npos) return {};
+    p = json.find(':', p + key.size());
+    if (p == std::string::npos) return {};
+    ++p;
+    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '"')) ++p;
+    std::string v;
+    while (p < json.size() && (std::isdigit(static_cast<unsigned char>(json[p])))) v.push_back(json[p++]);
+    return v;
+}
+
+// Recover the cloud "ui" (the account's cloud user id) from a captured V202 login response, so the
+// held-id defense can run even when the player's save lacks the account prefs rfu normally reads.
+// Reads <RFU_CLOUD_DIR>/V202.raw, decrypts its "e" field with the static per-command key, and returns
+// the "ui" digits from the plaintext. Empty if unavailable.
+std::string recover_ui_from_v202() {
+    const char* dir = std::getenv("RFU_CLOUD_DIR");
+    if (!dir) return {};
+    std::filesystem::path path = std::filesystem::path(dir) / "V202.raw";
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) return {};
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream ss; ss << in.rdbuf();
+    std::string body = ss.str();
+    std::string e = json_string_field(body, "e");
+    if (e.empty()) return {};
+    std::string plain = cloud::decrypt("V202", e);
+    if (plain.empty()) return {};
+    return json_number_field(plain, "ui");
+}
+
 }  // namespace cloud_stub
 
 // AndroidHttpTransaction.run(), on a worker thread.
@@ -631,6 +682,18 @@ void implement_http(Runtime& rt, bool online, const std::string& transaction_cla
     auto& s = rt.state<HttpState>();
     s.cache_dir = cache_dir;
     s.hold_ui = hold_ui;
+    // When the player's save has no account prefs for rfu to read (hold_ui empty) but we're replaying a
+    // captured offline session, recover the cloud ui from the captured V202 login so the held-id
+    // defense still runs from the first request. Defeats the 网络故障 "sync cloud save first" dialog on
+    // saves created elsewhere. RFU_HOLD_UI, when set, always wins.
+    if (s.hold_ui.empty() && std::getenv("RFU_HOLD_UI") == nullptr &&
+        (std::getenv("RFU_CLOUD_STUB") || std::getenv("RFU_CLOUD_RECORD"))) {
+        std::string ui = cloud_stub::recover_ui_from_v202();
+        if (!ui.empty()) {
+            s.hold_ui = ui;
+            log::info("cloud stub: holding ui {} recovered from the captured V202 login", ui);
+        }
+    }
     s.rt = &rt;
     s.cls = transaction_class;
     s.online = online && platform::http_available();

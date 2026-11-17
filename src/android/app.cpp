@@ -39,6 +39,25 @@ constexpr std::uint32_t kDeadBeef = 0xDEADBEEF;
 // Where Android installs an APK; PvZ2 China opens its own to read its packages.
 std::string apk_path(const std::string& package) { return "/data/app/" + package + "-1/base.apk"; }
 
+// Read a string value out of an Android shared_prefs file: <string name="KEY">VALUE</string>.
+// Used to recover PvZ2 China's account identity from the game's own save so an offline cloud
+// replay matches the captured session without any out-of-band configuration.
+std::string read_pref_string(const std::filesystem::path& file, const std::string& key) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(file, ec)) return "";
+    std::ifstream in(file);
+    std::string line, needle = "name=\"" + key + "\">";
+    while (std::getline(in, line)) {
+        auto p = line.find(needle);
+        if (p == std::string::npos) continue;
+        p += needle.size();
+        auto e = line.find('<', p);
+        if (e == std::string::npos) continue;
+        return line.substr(p, e - p);
+    }
+    return "";
+}
+
 std::string random_uuid() {
     std::random_device rd;
     std::mt19937_64 rng(rd());
@@ -232,6 +251,11 @@ struct App {
     bool quit = false;
     bool restart = false;  // FilePickerHelper.forceFullAppRestart
     std::string device_id;
+
+    // PvZ2 China account identity, recovered from the game's own shared_prefs so an offline cloud
+    // replay is accepted as the same account the capture used. Empty for the global game, or when
+    // the prefs aren't present; env vars (RFU_SDK_CHANNEL/USER, RFU_HOLD_UI) still override.
+    std::string cn_channel, cn_user, cn_ui;
 
     // The game's Java classes: SexyAppFramework's, or PvZ2 China's fork.
     const bool china;
@@ -895,7 +919,7 @@ void App::implement_java_china() {
         // replaying a captured cloud session must pass the same channel user id the capture used, or
         // the game rejects the replayed (server-signed) session and never adopts its account. Set it
         // out of band with RFU_SDK_USER so no real account id is baked into the source.
-        std::string sdk_user = "rfu-offline-" + device_id;
+        std::string sdk_user = !cn_user.empty() ? cn_user : "rfu-offline-" + device_id;
         if (const char* u = std::getenv("RFU_SDK_USER")) sdk_user = u;
         run_on_ui([this, tw, self, login_code, sdk_user] {
             std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
@@ -953,9 +977,9 @@ void App::implement_java_china() {
     // GetChannelID is normally empty offline, but replaying a captured cloud session needs the
     // same channel id the capture used, since the game folds it into the identity it signs/sends.
     // Supplied out of band via RFU_SDK_CHANNEL so no channel id is baked into the source.
-    impl(tw, "GetChannelID", [ret_str](jni::JavaCall&) {
+    impl(tw, "GetChannelID", [this, ret_str](jni::JavaCall&) {
         const char* ch = std::getenv("RFU_SDK_CHANNEL");
-        return ret_str(ch ? ch : "");
+        return ret_str(ch ? ch : cn_channel);
     });
     for (const char* name : {"GetSignature", "GetTWRequestHead", "GetDeclare", "GetGameCenterUrl", "GetChannelUpdateUrl"})
         impl(tw, name, [ret_str](jni::JavaCall&) { return ret_str(""); });
@@ -1089,8 +1113,15 @@ int App::run() {
     }
     implement_java();
     if (china) implement_java_china();
+    if (china) {
+        fs::path prefs_dir = options.data_dir / "data" / "shared_prefs";
+        cn_channel = read_pref_string(prefs_dir / "channelInfo.xml", "channelInfoKey");
+        cn_user = read_pref_string(prefs_dir / "talkweb.xml", "SubmitUserInfo");
+        cn_ui = read_pref_string(prefs_dir / "talkweb.xml", "userid");
+        if (!cn_ui.empty()) log::info("china account from save: channel={} user={} ui={}", cn_channel, cn_user, cn_ui);
+    }
     implement_http(rt, rt.options().network, china ? std::string(kCnPackage) + "AndroidHttpTransaction" : "com/popcap/SexyAppFramework/AndroidHttpTransaction",
-                   options.data_dir / "image-cache");
+                   options.data_dir / "image-cache", std::getenv("RFU_HOLD_UI") ? "" : cn_ui);
 
     if (china) {
         start_china();

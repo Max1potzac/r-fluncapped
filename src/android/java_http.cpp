@@ -56,6 +56,7 @@ struct HttpState {
     std::deque<std::shared_ptr<Transaction>> queue;
     std::vector<std::thread> workers;
     std::filesystem::path cache_dir;  // images kept from their last good download; empty: none
+    std::string hold_ui;  // PvZ2 China: ui string to re-assert across the cloud session (RFU_HOLD_UI default)
 };
 
 // Images the game fetches (the title screen's banners): kept from their last good download and
@@ -213,7 +214,9 @@ void run(HttpState& s, Transaction& t) {
         // (seen while populated, e.g. at V1270/V202), and on EVERY cloud request rewrite that SSO
         // std::string back into each recorded address. This survives the game's post-V202 "reset
         // session" clear so the later V437 welcome-sync request reads the real ui instead of empty.
-        if (const char* holdv = std::getenv("RFU_HOLD_UI")) {
+        const char* holdv_env = std::getenv("RFU_HOLD_UI");
+        if (holdv_env || !s.hold_ui.empty()) {
+            const char* holdv = holdv_env ? holdv_env : s.hold_ui.c_str();
             static std::vector<rfu::GuestAddr> ui_fields;  // object-start of each SSO std::string
             std::string val(holdv);
             if (val.size() <= 22) {
@@ -543,9 +546,11 @@ void worker(HttpState& s) {
 
 }  // namespace
 
-void implement_http(Runtime& rt, bool online, const std::string& transaction_class, const std::filesystem::path& cache_dir) {
+void implement_http(Runtime& rt, bool online, const std::string& transaction_class, const std::filesystem::path& cache_dir,
+                    const std::string& hold_ui) {
     auto& s = rt.state<HttpState>();
     s.cache_dir = cache_dir;
+    s.hold_ui = hold_ui;
     s.rt = &rt;
     s.cls = transaction_class;
     s.online = online && platform::http_available();

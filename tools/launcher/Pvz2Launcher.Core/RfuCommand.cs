@@ -37,6 +37,12 @@ public static class RfuCommand
             string cloudDir = Path.Combine(game.Dir, "cloud");
             if (Directory.Exists(cloudDir)) args.AddRange(["--cloud-dir", cloudDir]);
         }
+        else if (game.IsChina && !s.Offline)
+        {
+            // Online: record the cloud session to the game's cloud\ folder (first occurrence per
+            // request code), so a later offline run replays it and opens the map without a server.
+            args.AddRange(["--cloud-record", Path.Combine(game.Dir, "cloud")]);
+        }
 
         if (s.HoverCollect) args.Add("--hover");
         if (s.CustomCursor) args.Add("--custom-cursor");

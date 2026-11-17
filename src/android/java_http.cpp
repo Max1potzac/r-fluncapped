@@ -473,6 +473,23 @@ void run(HttpState& s, Transaction& t) {
         }
         return;
     }
+    // RFU_CLOUD_RECORD=<dir>: on a normal ONLINE run (no RFU_CLOUD_STUB, so this real-network path
+    // runs), save each cloud response verbatim to <dir>/<req>.raw. A later offline run then replays
+    // them via RFU_CLOUD_DIR. First occurrence per code wins, matching one real capture.
+    std::string record_req;
+    std::shared_ptr<std::string> record_buf;
+    if (const char* record_dir = std::getenv("RFU_CLOUD_RECORD")) {
+        if (cloud_stub::is_cloud_host(t.request.url)) {
+            std::string rbody(t.request.body.begin(), t.request.body.end());
+            record_req = cloud_stub::field(rbody, "req");
+            if (!record_req.empty()) {
+                std::error_code ec;
+                std::filesystem::create_directories(record_dir, ec);
+                if (!std::filesystem::exists(std::filesystem::path(record_dir) / (record_req + ".raw")))
+                    record_buf = std::make_shared<std::string>();
+            }
+        }
+    }
     platform::HttpHandler handler;
     handler.on_response = [&](const platform::HttpResponse& r) {
         {
@@ -483,6 +500,7 @@ void run(HttpState& s, Transaction& t) {
         fire("HttpReceivedResponse");
     };
     handler.on_data = [&](const std::uint8_t* data, std::size_t n) {
+        if (record_buf) record_buf->append(reinterpret_cast<const char*>(data), n);
         while (n && t.native.load()) {
             std::size_t chunk = std::min<std::size_t>(n, 16384);
             s.rt->mem().write_bytes(jni.array_data(t.buffer), data, chunk);
@@ -493,6 +511,12 @@ void run(HttpState& s, Transaction& t) {
     };
     std::string error;
     if (platform::http_perform(t.request, handler, t.cancel, error)) {
+        if (record_buf && !record_buf->empty()) {
+            std::filesystem::path f = std::filesystem::path(std::getenv("RFU_CLOUD_RECORD")) / (record_req + ".raw");
+            std::ofstream out(f, std::ios::binary);
+            out.write(record_buf->data(), static_cast<std::streamsize>(record_buf->size()));
+            log::info("cloud record: wrote {} ({} bytes)", f.string(), record_buf->size());
+        }
         if (!t.cancel.load()) fire("HttpTransactionComplete");
     } else {
         if (!t.cancel.load()) log::info("http: {} failed: {}", t.request.url, error);

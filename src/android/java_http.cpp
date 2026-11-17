@@ -127,6 +127,16 @@ bool is_cloud_host(const std::string& url) {
     return false;
 }
 
+// The resource hot-update CDN hosts. These serve optional incremental content the bundled game
+// already has, so skipping them is safe. They sit outside China's reach and, online, tend to time
+// out rather than refuse, which makes the game's update check retry forever.
+bool is_cdn_host(const std::string& url) {
+    static const char* hosts[] = {"pvz2cdn.ditwan.cn", "pvz2adcdn.ditwan.cn"};
+    for (const char* h : hosts)
+        if (url.find(h) != std::string::npos) return true;
+    return false;
+}
+
 // Pull a named field's value out of a multipart/form-data body (boundary _{{}}_).
 std::string field(const std::string& body, const std::string& name) {
     std::string key = "name=\"" + name + "\"";
@@ -396,6 +406,58 @@ void run(HttpState& s, Transaction& t) {
             fire("HttpTransactionComplete");
             return;
         }
+    }
+    // Hot-update CDN hosts: whenever cloud handling is active (an offline replay, or an online record
+    // pass), answer them locally so the game's update check always resolves instead of hanging. A real
+    // record pass is online, so these hosts aren't stubbed by the cloud block above and would otherwise
+    // time out and loop the "等待中" update dialog forever (the host is unreachable from outside China).
+    // Serve a file from RFU_CDN_DIR if one is staged, else an empty 200 — which the game reads as
+    // "nothing to update" and proceeds (an empty res_shipping/file_list is exactly what the offline
+    // stub uses). Only the online record pass strictly needs this; doing it under the stub too lets an
+    // offline replay drop its separate --cdn-dir without the update check hanging.
+    if ((std::getenv("RFU_CLOUD_STUB") || std::getenv("RFU_CLOUD_RECORD")) && cloud_stub::is_cdn_host(t.request.url)) {
+        std::string reply;
+        bool have = false;
+        if (cdn_dir) {
+            std::string path;
+            auto scheme = t.request.url.find("://");
+            if (scheme != std::string::npos) {
+                auto slash = t.request.url.find('/', scheme + 3);
+                if (slash != std::string::npos) path = t.request.url.substr(slash + 1);
+            }
+            auto q = path.find('?');
+            if (q != std::string::npos) path = path.substr(0, q);
+            if (!path.empty()) {
+                std::filesystem::path f = std::filesystem::path(cdn_dir) / path;
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(f, ec)) {
+                    std::ifstream in(f, std::ios::binary);
+                    std::ostringstream ss; ss << in.rdbuf();
+                    reply = ss.str();
+                    have = true;
+                }
+            }
+        }
+        log::info("cdn stub: {} -> {} ({} bytes)", t.request.url, have ? "file" : "empty200", reply.size());
+        {
+            std::lock_guard lock(t.mutex);
+            t.response = platform::HttpResponse{};
+            t.response.status = 200;
+            t.response.status_line = "OK";
+            t.response.content_length = static_cast<std::int64_t>(reply.size());
+        }
+        fire("HttpReceivedResponse");
+        if (!reply.empty() && t.native.load()) {
+            std::size_t sent = 0;
+            while (sent < reply.size() && t.native.load()) {
+                std::size_t chunk = std::min<std::size_t>(reply.size() - sent, 16384);
+                s.rt->mem().write_bytes(jni.array_data(t.buffer), reply.data() + sent, chunk);
+                fire("HttpReceivedData", {t.buffer, chunk});
+                sent += chunk;
+            }
+        }
+        fire("HttpTransactionComplete");
+        return;
     }
     // A whole response at once, through the same callbacks a streamed one uses.
     auto deliver = [&](const platform::HttpResponse& r, const std::uint8_t* data, std::size_t size) {

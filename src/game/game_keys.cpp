@@ -4,6 +4,7 @@
 #include "core/log.h"
 #include "core/module.h"
 #include "core/rtti.h"
+#include "platform/cursor_sprites.h"
 #include "runtime.h"
 
 #include <algorithm>
@@ -227,7 +228,24 @@ public:
         write_stub(rect_stub_, 0xAA0103E8, base_ + kScreenRect.offset);  // mov x8, x1
         write_stub(ref_stub_, 0xAA0203E8, base_ + kHandleRef.offset);    // mov x8, x2
 
-        watch(bank->functions[kUpdateSlot], bank_vtable_, bank_, "game keys: seed bank");
+        // A conveyor level's bank is a ConveyorSeedBank, its packets the same SeedPackets
+        // (moving up the belt).
+        auto conveyor = find_vtable(rt_.mem(), pvz2, "ConveyorSeedBank");
+        if (conveyor && conveyor->functions.size() > kUpdateSlot) conveyor_vtable_ = conveyor->address;
+        if (conveyor_vtable_ && conveyor->functions[kUpdateSlot] == bank->functions[kUpdateSlot]) {
+            hook(rt_, bank->functions[kUpdateSlot], "game keys: seed bank", [self = shared_from_this()](CallContext& c) {
+                GuestAddr object = c.x(0);
+                Seen* seen = self->same_class(object, self->bank_vtable_)       ? &self->bank_
+                             : self->same_class(object, self->conveyor_vtable_) ? &self->conveyor_
+                                                                                 : nullptr;
+                if (!seen) return;
+                seen->object = object;
+                seen->when = now_ticks();
+            });
+        } else {
+            watch(bank->functions[kUpdateSlot], bank_vtable_, bank_, "game keys: seed bank");
+            if (conveyor_vtable_) watch(conveyor->functions[kUpdateSlot], conveyor_vtable_, conveyor_, "game keys: conveyor");
+        }
         // The seed chooser and its look at the lawn button (each drawn once a frame).
         for (auto [name, vtable, seen] : {std::tuple{"SeedChooser", &chooser_vtable_, &chooser_}, std::tuple{"ViewBoardOrZombiesButton", &view_vtable_, &view_},
                                           std::tuple{"ReloadLayoutButton", &reload_vtable_, &reload_}}) {
@@ -259,6 +277,28 @@ public:
             aim_cursors_.emplace_back(std::piecewise_construct, std::forward_as_tuple(aim->address), std::forward_as_tuple());
         }
         if (auto map = find_vtable(rt_.mem(), pvz2, "WorldMap")) map_vtable_ = map->address;
+        // Crazy Dave and the other characters' talk ("tap to continue") is drawn by this one,
+        // which takes the screen's touches while it's up.
+        if (auto npc = find_vtable(rt_.mem(), pvz2, "CrazyNPCManager")) npc_vtable_ = npc->address;
+        if (auto settings = find_vtable(rt_.mem(), pvz2, "SettingsDialog")) settings_vtable_ = settings->address;
+        // These two are told by their type_info: the classes have more than one vtable.
+        if (auto uni = find_vtable(rt_.mem(), pvz2, "UniverseMap")) universe_type_ = rt_.mem().read<std::uint64_t>(uni->address - 8);
+        if (auto world = find_vtable(rt_.mem(), pvz2, "UniverseWorldButton")) world_type_ = rt_.mem().read<std::uint64_t>(world->address - 8);
+        if (auto dialog = find_vtable(rt_.mem(), pvz2, "PVZ2UIDialog")) dialog_type_ = rt_.mem().read<std::uint64_t>(dialog->address - 8);
+        if (auto pane = find_vtable(rt_.mem(), pvz2, "PVZ2UIScrollingPaneWidget")) pane_type_ = rt_.mem().read<std::uint64_t>(pane->address - 8);
+        if (auto entry = find_vtable(rt_.mem(), pvz2, "ProfilesListEntry")) entry_type_ = rt_.mem().read<std::uint64_t>(entry->address - 8);
+        if (auto title = find_vtable(rt_.mem(), pvz2, "MainMenu")) main_menu_type_ = rt_.mem().read<std::uint64_t>(title->address - 8);
+        if (auto check = find_vtable(rt_.mem(), pvz2, "PVZ2UICheckBox")) check_vtable_ = check->address;
+        if (auto list = find_vtable(rt_.mem(), pvz2, "PVZ2UIScrollingWidget")) scroll_vtable_ = list->address;
+        // Reflourished 1.5.0 lays the world map's buttons out again (its libRFLib draws them):
+        // settings, almanac, arcade, Zen Garden.
+        if (const Module* rf = rt_.linker().find_module("libRFLib.so")) {
+            static const std::string_view mark = "UIWorldMapZenGardenButton";
+            for (const auto& seg : rf->segments()) {
+                const char* p = reinterpret_cast<const char*>(rt_.mem().host(seg.start));
+                if (std::string_view(p, seg.size).find(mark) != std::string_view::npos) map_150_ = true;
+            }
+        }
         // The pause menu: its dialog, sliders and buttons (Sexy widgets).
         auto pause = find_vtable(rt_.mem(), pvz2, "PauseDialog");
         auto slider = find_vtable(rt_.mem(), pvz2, "Sexy::Slider");
@@ -324,6 +364,20 @@ public:
         p.button = *action;
         pad_type_ = p.type;
         pad_active_ = true;
+        // While a character talks, any button is the tap that moves it on, and nothing else
+        // happens (the chooser's or the lawn's controls start once it's done).
+        if (p.down && mode() == Mode::Dialogue) {
+            Sizes z = sizes();
+            tap(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+            return false;
+        }
+        // Select held two seconds in a level: the free cursor in place of the lawn's tile box (and
+        // back). The level's other screens and the menus have the cursor already.
+        if (p.button == PadButton::Back) {
+            Mode m = p.down ? mode() : Mode::None;
+            select_since_ = p.down && board_up() && (m == Mode::Lawn || m == Mode::Chooser || (free_cursor_ && m == Mode::Cursor)) ? now_ticks() : 0;
+            return false;
+        }
         auto dir = std::find_if(dirs_.begin(), dirs_.end(), [&](const Dir& d) { return d.button == p.button; });
         if (dir != dirs_.end()) {
             dir->held = p.down;
@@ -351,6 +405,7 @@ public:
         case Mode::Menu: return menu_pad(p);
         case Mode::Cursor: return cursor_pad(p);
         case Mode::Chooser: chooser_pad(p); return false;
+        case Mode::Dialogue:
         case Mode::None: return false;
         }
         return false;
@@ -487,6 +542,10 @@ public:
             }
         cursor_frame(now);
         chooser_frame(now);
+        if (select_since_ && now - select_since_ >= ticks(kSelectHold)) {
+            select_since_ = 0;
+            toggle_free_cursor();
+        }
         if (b_since_ && now - b_since_ >= ticks(kDigHold)) {
             b_since_ = 0;
             if (auto lawn = this->lawn()) {
@@ -582,11 +641,23 @@ public:
             out.labels = hints();
             return out;
         }
+        if (dialogue()) return out;
         auto lawn = this->lawn();
-        if (!lawn) {
+        if (!lawn || free_cursor_) {
             off_lawn_overlay(out);
+            if (lawn) {
+                // The free cursor: the picked packet's box stays.
+                float fx = lawn->sw / lawn->lw, fy = lawn->sh / lawn->lh;
+                auto packets = packet_rects();
+                if (slot_ >= 1 && static_cast<std::size_t>(slot_) <= packets.size()) {
+                    const Rect& r = packets[slot_ - 1];
+                    out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), platform::kHintBorder, true});
+                }
+            }
+            select_dial(out);
             return out;
         }
+        select_dial(out);
         float fx = lawn->sw / lawn->lw, fy = lawn->sh / lawn->lh;
         // The tile, in the surface's pixels; red while B is held to dig.
         float x0 = lawn->ox + lawn->tw * col_, y0 = lawn->oy + lawn->th * row_;
@@ -612,7 +683,7 @@ public:
         auto packets = packet_rects();
         if (slot_ >= 1 && static_cast<std::size_t>(slot_) <= packets.size()) {
             const Rect& r = packets[slot_ - 1];
-            out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), platform::kHintBorder});
+            out.boxes.push_back({static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), static_cast<int>(r.w * fx), static_cast<int>(r.h * fy), platform::kHintBorder, true});
         }
         if (!pad_hints_) return out;
         using platform::PadButton;
@@ -677,7 +748,9 @@ public:
 
 private:
     static constexpr auto kRepeatDelay = std::chrono::milliseconds(300), kRepeatEvery = std::chrono::milliseconds(110);
-    static constexpr auto kDigHold = std::chrono::seconds(1), kBuyHold = std::chrono::seconds(2);
+    // Held left or right on the worlds' carousel: a world now, the next after this, then one every this.
+    static constexpr auto kWorldFirstRepeat = std::chrono::milliseconds(450), kWorldRepeat = std::chrono::milliseconds(300);
+    static constexpr auto kDigHold = std::chrono::seconds(1), kBuyHold = std::chrono::seconds(2), kSelectHold = std::chrono::seconds(2);
     static constexpr auto kMowerHold = std::chrono::milliseconds(250);  // X held this long in the first column is for the mower
     static constexpr int kSweepStep = 40;  // between the sweep's points, in the UI's units
     static constexpr int kPopupWait = 12;  // frames for the plant food "+"'s offer to come up
@@ -696,6 +769,9 @@ private:
         GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
         GuestAddr app = mem.read<std::uint64_t>(base_ + kApp);
         if (!board || !app || !board_vtable_ || mem.read<std::uint64_t>(board) != board_vtable_) return std::nullopt;
+        // Not while the seed chooser's drawn, whatever the Board's state says (after a tutorial's
+        // demonstration the chooser comes up in a state that takes touches).
+        if (before_level()) return std::nullopt;
         // Not before the level starts, nor in the states where the lawn takes no touches (the
         // game's own test, in Board::TouchMoved).
         std::int32_t state = mem.read<std::int32_t>(board + kBoardState);
@@ -756,28 +832,60 @@ private:
     }
 
     // What the pad does now.
-    enum class Mode { Lawn, Menu, Cursor, Chooser, None };
+    enum class Mode { Lawn, Menu, Cursor, Chooser, Dialogue, None };
     Mode mode() {
-        if (lawn()) return Mode::Lawn;
-        if (pause_dialog()) return Mode::Menu;
+        if (dialogue()) return Mode::Dialogue;
+        if (lawn()) return free_cursor_ ? Mode::Cursor : Mode::Lawn;
+        if (menu_dialog()) return Mode::Menu;
         // The seed chooser (and the look at the lawn from it) has controls of its own.
         auto& mem = rt_.mem();
         GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
         GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
-        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ && mem.read<std::int32_t>(board + kBoardState) == 3) return Mode::Chooser;
+        // Only while the chooser (or its look at the lawn) is about: in Board state 3 the level's
+        // objectives can be up first, with no chooser yet.
+        if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ &&
+            (before_level() || (mem.read<std::int32_t>(board + kBoardState) == 3 && (live(chooser_, chooser_vtable_) || live(view_, view_vtable_)))))
+            return free_cursor_ ? Mode::Cursor : Mode::Chooser;
         return sizes().ok() ? Mode::Cursor : Mode::None;
     }
 
-    // The pause menu, when it's up: the dialog is what a touch in the screen's middle goes to, or
-    // holds it.
-    GuestAddr pause_dialog() {
+    // A character's talking (Crazy Dave's "tap to continue"): the screen's middle goes to the
+    // CrazyNPCManager.
+    bool dialogue() {
+        if (!npc_vtable_) return false;
+        Sizes z = sizes();
+        if (!z.ok()) return false;
+        GuestAddr w = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+        return w && rt_.mem().read<std::uint64_t>(w) == npc_vtable_;
+    }
+
+    // The pause menu or the settings, when one's up: the dialog is what a touch in the screen's
+    // middle goes to, or holds it.
+    GuestAddr menu_dialog() {
         if (!pause_vtable_) return 0;
         Sizes z = sizes();
         if (!z.ok()) return 0;
         auto& mem = rt_.mem();
         GuestAddr w = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
-        for (int i = 0; w && i < 8; ++i, w = mem.read<std::uint64_t>(w + kWidgetParent))
-            if (mem.read<std::uint64_t>(w) == pause_vtable_) return w;
+        on_title_ = false;
+        for (int i = 0; w && i < 12; ++i, w = mem.read<std::uint64_t>(w + kWidgetParent)) {
+            GuestAddr vt = mem.read<std::uint64_t>(w);
+            // A page of the title screen's (the profiles, a new or renamed one) first: the title
+            // screen slides them in on a scrolling pane, the others waiting off its side.
+            if (main_menu_type_ && pane_type_) {
+                GuestAddr pane = mem.read<std::uint64_t>(w + kWidgetParent);
+                if (pane && type_of(pane) == pane_type_ && type_of(mem.read<std::uint64_t>(pane + kWidgetParent)) == main_menu_type_) return w;
+            }
+            // The title screen: its buttons (play, the profile, news, settings) are a menu too.
+            if (main_menu_type_ && type_of(w) == main_menu_type_) {
+                on_title_ = true;
+                return w;
+            }
+            if (vt == pause_vtable_ || (settings_vtable_ && vt == settings_vtable_)) return w;
+            // Any other of the game's dialogs with something to press (the level's objectives,
+            // "are you sure?" and the like).
+            if (dialog_type_ && type_of(w) == dialog_type_) return menu_items(w).empty() ? 0 : w;
+        }
         return 0;
     }
 
@@ -787,12 +895,14 @@ private:
         Rect r;
         bool slider;
         int row;
+        std::optional<Rect> view;  // the scrolling list it's in (the settings'), where it shows
     };
     std::vector<MenuItem> menu_items(GuestAddr dialog) {
         std::vector<MenuItem> items;
         auto& mem = rt_.mem();
         // Sexy::WidgetContainer: its children in a std::list, positions relative to the parent.
-        auto collect = [&](auto& self, GuestAddr container, std::int32_t ax, std::int32_t ay, int depth) -> void {
+        Sizes z = sizes();
+        auto collect = [&](auto& self, GuestAddr container, std::int32_t ax, std::int32_t ay, int depth, std::optional<Rect> view) -> void {
             GuestAddr end = container + kWidgetList;
             GuestAddr node = mem.read<std::uint64_t>(end + 8);
             for (int n = 0; node && node != end && n < 64; ++n, node = mem.read<std::uint64_t>(node + 8)) {
@@ -800,12 +910,24 @@ private:
                 if (!w || !mem.read<std::uint8_t>(w + kWidgetVisible)) continue;
                 Rect r{ax + mem.read<std::int32_t>(w + kWidgetRect), ay + mem.read<std::int32_t>(w + kWidgetRect + 4),
                        mem.read<std::int32_t>(w + kWidgetRect + 8), mem.read<std::int32_t>(w + kWidgetRect + 12)};
+                // A page waiting off the screen's side (the settings slide their sub-pages in).
+                if (depth == 0 && (r.x < 0 || r.x + r.w > z.lw)) continue;
                 GuestAddr vt = mem.read<std::uint64_t>(w);
-                if ((vt == slider_vtable_ || vt == button_vtable_) && r.w > 0 && r.h > 0) items.push_back({w, r, vt == slider_vtable_, 0});
-                if (depth < 4) self(self, w, r.x, r.y, depth + 1);
+                // The profiles' rows are entries with a button (rename) in them: the row picks.
+                bool check = (check_vtable_ && vt == check_vtable_) || (entry_type_ && type_of(w) == entry_type_);
+                if ((vt == slider_vtable_ || vt == button_vtable_ || check) && r.w > 0 && r.h > 0) items.push_back({w, r, vt == slider_vtable_, 0, view});
+                std::optional<Rect> inner = scroll_vtable_ && vt == scroll_vtable_ ? std::optional<Rect>(r) : view;
+                if (depth < 7) self(self, w, r.x, r.y, depth + 1, inner);
             }
         };
-        collect(collect, dialog, mem.read<std::int32_t>(dialog + kWidgetRect), mem.read<std::int32_t>(dialog + kWidgetRect + 4), 0);
+        // Where the dialog is on the screen: its position and its parents' (the profiles' dialog
+        // sits in the title screen's widgets).
+        std::int32_t ox = 0, oy = 0;
+        for (GuestAddr p = dialog; p && mem.read<std::uint64_t>(p + kWidgetParent); p = mem.read<std::uint64_t>(p + kWidgetParent)) {
+            ox += mem.read<std::int32_t>(p + kWidgetRect);
+            oy += mem.read<std::int32_t>(p + kWidgetRect + 4);
+        }
+        collect(collect, dialog, ox, oy, 0, std::nullopt);
         std::stable_sort(items.begin(), items.end(), [](const MenuItem& a, const MenuItem& b) {
             return a.r.y + a.r.h / 2 != b.r.y + b.r.h / 2 ? a.r.y + a.r.h / 2 < b.r.y + b.r.h / 2 : a.r.x < b.r.x;
         });
@@ -824,12 +946,20 @@ private:
     std::size_t menu_selected(const std::vector<MenuItem>& items) {
         for (std::size_t i = 0; i < items.size(); ++i)
             if (items[i].widget == menu_sel_) return i;
-        menu_sel_ = items.empty() ? 0 : items[0].widget;
-        return 0;
+        std::size_t first = 0;
+        if (on_title_) {
+            // On the title screen, "play": the button nearest the bottom's middle.
+            Sizes z = sizes();
+            auto far = [&](const MenuItem& m) { return std::hypot(m.r.x + m.r.w / 2 - z.lw / 2, m.r.y + m.r.h / 2 - z.lh); };
+            for (std::size_t i = 1; i < items.size(); ++i)
+                if (far(items[i]) < far(items[first])) first = i;
+        }
+        menu_sel_ = items.empty() ? 0 : items[first].widget;
+        return first;
     }
 
     void menu_move(int dx, int dy) {
-        GuestAddr dialog = pause_dialog();
+        GuestAddr dialog = menu_dialog();
         if (!dialog) return;
         auto items = menu_items(dialog);
         if (items.empty()) return;
@@ -845,13 +975,36 @@ private:
                 int d = std::abs(items[i].r.x + items[i].r.w / 2 - mid);
                 if (!best || d < std::abs(items[*best].r.x + items[*best].r.w / 2 - mid)) best = i;
             }
-            if (best) menu_sel_ = items[*best].widget;
+            if (best) {
+                menu_sel_ = items[*best].widget;
+                scroll_into_view(items[*best]);
+            }
         } else if (dx && sel.slider) {
             slide(sel, dx);
         } else if (dx) {
             std::size_t next = at + (dx > 0 ? 1 : -1);
             if (next < items.size() && items[next].row == sel.row) menu_sel_ = items[next].widget;
         }
+    }
+
+    // An item of a scrolling list that's (partly) out of its view: a finger drags the list until
+    // it's in, from the list's left edge (clear of the sliders), and holds still before letting go
+    // so the list doesn't coast on.
+    void scroll_into_view(const MenuItem& item) {
+        if (!item.view) return;
+        const Rect& v = *item.view;
+        int margin = item.r.h / 4;
+        int d = 0;
+        if (item.r.y < v.y) d = item.r.y - v.y - margin;
+        else if (item.r.y + item.r.h > v.y + v.h) d = item.r.y + item.r.h - (v.y + v.h) + margin;
+        if (!d) return;
+        d = std::clamp(d, -v.h * 3 / 4, v.h * 3 / 4);
+        std::int32_t x = v.x + std::min(24, v.w / 8), y0 = v.y + v.h / 2 + d / 2;
+        steps_.push_back({1, 0, x, y0});
+        constexpr int kSteps = 8;
+        for (int i = 1; i <= kSteps; ++i) steps_.push_back({1, 1, x, y0 - d * i / kSteps});
+        steps_.push_back({8, 1, x, y0 - d});
+        steps_.push_back({1, 3, x, y0 - d});
     }
 
     // A slider a tenth along, the way a finger moves it: down on its thumb, across, up.
@@ -870,9 +1023,19 @@ private:
 
     bool menu_pad(const platform::PadInput& p) {
         using platform::PadButton;
+        if (on_title_ && (p.button == PadButton::LB || p.button == PadButton::RB)) {
+            // The banners: a swipe across the middle, to the next (RB) or the last (LB).
+            Sizes z = sizes();
+            int from = static_cast<int>(z.lw * (p.button == PadButton::RB ? 0.62f : 0.38f)), to = static_cast<int>(z.lw * (p.button == PadButton::RB ? 0.38f : 0.62f));
+            std::int32_t y = static_cast<std::int32_t>(z.lh * 0.45f);
+            steps_.push_back({1, 0, from, y});
+            for (int k = 1; k <= 6; ++k) steps_.push_back({1, 1, from + (to - from) * k / 6, y});
+            steps_.push_back({1, 3, to, y});
+            return false;
+        }
         if (p.button == PadButton::B || p.button == PadButton::Start) return true;  // back: the game resumes
         if (p.button != PadButton::A) return false;
-        GuestAddr dialog = pause_dialog();
+        GuestAddr dialog = menu_dialog();
         if (!dialog) return false;
         auto items = menu_items(dialog);
         if (items.empty()) return false;
@@ -888,9 +1051,9 @@ private:
         // On the world map: shortcuts to its buttons.
         if (on_map()) {
             std::optional<std::pair<float, float>> at;
-            if (p.button == PadButton::LT) at = kMapAlmanac;
-            else if (p.button == PadButton::RT) at = kMapZenGarden;
-            else if (p.button == PadButton::Start) at = kMapSettings;
+            if (p.button == PadButton::LT) at = map_150_ ? kMapAlmanac150 : kMapAlmanac;
+            else if (p.button == PadButton::RT) at = map_150_ ? kMapZenGarden150 : kMapZenGarden;
+            else if (p.button == PadButton::Start) at = map_150_ ? kMapSettings150 : kMapSettings;
             if (at) {
                 tap_anchored(at->first, at->second, false);
                 return false;
@@ -906,12 +1069,55 @@ private:
                 tap(r->x + r->w / 2, r->y + r->h / 2);
             return false;
         }
+        // The free cursor in a level: LB/RB still pick the packet, and A takes it first.
+        bool free = free_cursor_ && lawn();
+        if (free && (p.button == PadButton::LB || p.button == PadButton::RB)) {
+            int n = static_cast<int>(packet_rects().size());
+            if (n) slot_ = slot_ < 1 || slot_ > n ? 1 : (slot_ - 1 + (p.button == PadButton::RB ? 1 : n - 1)) % n + 1;
+            return false;
+        }
         if (p.button == PadButton::A && !cursor_down_ && !scroll_) {
+            if (free && slot_ > 0 && !live(plant_cursor_, cursor_vtable_, std::chrono::milliseconds(200)))
+                if (auto r = packet_rect(slot_)) tap(r->x + r->w / 2, r->y + r->h / 2);
             cursor_place();
             steps_.push_back({1, 0, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
             cursor_down_ = true;
         }
         return false;
+    }
+
+    // Select held: the free cursor goes on (at the tile the box was on) or off.
+    void toggle_free_cursor() {
+        if (!board_up()) return;
+        auto lawn = this->lawn();
+        free_cursor_ = !free_cursor_;
+        stop_scroll();
+        b_since_ = y_since_ = x_since_ = 0;
+        if (cursor_down_) {
+            steps_.push_back({1, 3, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
+            cursor_down_ = false;
+        }
+        if (free_cursor_ && !lawn) {
+            // In the chooser: the middle of the screen.
+            Sizes z = sizes();
+            cursor_x_ = z.lw / 2;
+            cursor_y_ = z.lh / 2;
+        } else if (free_cursor_) {
+            cursor_x_ = lawn->ui_x(lawn->ox + lawn->tw * (col_ + 0.5f));
+            cursor_y_ = lawn->ui_y(lawn->oy + lawn->th * (row_ + 0.5f));
+        }
+        log::info("controller: {} cursor", free_cursor_ ? "free" : "tile");
+    }
+
+    // Select held: a dial at the top of the screen, full when the cursor switches.
+    void select_dial(platform::HintOverlay& out) {
+        auto now = now_ticks();
+        if (!select_since_ || now - select_since_ < ticks(std::chrono::milliseconds(250))) return;
+        Sizes z = sizes();
+        if (!z.ok()) return;
+        float held = static_cast<float>(now - select_since_) / ticks(kSelectHold);
+        int radius = std::max(8, static_cast<int>(z.sh * 0.035f));
+        out.meters.push_back({static_cast<int>(z.sw / 2), static_cast<int>(z.sh * 0.14f), radius, held, 0x7CB2E8u});
     }
 
     // The cursor starts in the middle of the screen.
@@ -941,6 +1147,27 @@ private:
             return;
         }
         cursor_place();
+        // The worlds' carousel settles on a world whenever a finger lets go, so a drag held
+        // across it (let go and put down again every stroke) jerks: there, left and right step
+        // from world to world instead, a tap on the next one, which the game glides to.
+        if (dx && !dy && !cursor_down_ && world_step(dx, now)) {
+            stop_scroll();
+            dx = 0;
+        } else if (!dx) {
+            world_target_ = 0;
+            world_next_ = 0;
+        }
+        if (free_cursor_ && (dx || dy) && lawn()) {
+            // The free cursor in a level: the d-pad and left stick move it too (there's nothing
+            // to scroll), at a steady speed.
+            stop_scroll();
+            float d = std::hypot(static_cast<float>(dx), static_cast<float>(dy));
+            float speed = z.lh * 0.7f;
+            cursor_x_ = std::clamp(cursor_x_ + static_cast<float>(dx / d * speed * dt), 0.0f, z.lw - 1);
+            cursor_y_ = std::clamp(cursor_y_ + static_cast<float>(dy / d * speed * dt), 0.0f, z.lh - 1);
+            if (cursor_down_) steps_.push_back({1, 1, static_cast<std::int32_t>(cursor_x_), static_cast<std::int32_t>(cursor_y_)});
+            dx = dy = 0;
+        }
         if (mag > kDeadZone) {
             // Faster the further it's pushed: across the screen's height in about a second at full tilt.
             float speed = z.lh * 1.1f * std::pow((std::min(mag, 1.0f) - kDeadZone) / (1 - kDeadZone), 2.0f);
@@ -963,6 +1190,65 @@ private:
         } else {
             stop_scroll();
         }
+    }
+
+    // An object's type_info, through its vtable.
+    GuestAddr type_of(GuestAddr obj) {
+        auto& mem = rt_.mem();
+        GuestAddr vt = mem.read<std::uint64_t>(obj);
+        return vt >= 8 && mem.is_committed(vt - 8, 8) ? mem.read<std::uint64_t>(vt - 8) : 0;
+    }
+
+    // The worlds' buttons on the carousel (UniverseMap), left to right, in the UI's units.
+    std::vector<std::pair<GuestAddr, Rect>> world_buttons() {
+        std::vector<std::pair<GuestAddr, Rect>> out;
+        if (!universe_type_ || !world_type_) return out;
+        Sizes z = sizes();
+        auto& mem = rt_.mem();
+        GuestAddr map = widget_at(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+        for (int i = 0; map && i < 8 && type_of(map) != universe_type_; ++i) map = mem.read<std::uint64_t>(map + kWidgetParent);
+        if (!map || type_of(map) != universe_type_) return out;
+        auto collect = [&](auto& self, GuestAddr c, std::int32_t ax, std::int32_t ay, int depth) -> void {
+            GuestAddr end = c + kWidgetList;
+            GuestAddr node = mem.read<std::uint64_t>(end + 8);
+            for (int n = 0; node && node != end && n < 128; ++n, node = mem.read<std::uint64_t>(node + 8)) {
+                GuestAddr w = mem.read<std::uint64_t>(node + 16);
+                if (!w || !mem.read<std::uint8_t>(w + kWidgetVisible)) continue;
+                Rect r{ax + mem.read<std::int32_t>(w + kWidgetRect), ay + mem.read<std::int32_t>(w + kWidgetRect + 4),
+                       mem.read<std::int32_t>(w + kWidgetRect + 8), mem.read<std::int32_t>(w + kWidgetRect + 12)};
+                if (type_of(w) == world_type_) out.push_back({w, r});
+                else if (depth < 3) self(self, w, r.x, r.y, depth + 1);
+            }
+        };
+        collect(collect, map, mem.read<std::int32_t>(map + kWidgetRect), mem.read<std::int32_t>(map + kWidgetRect + 4), 0);
+        std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.second.x < b.second.x; });
+        return out;
+    }
+
+    // Left or right held on the worlds' carousel: a step to the next world now, and again every
+    // so often while it's held. False: not on the carousel.
+    bool world_step(int dx, std::int64_t now) {
+        auto worlds = world_buttons();
+        if (worlds.empty()) return false;
+        if (now < world_next_) return true;
+        Sizes z = sizes();
+        // From the world it's heading to (it glides there), else the one in the middle.
+        std::size_t at = worlds.size();
+        for (std::size_t i = 0; i < worlds.size(); ++i)
+            if (worlds[i].first == world_target_) at = i;
+        if (at == worlds.size()) {
+            at = 0;
+            for (std::size_t i = 1; i < worlds.size(); ++i)
+                if (std::abs(worlds[i].second.x + worlds[i].second.w / 2 - z.lw / 2) < std::abs(worlds[at].second.x + worlds[at].second.w / 2 - z.lw / 2)) at = i;
+        }
+        std::size_t next = dx > 0 ? std::min(at + 1, worlds.size() - 1) : at > 0 ? at - 1 : 0;
+        if (next != at) {
+            const Rect& r = worlds[next].second;
+            tap(r.x + r.w / 2, r.y + r.h / 2);
+            world_target_ = worlds[next].first;
+        }
+        world_next_ = now + ticks(world_next_ ? kWorldRepeat : kWorldFirstRepeat);
+        return true;
     }
 
     void stop_scroll() {
@@ -993,7 +1279,7 @@ private:
         if (end < begin || end - begin > 1024 * 8) return c;
         for (GuestAddr h = begin; h < end; h += 8) {
             GuestAddr packet = resolve(h);
-            if (!packet || mem.read<std::uint64_t>(packet) != packet_vtable_) continue;
+            if (!packet || !same_class(packet, packet_vtable_)) continue;
             Rect r = screen_rect(packet);
             if (r.w <= 0 || r.h <= 0 || (r.x == 0 && r.y == 0)) continue;
             // Drawn a little up and left of the rect, as in the seed bank.
@@ -1004,6 +1290,7 @@ private:
         auto order = [](const auto& a, const auto& b) { return a.second.y != b.second.y ? a.second.y < b.second.y : a.second.x < b.second.x; };
         std::stable_sort(c.grid.begin(), c.grid.end(), order);
         std::stable_sort(c.slots.begin(), c.slots.end(), order);
+        fit_to_pitch(c.slots);
         return c;
     }
 
@@ -1111,6 +1398,8 @@ private:
     // screen: (x, y) in 768ths of its height, from the left edge (or the right one).
     static constexpr std::pair<float, float> kMapAlmanac{134.0f, 38.0f}, kMapZenGarden{301.0f, 38.0f}, kMapSettings{382.0f, 38.0f},
         kMapShop{75.0f, 53.0f}, kChooserAlmanac{286.0f, 37.0f};
+    // Reflourished 1.5.0's: back, settings, almanac, arcade, Zen Garden.
+    static constexpr std::pair<float, float> kMapSettings150{137.0f, 38.0f}, kMapAlmanac150{222.0f, 38.0f}, kMapZenGarden150{395.0f, 38.0f};
     void tap_anchored(float x, float y, bool from_right) {
         Sizes z = sizes();
         if (!z.ok()) return;
@@ -1195,7 +1484,7 @@ private:
         std::optional<Rect> slot;
         if (ch_slot_ >= 1 && static_cast<std::size_t>(ch_slot_) <= c.slots.size()) {
             slot = c.slots[ch_slot_ - 1].second;
-            box(*slot, platform::kHintBorder, false);
+            box(*slot, platform::kHintBorder, true);
         }
         auto now = now_ticks();
         auto start = rock_rect();
@@ -1232,7 +1521,7 @@ private:
         if (m == Mode::Chooser) {
             chooser_overlay(out, fx, fy);
         } else if (m == Mode::Menu) {
-            GuestAddr dialog = pause_dialog();
+            GuestAddr dialog = menu_dialog();
             auto items = dialog ? menu_items(dialog) : std::vector<MenuItem>{};
             if (items.empty()) return;
             const Rect& r = items[menu_selected(items)].r;
@@ -1240,10 +1529,9 @@ private:
             out.boxes.push_back({static_cast<int>(r.x * fx) - pad, static_cast<int>(r.y * fy) - pad, static_cast<int>(r.w * fx) + 2 * pad,
                                  static_cast<int>(r.h * fy) + 2 * pad, 0xFFFFFFu, true});
         } else if (m == Mode::Cursor && cursor_x_ >= 0) {
+            // The glove, its fingertip on the spot; it presses while A's held.
             int x = static_cast<int>(cursor_x_ * fx), y = static_cast<int>(cursor_y_ * fy);
-            int radius = std::max(6, static_cast<int>(z.sh) / 64);
-            out.meters.push_back({x, y, radius + std::max(2, radius / 3), 1.0f, 0x202020u});
-            out.meters.push_back({x, y, radius, 1.0f, cursor_down_ ? 0xFFD040u : 0xFFFFFFu});
+            out.cursor = platform::HintCursor{x, y, std::max(24, static_cast<int>(z.sh * platform::kCursorHeight)), cursor_down_};
         }
     }
 
@@ -1314,7 +1602,7 @@ private:
             flicked_ = false;
             return;
         }
-        if (flicked_ || mag < kFlick || !lawn()) return;
+        if (flicked_ || mag < kFlick || free_cursor_ || !lawn()) return;
         int index = -1;
         if (std::abs(stick_x_) > std::abs(stick_y_)) index = stick_x_ < 0 ? 0 : 2;
         else if (stick_y_ < 0) index = 1;
@@ -1403,19 +1691,49 @@ private:
 
     void watch(GuestAddr update, GuestAddr vtable, Seen& seen, const std::string& name) {
         hook(rt_, update, name, [self = shared_from_this(), vtable, &seen](CallContext& c) {
-            auto& rt = self->rt_;
             GuestAddr object = c.x(0);
-            if (rt.mem().read<std::uint64_t>(object) != vtable) return;
+            if (!self->same_class(object, vtable)) return;
             seen.object = object;
             seen.when = now_ticks();
         });
     }
 
     // The instance last updated, if it's still about and still what it was.
+    // The seed chooser was drawn this frame or the last few.
+    bool chooser_shown() const { return live(chooser_, chooser_vtable_, std::chrono::milliseconds(150)) != 0; }
+    // Still choosing: the chooser's drawn, or its look at the lawn (Lookout: its button back is,
+    // and the seed bank isn't, which it is while plants go down before "let's rock"). The Board's
+    // state can say the level's on (after a tutorial's demonstration).
+    bool before_level() const {
+        if (chooser_shown()) return true;
+        bool bank = live(bank_, bank_vtable_, std::chrono::milliseconds(300)) || (conveyor_vtable_ && live(conveyor_, conveyor_vtable_, std::chrono::milliseconds(300)));
+        return live(view_, view_vtable_) != 0 && !bank;
+    }
+    // A level's Board is up (choosing or playing).
+    bool board_up() {
+        auto& mem = rt_.mem();
+        GuestAddr game = mem.read<std::uint64_t>(base_ + kGame);
+        GuestAddr board = game ? mem.read<std::uint64_t>(game + kBoardOfGame) : 0;
+        return board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_;
+    }
+
+    // The object's of the class with this vtable: it has it, or a copy of it (Reflourished 1.5.0's
+    // libRFLib gives the seed chooser a vtable of its own, on the heap, with no type_info: the
+    // game's functions in it, some replaced).
+    bool same_class(GuestAddr object, GuestAddr vtable) const {
+        auto& mem = rt_.mem();
+        GuestAddr vt = mem.read<std::uint64_t>(object);
+        if (vt == vtable) return true;
+        if (vt < 16 || !mem.is_committed(vt, (kUpdateSlot + 1) * 8)) return false;
+        for (std::size_t i : {std::size_t{0}, std::size_t{1}, kUpdateSlot})
+            if (mem.read<std::uint64_t>(vt + i * 8) != mem.read<std::uint64_t>(vtable + i * 8)) return false;
+        return true;
+    }
+
     GuestAddr live(const Seen& seen, GuestAddr vtable, std::chrono::steady_clock::duration stale = kStale) const {
         GuestAddr object = seen.object;
         auto age = std::chrono::steady_clock::duration(now_ticks() - seen.when);
-        if (!object || age > stale || rt_.mem().read<std::uint64_t>(object) != vtable) return 0;
+        if (!object || age > stale || !same_class(object, vtable)) return 0;
         return object;
     }
 
@@ -1458,17 +1776,38 @@ private:
         return Rect{bar->x + bar->w + bar->h * 35 / 100, bar->y + bar->h / 2, 1, 1};
     }
 
+    // Packets in a column closer together than their rects are tall (the ten slots of Reflourished
+    // 1.5.0's Roman Gardens) are drawn smaller, by as much, from their top left corners.
+    template <class T> static Rect& rect_of(T& p) {
+        if constexpr (std::is_same_v<T, Rect>) return p;
+        else return p.second;
+    }
+    template <class T> static void fit_to_pitch(std::vector<T>& column) {
+        if (column.size() < 2) return;
+        const Rect& a = rect_of(column[0]);
+        const Rect& b = rect_of(column[1]);
+        int pitch = b.y - a.y;
+        if (b.x != a.x || pitch <= 0 || pitch >= a.h) return;
+        float k = static_cast<float>(pitch) / a.h;
+        for (auto& p : column) {
+            Rect& r = rect_of(p);
+            r.w = static_cast<std::int32_t>(r.w * k);
+            r.h = static_cast<std::int32_t>(r.h * k);
+        }
+    }
+
     // The seed bank's packets, top to bottom, then left to right.
     std::vector<Rect> packet_rects() {
         std::vector<Rect> packets;
         GuestAddr bank = live(bank_, bank_vtable_);
+        if (!bank && conveyor_vtable_) bank = live(conveyor_, conveyor_vtable_);
         if (!bank) return packets;
         auto& mem = rt_.mem();
         GuestAddr begin = mem.read<std::uint64_t>(bank + kChildren), end = mem.read<std::uint64_t>(bank + kChildren + 8);
         if (end < begin || end - begin > 64 * 8) return packets;
         for (GuestAddr h = begin; h < end; h += 8) {
             GuestAddr packet = resolve(h);
-            if (!packet || mem.read<std::uint64_t>(packet) != packet_vtable_) continue;
+            if (!packet || !same_class(packet, packet_vtable_)) continue;
             Rect r = screen_rect(packet);
             if (r.w <= 0 || r.h <= 0) continue;
             // The card is drawn a little up and left of the packet's rect (by about 7 and 3 of
@@ -1478,6 +1817,14 @@ private:
             packets.push_back(r);
         }
         std::stable_sort(packets.begin(), packets.end(), [](const Rect& a, const Rect& b) { return a.y != b.y ? a.y < b.y : a.x < b.x; });
+        fit_to_pitch(packets);
+        // Ten slots (Reflourished 1.5.0's Roman Gardens) run past the bottom of the screen: the
+        // last packet is cut off there, so its box and its touch go on the part that shows.
+        if (GuestAddr app = mem.read<std::uint64_t>(base_ + kApp)) {
+            std::int32_t ui_h = mem.read<std::int32_t>(app + kLogicalSize + 4);
+            for (auto& r : packets)
+                if (ui_h > 0 && r.y < ui_h && r.y + r.h > ui_h) r.h = ui_h - r.y;
+        }
         return packets;
     }
 
@@ -1521,7 +1868,8 @@ private:
 
     Runtime& rt_;
     GuestAddr base_;
-    GuestAddr bank_vtable_ = 0, packet_vtable_ = 0;
+    GuestAddr bank_vtable_ = 0, packet_vtable_ = 0, conveyor_vtable_ = 0;
+    Seen conveyor_;
     std::array<GuestAddr, kButtonCount> button_vtables_{};
     GuestAddr scratch_ = 0, touch_ = 0, rect_ = 0, ref_ = 0, rect_stub_ = 0, ref_stub_ = 0, blocked_ = 0;
     Seen bank_;
@@ -1562,7 +1910,13 @@ private:
     GuestAddr menu_sel_ = 0;
     // The seed chooser and its buttons; the grid packet the box is on, the slot LB/RB picked (from
     // 1), and when B or X went down there.
-    GuestAddr chooser_vtable_ = 0, view_vtable_ = 0, reload_vtable_ = 0, map_vtable_ = 0;
+    GuestAddr chooser_vtable_ = 0, view_vtable_ = 0, reload_vtable_ = 0, map_vtable_ = 0, npc_vtable_ = 0;
+    GuestAddr settings_vtable_ = 0, check_vtable_ = 0, scroll_vtable_ = 0;
+    GuestAddr universe_type_ = 0, world_type_ = 0, dialog_type_ = 0, main_menu_type_ = 0, pane_type_ = 0, entry_type_ = 0;
+    bool on_title_ = false;  // menu_dialog() found the title screen
+    GuestAddr world_target_ = 0;      // the world the pad last stepped to on the worlds' carousel
+    std::int64_t world_next_ = 0;     // when a held direction steps again
+    bool map_150_ = false;
     Seen chooser_, view_, reload_;
     GuestAddr ch_sel_ = 0;
     int ch_slot_ = 1;
@@ -1579,6 +1933,8 @@ private:
     bool pad_active_ = false;
     platform::PadType pad_type_ = platform::PadType::Xbox;
     int col_ = 0, row_ = 2, slot_ = 1;
+    std::int64_t select_since_ = 0;  // when Select went down in a level, while it's held
+    bool free_cursor_ = false;       // Select's free cursor in place of the lawn's tile box
     std::int64_t b_since_ = 0, y_since_ = 0, x_since_ = 0;  // when B, Y or X went down, while it's held and still to act
     int sweep_ = -1;
     bool mower_down_ = false;  // a finger held on a mower, while X is

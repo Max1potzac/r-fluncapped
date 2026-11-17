@@ -161,7 +161,12 @@ call it off. X held in the first column holds a finger on the row's mower until 
 the game wants for launching one.
 
 The seed bank's packets are drawn a little up and left of their rects (about 7 and 3 UI units on
-a 119x76 packet), so the gold box and the LB/RB labels are moved by as much.
+a 119x76 packet), so the gold box and the LB/RB labels are moved by as much. A conveyor level's
+bank is a `ConveyorSeedBank` (its update the bank's own), with the same `SeedPacket`s, so LB/RB
+step through what's on the belt, top to bottom, as it moves. A column of packets closer together than their rects are
+tall (Reflourished 1.5.0's ten slots in Roman Gardens) is drawn smaller by as much, so the
+brackets shrink by the spacing over the height, from the top left; at the usual spacing they're
+left as they are.
 
 Off the lawn the pad does other things. On the pause menu (`PauseDialog`, found as the widget, or
 a parent of the widget, that `GetWidgetAt` gives for the screen's middle) the d-pad moves a box
@@ -169,9 +174,55 @@ between its sliders and buttons: the dialog's Sexy widgets (`Sexy::Widget`: its 
 `std::list` at +0x8, its parent at +0x28, x, y, width and height relative to the parent at +0x44,
 shown at +0x70) that are a `Sexy::Slider` or a `PVZ2UIButton`, in rows top to bottom. Left and
 right move a slider a tenth (a finger down on its thumb, from its value at +0xc0, across and up),
-A taps a button, and B or Start are Android's back, which resumes.
+A taps a button, and B or Start are Android's back, which resumes. The settings (`SettingsDialog`,
+from the world map or a level) work the same way, with their `PVZ2UICheckBox`es as buttons; their
+rows are in a `PVZ2UIScrollingWidget`, so a row moved to that's out of its view is dragged in
+first, from the list's left edge (clear of the sliders), held still before letting go. A page of
+the dialog that's off the screen's side (where its sub-pages wait) is left out. Any other
+`PVZ2UIDialog` with a button in it (a level's objectives before the chooser, "are you sure?") is
+a menu the same way; the chooser's controls are only on while the chooser (or its look at the
+lawn button) is about, since Board state 3 starts before it, with the objectives up. Lookout (the
+chooser's look at the lawn) counts as the chooser while its button back (`ViewBoardOrZombiesButton`)
+is updated and the seed bank isn't (both are while plants go down before "let's rock" in
+Reflourished), whatever the Board's state says: after a tutorial's demonstration it reads as
+playing.
 
-The seed chooser (Board state 3) isn't made of widgets: `SeedChooser` is a UI object (drawn
+While a character talks (Crazy Dave's "tap to continue"), the widget under the screen's middle
+is the `CrazyNPCManager`: any button taps there, and does nothing else, so the seed chooser's or
+the lawn's controls only start once the talk is over.
+
+The worlds' carousel (`UniverseMap`) settles on a world whenever a finger lets go, so a scroll
+drag held across it (let go and put down again every stroke) jerks. There left and right tap the
+next `UniverseWorldButton` instead (the game glides to it), again every 0.3 s while held. The two
+classes have more than one vtable, so they're told by their type_info. Reflourished 1.5.0's
+libRFLib redraws the world map's buttons in another order (settings, almanac, arcade, Zen
+Garden); the shortcuts follow it when libRFLib has `UIWorldMapZenGardenButton`.
+
+Select held two seconds in a level (a dial at the screen's top) turns the free cursor on: `mode()`
+gives Cursor where it would give Lawn, the d-pad and left stick move the glove (there's nothing to
+scroll), LB/RB still pick the packet, A taps it first and then touches at the glove, and the
+right stick's powerup flick is off. Held again, the tile box is back. In the seed chooser it's the
+glove too (from the screen's middle), in place of the chooser's boxes. The title screen
+(`MainMenu`) is a menu of its `PVZ2UIButton`s, starting on the one nearest the bottom's middle
+(play); LB/RB swipe across the middle, which moves the banner carousel (`DraperCarouselAdWidget`)
+one banner. Its pages (`ProfilesDialog`, `EditProfileWidget`) slide in on a
+`PVZ2UIScrollingPaneWidget`, the others waiting off its side, so a page under the screen's middle
+is the menu instead, its items placed by adding up its parents' positions; the profiles' rows
+(`ProfilesListEntry`) are items, a tap on the row picking it.
+
+The controller's cursor off the lawn is a glove (`assets/cursor.png`, embedded by
+`tools/gen_cursor.py`; it presses while A's held), drawn like the hints: scissored clears, a run
+of one colour at a time, the edges cut at half transparency. `--custom-cursor` makes it the
+mouse's cursor too (`SDL_CreateColorCursor`), at the same size: 0.045 of the letterboxed game's
+height, remade when the window's resized. Moving the mouse hides the controller's glove.
+
+Reflourished 1.5.0's libRFLib gives the seed chooser a vtable of its own (a copy on the heap, with
+no type_info), so an object counts as one of the watched classes when its vtable is the class's or
+has the same first two slots and update slot.
+
+The seed chooser (Board state 3, or drawn in the last 150 ms whatever the state: after a
+tutorial's demonstration it comes up with the Board already in a playing state) isn't made of
+widgets: `SeedChooser` is a UI object (drawn
 through vtable slot 13, which is how it's seen) whose children are `SeedPacket`s, both the ones to
 pick (with their rects scrolled with the list) and the ones picked, in the slots down the left (an
 empty slot's at 0, 0). The d-pad moves a box over the packets to pick; one out of the list's view
@@ -228,6 +279,13 @@ structs differ from Windows' (`AF_INET6`, the poll bits, `SOL_SOCKET`, errno val
 `socket()` and `getaddrinfo()` fail and the Java HTTP requests fail, and the game takes its
 offline path.
 
+Images the game fetches this way (the title screen's banners, `cdn/*.png`) are downloaded whole
+before the game sees them, and kept in `<data>/image-cache`. When a later download fails or is
+cut off (a slow or blocked server, `--offline`), the game gets the kept copy as a 200; a good
+download replaces it. With a kept copy the game gets it at once (it gives up on a slow server
+before the download would), and the download carries on in the background for the next launch,
+so a changed banner shows from the launch after it gets through.
+
 To test against a local copy of a server, set `RFU_URL_REWRITE=<prefix>=<replacement>`, e.g.
 `RFU_URL_REWRITE=https://reflourished.ducnguyen.org=http://127.0.0.1:8000`.
 
@@ -268,6 +326,27 @@ call's Java arguments decoded from whichever of the three calling conventions na
   to `data/`, `/sdcard/Android/data/<package>` to `external/`, the rest of `/sdcard` to `sdcard/`,
   and the OBB to `/sdcard/Android/obb/<package>/main.<version>.<package>.obb`.
   `Activity.getPreferences()` is `data/shared_prefs/PvZ2GameActivity.prefs`.
+- **Reflourished's FilePickerHelper (1.5.0+).** `getObbDir`/`getPrivateDir` give the Android
+  paths. `importFile(name)`, `importFileToDir(dir)` and `importZip(dir)` open the desktop's Open
+  window before the next frame (`src/platform/file_dialog.cpp`: `GetOpenFileNameW`, zenity
+  elsewhere) and copy or unpack the picked file into the external files folder, where the game
+  looks for it (custom levels go to `No_Backup/CDN.<version>/levels/quests/custom<n>.json`, a save
+  to `No_Backup/pp.dat.imported`); `exportFile`/`exportFolder` open a Save As window
+  (`src/android/file_picker.cpp`). `forceFullAppRestart` closes the game with exit code 3, which
+  the launcher answers by starting it again.
+- **OBB patches.** At start-up libRFLib looks in the OBB folder for `<obb>.patch0`, `.patch1`, ...
+  (rsbpatch over VCDiff), writes the patched OBB as `<obb>.new` and renames it over the OBB. The
+  OBB is mounted on its own, so directory listings add the files mounted directly in a folder
+  (`Vfs::mounted_children`), and `rename` copies when the OBB is on another drive and, when the
+  target is open (Windows won't replace a file in use), replaces it once the game closes
+  (`close_guest_files`). Java's ObbUpdater, which downloads the patches, is the launcher's
+  `ObbUpdate`.
+- **Library updates.** Reflourished 1.5.0+ downloads newer builds of libRFLib itself (a gzipped tar
+  from its `libcdn`), installs the `.so` as `files/libRFLib.so` and restarts. Its Java side loads
+  that copy instead of the APK's, and so does rfu (`staged_mod_library` in `src/android/app.cpp`),
+  with the same safety net: a copy that starts 3 times without the game confirming it
+  (`files/_lib_boot`) is dropped, unless `files/liboverride.txt` exists. The launcher deletes the
+  staged copy when you update the game, so an old download can't shadow the new APK's library.
 - **Web requests.** Besides its CDN client, the game makes some requests through Java
   (`AndroidHttpTransaction`, over `HttpURLConnection`). `src/android/java_http.cpp` runs them on
   four worker threads with the host's HTTP client (`src/platform/http.cpp`: WinHTTP on Windows,

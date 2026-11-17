@@ -39,6 +39,7 @@ public static class RfuCommand
         }
 
         if (s.HoverCollect) args.Add("--hover");
+        if (s.CustomCursor) args.Add("--custom-cursor");
         if (s.FixAnimations) args.Add("--fix-animations");
         bool keybinds = s.Keybinds && File.Exists(game.KeybindsPath);
         if (keybinds) args.AddRange(["--keybinds", game.KeybindsPath]);

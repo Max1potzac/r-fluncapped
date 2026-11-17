@@ -398,6 +398,8 @@ void register_libc_misc(ShimRegistry& reg) {
         c.ret(0);
     });
     reg.add("getpid", [](CallContext& c) { c.ret(kPid); });
+    // The thread's id, as syscall(SYS_gettid) gives it (the main thread's is the pid).
+    reg.add("gettid", [](CallContext& c) { c.ret(c.thread().id == 1 ? kPid : kPid + c.thread().id); });
     reg.add("getppid", [](CallContext& c) { c.ret(1); });
     reg.add("geteuid", [](CallContext& c) { c.ret(10123); });
     reg.add("gethostname", [](CallContext& c) {

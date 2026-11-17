@@ -1,10 +1,12 @@
 #include "android/app.h"
 
 #include "android/apk.h"
+#include "android/file_picker.h"
 #include "android/java_http.h"
 #include "core/log.h"
 #include "core/trace.h"
 #include "jni/jni.h"
+#include "platform/file_dialog.h"
 #include "runtime.h"
 #include "shims/common.h"
 
@@ -228,6 +230,7 @@ struct App {
     float view_scale = 0.5f;
     int framerate = 1000;
     bool quit = false;
+    bool restart = false;  // FilePickerHelper.forceFullAppRestart
     std::string device_id;
 
     // The game's Java classes: SexyAppFramework's, or PvZ2 China's fork.
@@ -658,6 +661,49 @@ void App::implement_java() {
     impl("com/popcap/SexyAppFramework/AndroidNotification", "getScheduledLocalNotificationsData",
          [](jni::JavaCall& call) -> std::uint64_t { return call.jni.new_string("[]"); });
 
+    // --- FilePickerHelper (Reflourished 1.5.0+) -----------------------------------------------
+    // Where the OBB and the private files are, and importing and exporting levels and saves
+    // through Android's document picker, which on the PC is the desktop's Open / Save as window.
+    // On Android the picker opens and the call returns at once; the file turns up once picked.
+    // Here the window opens before the next frame (the game waits while it's open).
+    impl("FilePickerHelper", "getObbDir", [this, ret_str](jni::JavaCall&) { return ret_str(paths.obb_dir); });
+    impl("FilePickerHelper", "forceFullAppRestart", [this](jni::JavaCall&) -> std::uint64_t {
+        log::info("java: FilePickerHelper.forceFullAppRestart: closing, to be started again");
+        quit = restart = true;
+        return 0;
+    });
+    impl("FilePickerHelper", "getPrivateDir", [this, ret_str](jni::JavaCall&) { return ret_str(paths.internal + "/files"); });
+    auto external_files = [this] { return rt.vfs().to_host(paths.external + "/files").value_or(options.data_dir / "external" / "files"); };
+    // Import: an Open window, then the copy into the game's files (the game looks for the file
+    // after). Export: a Save as window, then the copy out of them.
+    auto importer = [this, impl, external_files](const char* name, auto action) {
+        impl("FilePickerHelper", name, [=, this](jni::JavaCall& j) -> std::uint64_t {
+            std::string rel = j.string_arg(0);
+            log::info("java: FilePickerHelper.{}({})", name, rel);
+            bool zip = std::string_view(name) == "importZip";
+            run_on_ui([=] {
+                auto picked = platform::open_file_dialog("Import " + file_picker::what(rel), zip ? "zip" : file_picker::import_extension(rel));
+                if (picked) action(*picked, external_files(), rel);
+            });
+            return 0;
+        });
+    };
+    importer("importFile", file_picker::import_file);
+    importer("importFileToDir", file_picker::import_file_to_dir);
+    importer("importZip", file_picker::import_zip);
+    auto exporter = [this, impl, external_files](const char* name, auto suggest, auto action) {
+        impl("FilePickerHelper", name, [=, this](jni::JavaCall& j) -> std::uint64_t {
+            std::string rel = j.string_arg(0);
+            log::info("java: FilePickerHelper.{}({})", name, rel);
+            run_on_ui([=] {
+                if (auto to = platform::save_file_dialog("Export " + file_picker::what(rel), suggest(rel))) action(external_files(), rel, *to);
+            });
+            return 0;
+        });
+    };
+    exporter("exportFile", file_picker::export_file_name, file_picker::export_file);
+    exporter("exportFolder", file_picker::export_folder_name, file_picker::export_folder);
+
     // --- SexyAppFrameworkActivity (statics) ---------------------------------------------
     for (const char* cls : {kFrameworkActivity, kGameActivity}) {
         impl(cls, "instance", [this](jni::JavaCall&) -> std::uint64_t { return activity; });
@@ -1014,6 +1060,8 @@ void App::handle(const platform::Input& input) {
             } else if constexpr (std::is_same_v<T, platform::TouchInput>) {
                 if (app_has_focus && !splash_showing) events.touch(in);
                 if (options.game_mouse) options.game_mouse();
+            } else if constexpr (std::is_same_v<T, platform::MouseInput>) {
+                if (options.game_mouse) options.game_mouse();  // hides the controller's glove
             } else if constexpr (std::is_same_v<T, platform::GameKeyInput>) {
                 if (options.game_keys && app_has_focus && !splash_showing) options.game_keys(in);
             } else if constexpr (std::is_same_v<T, platform::PadInput>) {
@@ -1041,7 +1089,8 @@ int App::run() {
     }
     implement_java();
     if (china) implement_java_china();
-    implement_http(rt, rt.options().network, china ? std::string(kCnPackage) + "AndroidHttpTransaction" : "com/popcap/SexyAppFramework/AndroidHttpTransaction");
+    implement_http(rt, rt.options().network, china ? std::string(kCnPackage) + "AndroidHttpTransaction" : "com/popcap/SexyAppFramework/AndroidHttpTransaction",
+                   options.data_dir / "image-cache");
 
     if (china) {
         start_china();
@@ -1168,7 +1217,7 @@ int App::run() {
         call(cls_game_app, "Native_applicationDidEnterBackground", game_app);
         focus_state = app_has_focus = app_focused = false;
         call(cls_game_app, "Native_applicationWillTerminate", game_app);
-        return 0;
+        return restart ? kRestartExitCode : 0;
     }
     got_resumed_event = false;
     call(cls_game_app, "Native_NotifyAppRunning", game_app, {0});
@@ -1176,7 +1225,7 @@ int App::run() {
     call(cls_game_app, "Native_applicationDidEnterBackground", game_app);
     call(cls_surface, "PumpMessageQueue", gl_view);
     call(cls_game_app, "Native_applicationWillTerminate", game_app);
-    return 0;
+    return restart ? kRestartExitCode : 0;
 }
 
 }  // namespace
@@ -1210,6 +1259,32 @@ void mount_storage(Runtime& rt, const AppOptions& options) {
         vfs.mount(paths.obb_file, options.obb);
         vfs.mount("/sdcard/Android/obb/" + package + "/" + fs::path(paths.obb_file).filename().string(), options.obb);
     }
+}
+
+std::optional<fs::path> staged_mod_library(const AppOptions& options, const std::string& name) {
+    if (name != "libRFLib.so") return std::nullopt;
+    fs::path files = options.data_dir / "data" / "files", staged = files / name, boot = files / "_lib_boot";
+    std::error_code ec;
+    if (!fs::exists(staged, ec)) return std::nullopt;
+    if (!fs::exists(files / "liboverride.txt", ec)) {
+        int boots = 0;
+        if (std::ifstream in(boot); in) in >> boots;
+        if (boots >= 3) {
+            log::warn("the downloaded {} started {} times without the game confirming it: using the APK's", name, boots);
+            fs::remove(staged, ec);
+            fs::remove(boot, ec);
+            return std::nullopt;
+        }
+        std::ofstream(boot, std::ios::trunc) << boots + 1;
+    }
+    if (fs::file_size(staged, ec) == 0 || ec) return std::nullopt;
+    return staged;
+}
+
+void drop_staged_mod_library(const AppOptions& options, const std::string& name) {
+    fs::path files = options.data_dir / "data" / "files";
+    std::error_code ec;
+    if (!fs::exists(files / "liboverride.txt", ec)) fs::remove(files / name, ec);
 }
 
 int run_app(Runtime& rt, const AppOptions& options) {

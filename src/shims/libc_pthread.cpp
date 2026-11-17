@@ -273,6 +273,8 @@ void register_libc_pthread(ShimRegistry& reg) {
     });
     reg.add("pthread_self", [](CallContext& c) { c.ret(c.thread().handle); });
     reg.add("pthread_equal", [](CallContext& c) { c.ret(c.x(0) == c.x(1) ? 1 : 0); });
+    // A thread's name, for debuggers: nothing to do.
+    reg.add("pthread_setname_np", [](CallContext& c) { c.ret(0); });
 
     // pthread_attr_t: u32 flags, void* stack_base, size_t stack_size, size_t guard_size,
     // s32 sched_policy, s32 sched_priority.

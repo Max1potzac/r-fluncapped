@@ -10,11 +10,13 @@ sealed class MainForm : Form, ILaunchUi
     readonly string _gamesDir;
     readonly LaunchFlow _flow;
     readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
+    readonly HttpClient _downloads = new() { Timeout = Timeout.InfiniteTimeSpan };  // OBB updates can be a gigabyte
 
     List<GameFolder> _games = [];
     GameFolder? _game;
     bool _loading;  // filling the controls in, not the person changing them
     readonly Dictionary<string, Process> _running = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, List<DateTime>> _restarts = new(StringComparer.OrdinalIgnoreCase);
 
     // games
     readonly ListView _list = new() { View = View.Tile, MultiSelect = false, HideSelection = false, Dock = DockStyle.Fill };
@@ -32,6 +34,7 @@ sealed class MainForm : Form, ILaunchUi
     readonly CheckBox _vsync = new() { Text = "VSync", AutoSize = true };
     readonly CheckBox _angle = new() { Text = "Draw through ANGLE", AutoSize = true };
     readonly CheckBox _offline = new() { Text = "Offline (no CDN, no update check)", AutoSize = true };
+    readonly CheckBox _obbUpdates = new() { Text = "Download OBB updates (Reflourished)", AutoSize = true };
 
     readonly CheckedListBox _injections = new() { CheckOnClick = true, Height = 110, Width = 360, IntegralHeight = false };
     readonly CheckedListBox _mods = new() { CheckOnClick = true, Height = 110, Width = 360, IntegralHeight = false };
@@ -47,12 +50,13 @@ sealed class MainForm : Form, ILaunchUi
     const string KeybindsItem = "Keybinds (keybinds.txt)";
     const string KeyHintsItem = "Show keybind hints (keys on seed packets and buttons)";
     const string ControllerItem = "Controller support (Xbox, PlayStation, Switch)";
+    const string CursorItem = "Glove cursor in place of the Windows one";
 
     public MainForm(string launcherDir)
     {
         _launcherDir = launcherDir;
         _gamesDir = Path.Combine(launcherDir, "games");
-        _flow = new LaunchFlow(launcherDir, _http, this);
+        _flow = new LaunchFlow(launcherDir, _http, this, _downloads);
 
         Text = "PvZ2 Launcher";
         Size = new Size(1000, 760);
@@ -74,6 +78,7 @@ sealed class MainForm : Form, ILaunchUi
 
         var gameButtons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
         gameButtons.Controls.Add(MakeButton("Add game...", async () => await AddGameAsync()));
+        gameButtons.Controls.Add(MakeButton("Remove game...", async () => await RemoveGameAsync()));
         gameButtons.Controls.Add(MakeButton("Games folder", () => OpenFolder(_gamesDir)));
         gameButtons.Controls.Add(MakeButton("Refresh", async () => await RefreshGamesAsync()));
         var left = new Panel { Dock = DockStyle.Fill };
@@ -101,14 +106,15 @@ sealed class MainForm : Form, ILaunchUi
         var injections = Group("Code injections and fixes", _injections,
             Row(MakeButton("Edit keybinds", EditKeybinds), MakeButton("Controller settings...", ControllerSettings),
                 MakeButton("Patches folder", () => { if (_game != null) OpenFolder(_game.PatchesDir); })),
-            _offline);
+            Row(_offline, _obbUpdates));
 
         var content = Group("Custom content (the lowest one wins where two change the same file)", _mods,
             Row(MakeButton("Add custom content...", AddContent), MakeButton("Up", () => MoveMod(-1)), MakeButton("Down", () => MoveMod(1)),
                 MakeButton("Mods folder", () => { if (_game != null) OpenFolder(_game.ModsDir); })),
             _askContent);
 
-        var actions = Row(_play, MakeButton("Unpack resources", async () => await UnpackResourcesAsync()),
+        var actions = Row(_play, MakeButton("Update game...", async () => await UpdateGameAsync()),
+            MakeButton("Unpack resources", async () => await UnpackResourcesAsync()),
             MakeButton("Game folder", () => { if (_game != null) OpenFolder(_game.Dir); }),
             MakeButton("Last log", () => { if (_game != null && File.Exists(_game.LogPath)) Open(_game.LogPath); }));
         _play.Click += async (_, _) => await PlayAsync();
@@ -145,6 +151,7 @@ sealed class MainForm : Form, ILaunchUi
         _vsync.CheckedChanged += (_, _) => Change(s => s.VSync = _vsync.Checked);
         _angle.CheckedChanged += (_, _) => Change(s => s.Angle = _angle.Checked);
         _offline.CheckedChanged += (_, _) => Change(s => s.Offline = _offline.Checked);
+        _obbUpdates.CheckedChanged += (_, _) => Change(s => s.ObbUpdates = _obbUpdates.Checked);
         _askContent.CheckedChanged += (_, _) => Change(s => s.AskForCustomContent = _askContent.Checked);
         // ItemCheck fires before the box changes; read the lists once it has
         _injections.ItemCheck += (_, _) => BeginInvoke(() => Change(ReadInjections));
@@ -227,6 +234,8 @@ sealed class MainForm : Form, ILaunchUi
             _vsync.Checked = s.VSync;
             _angle.Checked = s.Angle;
             _offline.Checked = s.Offline;
+            _obbUpdates.Checked = s.ObbUpdates;
+            _obbUpdates.Visible = ObbUpdate.ConfigUrl(game) != null;
             _askContent.Checked = s.AskForCustomContent;
 
             _injections.Items.Clear();
@@ -235,6 +244,7 @@ sealed class MainForm : Form, ILaunchUi
             _injections.Items.Add(KeybindsItem, s.Keybinds);
             _injections.Items.Add(KeyHintsItem, s.KeyHints);
             _injections.Items.Add(ControllerItem, s.Controller);
+            _injections.Items.Add(CursorItem, s.CustomCursor);
             foreach (var p in game.PatchFiles())
                 _injections.Items.Add(new PatchItem(p), s.Patches.Contains(p.FileName, StringComparer.OrdinalIgnoreCase));
 
@@ -277,6 +287,7 @@ sealed class MainForm : Form, ILaunchUi
                 case KeybindsItem: s.Keybinds = on; break;
                 case KeyHintsItem: s.KeyHints = on; break;
                 case ControllerItem: s.Controller = on; break;
+                case CursorItem: s.CustomCursor = on; break;
                 case PatchItem p when on: s.Patches.Add(p.Patch.FileName); break;
             }
         }
@@ -319,14 +330,14 @@ sealed class MainForm : Form, ILaunchUi
 
     // --- actions --------------------------------------------------------------------------------
 
-    async Task PlayAsync()
+    async Task PlayAsync() { if (_game != null) await PlayAsync(_game, false); }
+
+    async Task PlayAsync(GameFolder game, bool restart)
     {
-        if (_game == null) return;
-        var game = _game;
         _play.Enabled = false;
         try
         {
-            var process = await _flow.RunAsync(game);
+            var process = await _flow.RunAsync(game, restart);
             Select(game);  // the flow may have added content or a new version
             if (process == null) return;
             _running[game.Dir] = process;
@@ -348,6 +359,22 @@ sealed class MainForm : Form, ILaunchUi
     {
         _running.Remove(game.Dir);
         int code = process.ExitCode;
+        if (code == LaunchFlow.RestartExitCode)
+        {
+            // the game asked to be started again (a save imported, its OBB patched, or its own
+            // library updated), but not over and over
+            var recent = _restarts.TryGetValue(game.Dir, out var r) ? r : _restarts[game.Dir] = new List<DateTime>();
+            recent.RemoveAll(t => DateTime.Now - t > TimeSpan.FromMinutes(2));
+            if (recent.Count < 3)
+            {
+                recent.Add(DateTime.Now);
+                Log($"{game.DisplayName} asked to be restarted");
+                _ = PlayAsync(game, true);
+                return;
+            }
+            Log($"{game.DisplayName} asked to be restarted again, 3 times in 2 minutes: not starting it this time");
+            return;
+        }
         Log($"{game.DisplayName} closed{(code != 0 ? $" with exit code {code}" : "")}");
         if (code != 0 && File.Exists(game.LogPath))
         {
@@ -361,18 +388,77 @@ sealed class MainForm : Form, ILaunchUi
     {
         var apk = PickFile("The game's APK", "Android app (*.apk)|*.apk|All files|*.*");
         if (apk == null) return;
-        string? obb = null;
-        // PvZ2 China has no OBB (its data is in the APK), so don't ask for one.
-        if (GameFolder.ApkIsChina(apk))
-            Log("PvZ2 China APK: no OBB needed, its data is in the APK.");
-        else
-        {
-            obb = PickFile("The game's OBB", "Game data (*.obb)|*.obb|All files|*.*", Path.GetDirectoryName(apk));
-            if (obb == null) return;
-        }
-        var game = await _flow.AddGameAsync(_gamesDir, Path.GetFileNameWithoutExtension(apk), apk, obb);
+        if (ObbFor(apk, "The game's OBB") is not { } obb) return;
+        var game = await _flow.AddGameAsync(_gamesDir, Path.GetFileNameWithoutExtension(apk), apk, obb == "" ? null : obb);
         if (game == null) return;
         _game = game;
+        await RefreshGamesAsync();
+    }
+
+    /// The OBB to go with an APK: "" when there's none to ask for (PvZ2 China has its data in the
+    /// APK; Reflourished 1.5.0+ downloads its own), null when the person backs out.
+    string? ObbFor(string apk, string title)
+    {
+        if (GameFolder.ApkIsChina(apk))
+        {
+            Log("PvZ2 China APK: no OBB needed, its data is in the APK.");
+            return "";
+        }
+        if (ObbUpdate.ConfigUrlInApk(apk) != null)
+        {
+            Log("this APK downloads its own OBB: the launcher does that for it.");
+            return "";
+        }
+        return PickFile(title, "Game data (*.obb)|*.obb|All files|*.*", Path.GetDirectoryName(apk));
+    }
+
+    /// A new version of the selected game: its APK, and its OBB unless the APK fetches its own.
+    async Task UpdateGameAsync()
+    {
+        if (_game is not { } game) return;
+        if (_running.ContainsKey(game.Dir)) { ShowProblem($"Close {game.DisplayName} first."); return; }
+        if (AskForNewVersion(game) is not { } files) return;
+        _play.Enabled = false;
+        try
+        {
+            if (await _flow.InstallVersionAsync(game, files.Apk, files.Obb))
+                Log($"{game.DisplayName} is updated");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            ShowProblem($"Couldn't update the game: {e.Message}");
+        }
+        await RefreshGamesAsync();
+    }
+
+    /// Deletes the selected game's folder (to the Recycle Bin), saves and mods included.
+    async Task RemoveGameAsync()
+    {
+        if (_game is not { } game) return;
+        if (_running.ContainsKey(game.Dir)) { ShowProblem($"Close {game.DisplayName} first."); return; }
+        var remove = new TaskDialogButton("Remove");
+        var page = new TaskDialogPage
+        {
+            Caption = game.DisplayName,
+            Heading = $"Remove {game.DisplayName}?",
+            Text = $"Its folder ({game.Dir}) goes to the Recycle Bin: the APK, the OBB, your saves, its mods and settings. " +
+                   "Export your save from the game first (Settings > Import/Export Files) if you want to keep it apart.",
+            Icon = TaskDialogIcon.Warning,
+            Buttons = { remove, TaskDialogButton.Cancel },
+            DefaultButton = TaskDialogButton.Cancel,
+        };
+        if (TaskDialog.ShowDialog(this, page) != remove) return;
+        try
+        {
+            Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(game.Dir, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            Log($"removed {game.DisplayName} ({game.Dir} is in the Recycle Bin)");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
+        {
+            ShowProblem($"Couldn't remove {game.Dir}: {e.Message}");
+        }
+        _game = null;
         await RefreshGamesAsync();
     }
 
@@ -455,6 +541,19 @@ sealed class MainForm : Form, ILaunchUi
         return answer == choose ? PickFolder("The custom content's folder") : null;
     }
 
+    public bool Confirm(string message)
+    {
+        var page = new TaskDialogPage
+        {
+            Caption = "PvZ2 Launcher",
+            Text = message,
+            Icon = TaskDialogIcon.Information,
+            Buttons = { TaskDialogButton.Yes, TaskDialogButton.No },
+            DefaultButton = TaskDialogButton.Yes,
+        };
+        return TaskDialog.ShowDialog(this, page) == TaskDialogButton.Yes;
+    }
+
     public UpdateChoice AskAboutUpdate(GameFolder game, UpdateCheck.Result result)
     {
         var update = new TaskDialogButton("Give it the new version...");
@@ -473,13 +572,16 @@ sealed class MainForm : Form, ILaunchUi
         return answer == update ? UpdateChoice.GetNewVersion : answer == play ? UpdateChoice.PlayAnyway : UpdateChoice.Cancel;
     }
 
-    public (string Apk, string Obb)? AskForNewVersion(GameFolder game)
+    public (string Apk, string? Obb)? AskForNewVersion(GameFolder game)
     {
         var apk = PickFile($"The new {game.DisplayName} APK", "Android app (*.apk)|*.apk|All files|*.*");
         if (apk == null) return null;
-        var obb = PickFile($"The new {game.DisplayName} OBB", "Game data (*.obb)|*.obb|All files|*.*", Path.GetDirectoryName(apk));
-        return obb == null ? null : (apk, obb);
+        if (ObbFor(apk, $"The new {game.DisplayName} OBB") is not { } obb) return null;
+        return (apk, obb == "" ? null : obb);
     }
+
+    public string? AskForObb(GameFolder game) =>
+        PickFile($"The OBB couldn't be downloaded: pick {game.Info?.Obb ?? "the game's OBB"}", "Game data (*.obb)|*.obb|All files|*.*");
 
     public void ShowProblem(string message)
     {

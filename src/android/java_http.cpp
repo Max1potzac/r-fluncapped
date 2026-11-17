@@ -6,6 +6,7 @@
 #include "platform/http.h"
 #include "runtime.h"
 
+#include <cctype>
 #include <cstdlib>
 #include <condition_variable>
 #include <deque>
@@ -42,7 +43,53 @@ struct HttpState {
     std::map<GuestAddr, std::shared_ptr<Transaction>> transactions;
     std::deque<std::shared_ptr<Transaction>> queue;
     std::vector<std::thread> workers;
+    std::filesystem::path cache_dir;  // images kept from their last good download; empty: none
 };
+
+// Images the game fetches (the title screen's banners): kept from their last good download and
+// handed back when a later one fails (a slow server, a blocked connection, offline). A good
+// download replaces the copy, so a changed banner shows once it gets through.
+bool cacheable(const platform::HttpRequest& r) {
+    if (r.method != "GET" || r.has_body) return false;
+    std::string path = r.url.substr(0, r.url.find_first_of("?#"));
+    for (auto& c : path) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (const char* ext : {".png", ".jpg", ".jpeg", ".webp"})
+        if (path.ends_with(ext)) return true;
+    return false;
+}
+
+std::filesystem::path cache_path(const HttpState& s, const std::string& url) {
+    std::string name;
+    std::string_view rest(url);
+    if (auto scheme = rest.find("://"); scheme != std::string_view::npos) rest.remove_prefix(scheme + 3);
+    for (char c : rest.substr(0, rest.find_first_of("?#"))) name += std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-' ? c : '_';
+    if (name.size() > 180) name = name.substr(name.size() - 180);
+    return s.cache_dir / name;
+}
+
+std::optional<std::string> read_cache(const HttpState& s, const std::string& url) {
+    std::ifstream in(cache_path(s, url), std::ios::binary);
+    if (!in) return std::nullopt;
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+void write_cache(const HttpState& s, const std::string& url, const std::vector<std::uint8_t>& body) {
+    std::error_code ec;
+    std::filesystem::create_directories(s.cache_dir, ec);
+    auto path = cache_path(s, url);
+    auto tmp = path;
+    tmp += ".part";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) return;
+        out.write(reinterpret_cast<const char*>(body.data()), static_cast<std::streamsize>(body.size()));
+        if (!out) return;
+    }
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) std::filesystem::remove(tmp, ec);
+}
 
 std::shared_ptr<Transaction> find(HttpState& s, GuestAddr self) {
     std::lock_guard lock(s.mutex);
@@ -335,8 +382,83 @@ void run(HttpState& s, Transaction& t) {
             return;
         }
     }
+    // A whole response at once, through the same callbacks a streamed one uses.
+    auto deliver = [&](const platform::HttpResponse& r, const std::uint8_t* data, std::size_t size) {
+        {
+            std::lock_guard lock(t.mutex);
+            t.response = r;
+        }
+        fire("HttpReceivedResponse");
+        for (std::size_t sent = 0; sent < size && t.native.load();) {
+            std::size_t chunk = std::min<std::size_t>(size - sent, 16384);
+            s.rt->mem().write_bytes(jni.array_data(t.buffer), data + sent, chunk);
+            fire("HttpReceivedData", {t.buffer, chunk});
+            sent += chunk;
+        }
+        fire("HttpTransactionComplete");
+    };
+    auto from_cache = [&]() {
+        auto body = read_cache(s, t.request.url);
+        if (!body) return false;
+        platform::HttpResponse r;
+        r.status = 200;
+        r.status_line = "OK";
+        r.content_length = static_cast<std::int64_t>(body->size());
+        r.headers.emplace_back("Content-Length", std::to_string(body->size()));
+        deliver(r, reinterpret_cast<const std::uint8_t*>(body->data()), body->size());
+        return true;
+    };
+    bool cache = !s.cache_dir.empty() && cacheable(t.request);
     if (!s.online) {
+        if (cache && from_cache()) return;
         fire("HttpTransactionError");
+        return;
+    }
+    if (cache && from_cache()) {
+        // The kept copy at once (the game gives up on a slow server before the download does),
+        // then the download in the background, for the next launch.
+        std::thread([&s, request = t.request] {
+            platform::HttpResponse response;
+            std::vector<std::uint8_t> body;
+            platform::HttpHandler buffered;
+            buffered.on_response = [&](const platform::HttpResponse& r) { response = r; };
+            buffered.on_data = [&](const std::uint8_t* data, std::size_t n) { body.insert(body.end(), data, data + n); };
+            std::atomic<bool> cancel{false};
+            std::string error;
+            if (platform::http_perform(request, buffered, cancel, error) && response.status == 200 &&
+                (response.content_length < 0 || static_cast<std::size_t>(response.content_length) == body.size()))
+                write_cache(s, request.url, body);
+            else
+                log::debug("http: {}: no new copy ({})", request.url, error.empty() ? "HTTP " + std::to_string(response.status) : error);
+        }).detach();
+        return;
+    }
+    if (cache) {
+        // Downloaded whole before the game sees any of it, so a failure part way can still be
+        // answered with the kept copy.
+        platform::HttpResponse response;
+        std::vector<std::uint8_t> body;
+        platform::HttpHandler buffered;
+        buffered.on_response = [&](const platform::HttpResponse& r) { response = r; };
+        buffered.on_data = [&](const std::uint8_t* data, std::size_t n) { body.insert(body.end(), data, data + n); };
+        std::string error;
+        bool ok = platform::http_perform(t.request, buffered, t.cancel, error);
+        if (t.cancel.load()) return;
+        if (ok && response.status == 200 && (response.content_length < 0 || static_cast<std::size_t>(response.content_length) == body.size())) {
+            write_cache(s, t.request.url, body);
+            deliver(response, body.data(), body.size());
+            return;
+        }
+        if (from_cache()) {
+            log::info("http: {} {}; using the copy from its last download", t.request.url, ok ? "answered " + std::to_string(response.status) : "failed: " + error);
+            return;
+        }
+        if (ok) {
+            deliver(response, body.data(), body.size());
+        } else {
+            log::info("http: {} failed: {}", t.request.url, error);
+            fire("HttpTransactionError");
+        }
         return;
     }
     platform::HttpHandler handler;
@@ -385,8 +507,9 @@ void worker(HttpState& s) {
 
 }  // namespace
 
-void implement_http(Runtime& rt, bool online, const std::string& transaction_class) {
+void implement_http(Runtime& rt, bool online, const std::string& transaction_class, const std::filesystem::path& cache_dir) {
     auto& s = rt.state<HttpState>();
+    s.cache_dir = cache_dir;
     s.rt = &rt;
     s.cls = transaction_class;
     s.online = online && platform::http_available();

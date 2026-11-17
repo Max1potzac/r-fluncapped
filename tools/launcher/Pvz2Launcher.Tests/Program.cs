@@ -24,6 +24,7 @@ var tests = new (string Name, Action Run)[]
     ("mods", ModsTest),
     ("level pack", LevelPackTest),
     ("update check", UpdateCheckTest),
+    ("obb update", ObbUpdateTest),
     ("rfu command", RfuCommandTest),
     ("controller setup", PadSetupTest),
 };
@@ -64,6 +65,12 @@ void Versions()
     Expect(UpdateCheck.CompareVersions("1.4", "1.4.0") == 0, "1.4 == 1.4.0");
     Expect(UpdateCheck.CompareVersions("1.10.0", "1.9.9") > 0, "1.10.0 > 1.9.9");
     Expect(UpdateCheck.CompareVersions("1.4.2", "1.5.0b") < 0, "1.4.2 < 1.5.0b");
+    Expect(LaunchFlow.VersionInName("PvZ2 Reflourished 1.5.0") == "1.5.0", "version in a name");
+    Expect(LaunchFlow.VersionInName("PvZ2 Reflourished") == null, "no version in a name");
+    Expect(LaunchFlow.RenamedForVersion("PvZ2 Reflourished 1.4.2", "1.5.0") == "PvZ2 Reflourished 1.5.0", "renamed for 1.5.0");
+    Expect(LaunchFlow.RenamedForVersion("PvZ2 Reflourished 1.5.0", "1.5.0") == null, "same version: no rename");
+    Expect(LaunchFlow.RenamedForVersion("My PvZ2", "1.5.0") == null, "no version: no rename");
+    Expect(LaunchFlow.RenamedForVersion("PvZ2 Reflourished 1.4.2", null) == null, "APK name without a version: no rename");
 }
 
 GameFolder MakeGame(string name, string version = "1.4.2")
@@ -121,6 +128,12 @@ void GameFolderTest()
 
     g.EnsureKeybindsFile();
     Expect(File.ReadAllText(g.KeybindsPath).Contains("tap"), "keybinds sample");
+    Expect(File.ReadAllText(g.KeybindsPath).Contains("0 seed 10"), "keybinds sample: ten seed slots");
+    File.WriteAllText(g.KeybindsPath, File.ReadAllText(g.KeybindsPath).Replace("0 seed 10\n", ""));
+    g.EnsureKeybindsFile();
+    Expect(File.ReadAllLines(g.KeybindsPath).SkipWhile(l => l != "9 seed 9").Skip(1).FirstOrDefault() == "0 seed 10", "an older keybinds file gets 0 for the tenth slot");
+    g.EnsureKeybindsFile();
+    Expect(File.ReadAllLines(g.KeybindsPath).Count(l => l == "0 seed 10") == 1, "only once");
     Expect(File.ReadAllText(g.KeybindsPath).Contains("1 seed 1") && File.ReadAllText(g.KeybindsPath).Contains("D shovel") && File.ReadAllText(g.KeybindsPath).Contains("Right scroll right") && File.ReadAllText(g.KeybindsPath).Contains("P pause"), "keybinds sample: seeds, buttons and scrolling on");
 
     Expect(g.ModLibraries.Count == 0, "no mod libraries listed");
@@ -256,6 +269,97 @@ void UpdateCheckTest()
     Expect(result.Outcome == UpdateCheck.Outcome.Unknown, "no CDN address, no check");
 }
 
+void ObbUpdateTest()
+{
+    var g = MakeGame("ObbGame");
+    Expect(ObbUpdate.ConfigUrl(g) == null, "an APK that doesn't update its OBB (1.4.2) gets no updates");
+    string state = ObbUpdate.StateDir(g);
+    Expect(state.EndsWith(Path.Combine("sdcard", "Android", "obb", "com.ea.game.pvz2_rfl")), $"the game's OBB folder: {state}");
+
+    // three versions: 30 (full + patch from 20), 20 (patch from 10 only), 10 (full)
+    string Sha(string text) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    var json = new Dictionary<string, string>
+    {
+        ["https://x.test/live/latest.json"] = $$"""{"time":30,"version":"1.5.2","full":"https://x.test/30.obb","full_sha256":"{{Sha("v30")}}","full_size":3,"patch":"https://x.test/30.patch","patch_sha256":"aa","patch_size":5,"prev":20}""",
+        ["https://x.test/20.json"] = $$"""{"time":20,"version":"1.5.1","full_sha256":"{{Sha("v20")}}","patch":"https://x.test/20.patch","patch_size":7,"prev":10}""",
+        ["https://x.test/10.json"] = $$"""{"time":10,"version":"1.5.0","full":"https://x.test/10.obb","full_sha256":"{{Sha("v10")}}","full_size":3}""",
+    };
+    var log = new List<string>();
+    (ObbUpdate.Node, ObbUpdate.Plan) Plan(string? obbText)
+    {
+        File.WriteAllText(g.Obb!, obbText ?? "");
+        return ObbUpdate.PlanAsync("https://x.test/live/latest.json", obbText == null ? null : g.Obb, state,
+            url => Task.FromResult(json[url]), async path => await ObbUpdate.Sha256Async(path), log.Add).GetAwaiter().GetResult();
+    }
+    Expect(ObbUpdate.Node.Parse(json["https://x.test/20.json"], "https://x.test/live/latest.json").PrevUrl == "https://x.test/10.json", "prev is /<time>.json on the server");
+
+    var (head, plan) = Plan("v30");
+    Expect(head.Time == 30 && plan is ObbUpdate.UpToDate, $"newest OBB: {plan}");
+    (_, plan) = Plan("v10");
+    Expect(plan is ObbUpdate.Patches p && p.Chain.Select(n => n.Time).SequenceEqual([20L, 30L]), $"two behind: patches oldest first: {plan}");
+    Expect(ObbUpdate.DownloadSize(plan) == 12, "patch sizes add up");
+    (_, plan) = Plan("modded");
+    Expect(plan is ObbUpdate.Fresh f && f.Base.Time == 30 && f.Chain.Count == 0, $"unknown OBB: the newest full one: {plan}");
+    (_, plan) = Plan(null);
+    Expect(plan is ObbUpdate.Fresh { Base.Time: 30 }, "no OBB: the newest full one");
+
+    ObbUpdate.WriteTimestamp(state, 30);
+    (_, plan) = Plan("modded");
+    Expect(plan is ObbUpdate.UpToDate, "obbTimestamp at the newest: no hashing, up to date");
+    ObbUpdate.ForgetTimestamp(g);
+    Expect(ObbUpdate.ReadTimestamp(state) == 0, "forgotten");
+
+    // an APK that downloads its own OBB names its update server in its dex
+    string apk = Path.Combine(root, "obbapk.apk");
+    using (var zip = System.IO.Compression.ZipFile.Open(apk, System.IO.Compression.ZipArchiveMode.Create))
+    {
+        using (var w = zip.CreateEntry("classes.dex").Open()) w.Write("dex\n\0\u0005https://example.com/x\0\u002bhttps://rsb.example.org/live/latest.json\0more"u8);
+        using (var w = zip.CreateEntry("AndroidManifest.xml").Open()) w.Write("https://nope/latest.json\0"u8);
+    }
+    Expect(ObbUpdate.ConfigUrlInApk(apk) == "https://rsb.example.org/live/latest.json", $"update server from the dex: {ObbUpdate.ConfigUrlInApk(apk)}");
+    string plain = Path.Combine(root, "plain.apk");
+    using (var zip = System.IO.Compression.ZipFile.Open(plain, System.IO.Compression.ZipArchiveMode.Create))
+        using (var w = zip.CreateEntry("classes.dex").Open()) w.Write("dex\n\0https://example.com/x\0"u8);
+    Expect(ObbUpdate.ConfigUrlInApk(plain) == null, "an APK without one");
+    File.Copy(apk, Path.Combine(g.Dir, "game.apk"), true);
+    g.Refresh();
+    Expect(ObbUpdate.ConfigUrl(g) == "https://rsb.example.org/live/latest.json", $"one that does: its own server: {ObbUpdate.ConfigUrl(g)}");
+    g.Settings.ObbUpdateUrl = "";
+    Expect(ObbUpdate.ConfigUrl(g) == null, "switched off with an empty ObbUpdateUrl");
+    g.Settings.ObbUpdateUrl = null;
+
+    // the in-game switch (rfu's preferences file)
+    Expect(ObbUpdate.GameAllowsUpdates(g), "on by default");
+    string prefs = Path.Combine(g.DataDir, "data", "shared_prefs", "PvZ2GameActivity.prefs");
+    Directory.CreateDirectory(Path.GetDirectoryName(prefs)!);
+    File.WriteAllText(prefs, "i\tMusicVolume\t85\nb\tCheckObbUpdates\t0\n");
+    Expect(!ObbUpdate.GameAllowsUpdates(g), "switched off in the game");
+
+    // a patch plan: the patches land in the game's OBB folder, named after the OBB, from 0
+    var served = new Dictionary<string, byte[]> { ["https://x.test/20.patch"] = "patch20"u8.ToArray(), ["https://x.test/30.patch"] = "patch30!"u8.ToArray() };
+    var http = new HttpClient(new FakeServer(served));
+    var chain = new List<ObbUpdate.Node>
+    {
+        new(20, "1.5.1", null, null, -1, "https://x.test/20.patch", Sha("patch20"), 7, 10, "https://x.test/live/latest.json"),
+        new(30, "1.5.2", null, null, -1, "https://x.test/30.patch", Sha("patch30!"), 8, 20, "https://x.test/live/latest.json"),
+    };
+    string name = Path.GetFileName(g.Obb!);
+    File.WriteAllText(ObbUpdate.PatchPath(state, name, 5), "stale");
+    File.WriteAllText(ObbUpdate.PatchPath(state, name, 1) + ".part", "patc");  // resumed from here
+    ObbUpdate.ExecuteAsync(chain[1], new ObbUpdate.Patches(chain), g.Obb!, state, http, log.Add).GetAwaiter().GetResult();
+    Expect(File.ReadAllText(ObbUpdate.PatchPath(state, name, 0)) == "patch20" && File.ReadAllText(ObbUpdate.PatchPath(state, name, 1)) == "patch30!", "patches downloaded, the second resumed");
+    Expect(!File.Exists(ObbUpdate.PatchPath(state, name, 5)), "a stale patch is removed");
+    Expect(ObbUpdate.ReadTimestamp(state) == 30, "obbTimestamp written");
+
+    // a damaged download is refused
+    served["https://x.test/20.patch"] = "patchXX"u8.ToArray();
+    File.Delete(ObbUpdate.PatchPath(state, name, 0));
+    bool refused = false;
+    try { ObbUpdate.ExecuteAsync(chain[1], new ObbUpdate.Patches(chain), g.Obb!, state, http, log.Add).GetAwaiter().GetResult(); }
+    catch (ObbUpdate.Error) { refused = true; }
+    Expect(refused && !File.Exists(ObbUpdate.PatchPath(state, name, 0)), "SHA-256 mismatch refused");
+}
+
 static void WriteTarEntry(Stream s, string name, byte[] data)
 {
     void Header(string n, long size, char type)
@@ -302,6 +406,9 @@ void RfuCommandTest()
     Expect(!args.Contains("--no-mod-libs"), "mod libraries always load");
     g.Settings.HoverCollect = false;
     Expect(!RfuCommand.Build(g, []).Contains("--hover"), "hover to collect can be switched off");
+    Expect(!RfuCommand.Build(g, []).Contains("--custom-cursor"), "the Windows cursor by default");
+    g.Settings.CustomCursor = true;
+    Expect(RfuCommand.Build(g, []).Contains("--custom-cursor"), "the glove cursor when it's on");
     g.Settings.FixAnimations = false;
     Expect(!RfuCommand.Build(g, []).Contains("--fix-animations"), "the animations fix can be switched off");
     g.Settings.KeyHints = false;
@@ -342,4 +449,20 @@ void PadSetupTest()
     PadSetup.SaveMapping(path, "0300AA,New,a:b2,platform:Windows,");
     var lines = File.ReadAllLines(path);
     Expect(lines.Length == 2 && lines.Contains("0300bb,Other,a:b0,platform:Windows,") && lines.Contains("0300AA,New,a:b2,platform:Windows,"), "a mapping replaces its GUID's line");
+}
+
+/// Serves fixed bytes by URL, with Range requests.
+sealed class FakeServer(Dictionary<string, byte[]> files) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancel)
+    {
+        if (!files.TryGetValue(request.RequestUri!.ToString(), out var data))
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        long from = request.Headers.Range?.Ranges.First().From ?? 0;
+        var response = new HttpResponseMessage(from > 0 ? System.Net.HttpStatusCode.PartialContent : System.Net.HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(data[(int)from..]),
+        };
+        return Task.FromResult(response);
+    }
 }

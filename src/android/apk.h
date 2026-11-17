@@ -30,6 +30,7 @@ public:
 
     std::optional<Entry> find(const std::string& name) const;  // "assets/init.rsb.smf"
     std::size_t size() const { return entries_.size(); }
+    std::vector<std::string> names() const;  // every entry, in name order
 
     // An entry's contents, inflated if need be; nullopt if it's missing or can't be read.
     std::optional<std::vector<std::uint8_t>> read(const std::string& name) const;

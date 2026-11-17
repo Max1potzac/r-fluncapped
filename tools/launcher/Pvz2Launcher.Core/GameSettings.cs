@@ -18,6 +18,10 @@ public sealed class GameSettings
 
     // what the game does
     public bool Offline { get; set; }
+    // Reflourished 1.5.0+: download OBB updates before playing, as the game does on Android (see ObbUpdate)
+    public bool ObbUpdates { get; set; } = true;
+    // the update server's latest.json; null: the one the game uses, for the games that have one; "": none
+    public string? ObbUpdateUrl { get; set; }
 
     // code injections
     public bool HoverCollect { get; set; } = true;     // sun, coins and plant food picked up by moving the mouse over them
@@ -25,6 +29,7 @@ public sealed class GameSettings
     public bool Keybinds { get; set; }
     public bool KeyHints { get; set; } = true;         // with keybinds: each key shown on the packet or button it presses
     public bool Controller { get; set; } = true;       // a game controller plays the lawn, PvZ1 console style
+    public bool CustomCursor { get; set; }             // the glove for the mouse, in place of Windows' arrow
     public Dictionary<string, string> PadBinds { get; set; } = [];  // the controller's button for an action, by PadSetup's names; others on their defaults
     public List<string> Patches { get; set; } = [];     // file names in patches/ that are switched on
 

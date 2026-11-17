@@ -18,6 +18,7 @@
 #include "platform/gles.h"
 #include "platform/opensles.h"
 #include "runtime.h"
+#include "shims/common.h"
 
 #include <fmt/ranges.h>
 
@@ -61,6 +62,7 @@ void usage() {
                  "  --pad-mappings <file>    SDL controller mappings (gamecontrollerdb.txt lines) for controllers SDL doesn't know\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
+                 "  --custom-cursor          the glove for the mouse, in place of the system's arrow\n"
                  "  --fix-animations         unfreeze plants stuck on an animation while the level isn't running\n"
                  "  --icon <file.png>        the window's icon\n"
                  "  --title <text>           the window's title\n"
@@ -202,6 +204,8 @@ int main(int argc, char** argv) {
             } else if (arg == "--version-name") {
                 app.version_name = value();
                 version_name_set = true;
+            } else if (arg == "--custom-cursor") {
+                app.window.custom_cursor = true;
             } else if (arg == "--hover") {
                 app.window.hover = true;
             } else if (arg == "--fix-animations") {
@@ -370,8 +374,22 @@ int main(int argc, char** argv) {
         if (load_mod_libs && !china) {
             auto mod_libs = mod_libraries(options.lib_dir);
             if (mod_libs.empty()) rfu::log::info("no mod libraries in {}; running the game's own code only", rfu::path_to_utf8(options.lib_dir));
-            for (const auto& path : mod_libs) {
-                auto& m = rt.linker().load(path);
+            for (const auto& apk_path : mod_libs) {
+                // Reflourished's own library update, downloaded by the game (see app.h).
+                auto path = apk_path;
+                const std::string name = rfu::path_to_utf8(apk_path.filename());
+                if (auto staged = rfu::android::staged_mod_library(app, name)) path = *staged;
+                rfu::Module* loaded = nullptr;
+                if (path != apk_path) {
+                    try {
+                        loaded = &rt.linker().load(path);
+                        rfu::log::info("{}: the game's downloaded update, {}", name, rfu::path_to_utf8(path));
+                    } catch (const std::exception& e) {
+                        rfu::log::warn("{}: the downloaded update didn't load ({}); using the APK's", name, e.what());
+                        rfu::android::drop_staged_mod_library(app, name);
+                    }
+                }
+                auto& m = loaded ? *loaded : rt.linker().load(apk_path);
                 rt.run_initializers();
                 if (auto onload = m.find_export("JNI_OnLoad")) {
                     auto version = rt.call(*onload, {vm, 0});
@@ -540,7 +558,10 @@ int main(int argc, char** argv) {
         rfu::log::debug("unimplemented imports: {}", fmt::join(missing, " "));
         rfu::log::info("guest heap in use: {:.1f} MiB", rt.heap().bytes_in_use() / 1048576.0);
         if (init_only) finish(0);
-        finish(rfu::android::run_app(rt, app));
+        int code = rfu::android::run_app(rt, app);
+        rfu::close_guest_files(rt);
+        if (code == rfu::android::kRestartExitCode) rfu::log::info("the game asked to be restarted (exit code {})", code);
+        finish(code);
     } catch (const rfu::GuestFault& e) {
         rfu::log::error("guest fault: {}", e.what());
         finish(1);

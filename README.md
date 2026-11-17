@@ -1,8 +1,8 @@
 # r-fluncapped
 
-A native Windows runtime for Plants vs. Zombies 2 Reflourished.
+A native Windows runtime for Plants vs. Zombies 2 and its many versions.
 
-The plan: load the game's own Android libraries (`libPVZ2.so`, `libRFLib.so`) on the PC through an
+The plan: load the game's own Android libraries (`libPVZ2.so`) on the PC through an
 ARM64 recompiler and a shim layer, so the game is fully playable early, then replace its code with
 native C++ one function at a time.
 
@@ -11,11 +11,11 @@ them from your own copy of the game.
 
 ## Status
 
-`rfu` runs the game. It loads Reflourished's own Android libraries, opens a window and plays the
+`rfu` runs the game. It loads PVZ2's own Android libraries, opens a window and plays the
 part of the game's Java side, so the game boots, loads its OBB, shows the EA welcome dialog, the
 main menu and its intro, and takes mouse, touch and keyboard input. In detail, `rfu`:
 
-- maps `libPVZ2.so`, `libRFLib.so`, `libc++_shared.so` and `libNimble.so` into one guest address
+- maps `libPVZ2.so`, `libc++_shared.so` and `libNimble.so` into one guest address
   space, links them the way Android's linker would, and runs them on an x86-64 PC through
   [dynarmic](https://github.com/azahar-emu/dynarmic), with bionic's libc, libm, libdl and zlib
   provided by host code (`src/shims`);
@@ -27,6 +27,10 @@ main menu and its intro, and takes mouse, touch and keyboard input. In detail, `
 - plays the game's sound (OpenSL ES buffer queues) through SDL audio;
 - gives the game real sockets and DNS, so its own CDN client (libcurl and OpenSSL inside libPVZ2)
   can fetch updates and live events from the Reflourished server.
+- answers Reflourished 1.5.0's `FilePickerHelper`: Settings > Import/Export Files (custom levels,
+  saves, quest progress) opens the desktop's own Open and Save As windows (zenity on Linux), and
+  the OBB patches the game applies at start-up (`<obb>.patchN`, downloaded by the launcher) find
+  the OBB in the game's OBB folder. When the game asks to be restarted, rfu exits with code 3.
 
 ## Building
 
@@ -115,10 +119,11 @@ Options:
 | `--mount <guest path>=<host dir>` | make a folder visible to the game |
 | `--overlay <guest path>=<host dir>` | lay a folder over one of the game's, read-only: custom levels, strings and other content without changing the game's files (later ones win) |
 | `--hover` | collect sun, coins and plant food by moving the mouse over them, no click needed |
+| `--custom-cursor` | the glove cursor (`assets/cursor.png`) for the mouse, in place of the system's arrow; it presses while the button's down |
 | `--fix-animations` | unfreeze plants stuck on an animation while the level isn't running (Citron before the first wave or after the last zombie) |
 | `--keybinds <file>` | keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling, a finger on a spot of the screen, or the back button (see `src/platform/keybinds.h`) |
 | `--key-hints` | with `--keybinds` or `--controller`: show each key (or the controller's buttons, labelled for the pad plugged in) in a small badge on the seed packet or button it presses |
-| `--controller` | play the lawn with a game controller, PvZ1 console style: the d-pad or left stick moves a tile cursor, LB/RB pick the seed packet, A plants it, B held a second digs, Y feeds plant food (held two seconds, buys one), X taps the tile (plant abilities; an aiming plant's reticle then follows the cursor, X fires, A calls it off; held in the first column, the mower), LT/RT collect everything on the lawn, Start pauses, L3 fast-forwards, R3 turns slowmode (half speed) on and off. The right stick flicked left, up or right picks the level's first, second or third powerup; while it's in use X held uses it on the tile (snowballs, the flamethrower, Power Zap, a mod's own), or X pressed twice swipes the tile for the flick. On the pause menu the d-pad picks a slider or button (left/right move a slider), A presses it, B resumes; on the seed chooser the d-pad moves a box over the packets (scrolling the list), A picks one, LB/RB pick a slot, B takes its packet out (held two seconds, all of them), Y looks at the lawn, LT picks the last level's packets again, RT opens the almanac and X held a second is Let's Rock; elsewhere the right stick moves a cursor, A touches there, the d-pad or left stick scrolls and B goes back (on the world map LT is the almanac, RT the Zen Garden, Start the settings and Y the shop). Using the mouse hides the pad's cursor and labels until the pad is used again |
+| `--controller` | play the lawn with a game controller, PvZ1 console style: the d-pad or left stick moves a tile cursor, LB/RB pick the seed packet, A plants it, B held a second digs, Y feeds plant food (held two seconds, buys one), X taps the tile (plant abilities; an aiming plant's reticle then follows the cursor, X fires, A calls it off; held in the first column, the mower), LT/RT collect everything on the lawn, Start pauses, L3 fast-forwards, R3 turns slowmode (half speed) on and off. The right stick flicked left, up or right picks the level's first, second or third powerup; while it's in use X held uses it on the tile (snowballs, the flamethrower, Power Zap, a mod's own), or X pressed twice swipes the tile for the flick. While a character talks ("tap to continue") any button moves it on. On the pause menu and the settings the d-pad picks a slider, button or checkbox (left/right move a slider; the settings' list scrolls along), A presses it, B resumes; on the seed chooser the d-pad moves a box over the packets (scrolling the list), A picks one, LB/RB pick a slot, B takes its packet out (held two seconds, all of them), Y looks at the lawn, LT picks the last level's packets again, RT opens the almanac and X held a second is Let's Rock; elsewhere the right stick moves a glove cursor, A touches there, the d-pad or left stick scrolls (world by world on the worlds) and B goes back (on the world map LT is the almanac, RT the Zen Garden, Start the settings and Y the shop). Select held two seconds in a level (a dial fills at the top) swaps the tile cursor for the free glove cursor, and back: the sticks and d-pad move it, A touches there (taking the LB/RB packet first), the powerups are off. The game's other dialogs (a level's objectives, confirmations) and the title screen work like the pause menu; on the title screen LB/RB swipe the banners. Using the mouse hides the pad's cursor and labels until the pad is used again |
 | `--pad-binds <binds>` | with `--controller`: the button for each action, `plant=a,dig=b,use=x,plantfood=y,prevseed=lb,nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start,slowmode=r3` (the launcher's controller settings write it) |
 | `--pad-mappings <file>` | with `--controller`: SDL mappings (gamecontrollerdb.txt lines) for controllers SDL doesn't know, such as the launcher's controllers.txt |
 | `--patch <file>` | code patches to apply after the libraries load, checked against the bytes they expect (see `src/core/patches.h`) |

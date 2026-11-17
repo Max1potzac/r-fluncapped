@@ -11,6 +11,7 @@
 #include "platform/window.h"
 
 #include <filesystem>
+#include <optional>
 #include <functional>
 #include <string>
 
@@ -55,9 +56,22 @@ AndroidPaths android_paths(const std::string& package, int version_code);
 // Mounts the game's storage and OBB in the VFS (call before the libraries load).
 void mount_storage(Runtime& rt, const AppOptions& options);
 
+// Reflourished 1.5.0+ updates its own libRFLib: the game downloads a newer one to
+// files/libRFLib.so and restarts, and its Java side loads that copy instead of the APK's. Like
+// that loader, a staged copy that has started 3 times without the game confirming it
+// (files/_lib_boot) is dropped, unless files/liboverride.txt is there. Returns the copy to load
+// in place of the APK's library `name`, or nothing.
+std::optional<std::filesystem::path> staged_mod_library(const AppOptions& options, const std::string& name);
+// The staged copy failed to load: drop it (unless liboverride.txt) so the APK's copy loads.
+void drop_staged_mod_library(const AppOptions& options, const std::string& name);
+
 // Runs the game after its libraries are loaded and initialised (JNI_OnLoad included): the
 // activity's onCreate, launchGame, onStart and onResume, then the render loop until the
 // window is closed. Returns the process exit code.
 int run_app(Runtime& rt, const AppOptions& options);
+
+// run_app's exit code when the game asked to be restarted (Reflourished does after it imports a
+// save or patches its OBB): the launcher starts it again.
+constexpr int kRestartExitCode = 3;
 
 }  // namespace rfu::android

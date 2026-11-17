@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "platform/gles.h"
+#include "platform/cursor_sprites.h"
 #include "platform/key_hints.h"
 #include "platform/png.h"
 
@@ -205,6 +206,36 @@ Window::Window(const WindowOptions& options) {
     game_h_ = options.game_height;
     if (game_w_ <= 0 || game_h_ <= 0) default_game_size(window_, options.low_assets, game_w_, game_h_);
     create_surface();
+    if (options.custom_cursor) make_cursors();
+}
+
+// The glove for the mouse, as big as the controller's (a share of the game's picture, as the
+// window shows it), made again when the window changes size; it presses while the button's down.
+static void letterbox(int dw, int dh, int gw, int gh, int& x, int& y, int& w, int& h);
+
+void Window::make_cursors() {
+    int dw, dh, x, y, w, h;
+    drawable_size(dw, dh);
+    letterbox(dw, dh, game_w_, game_h_, x, y, w, h);
+    int height = std::clamp(static_cast<int>(h * kCursorHeight + 0.5f), 16, 256);
+    if (height == cursor_height_) return;
+    for (void*& c : cursors_)
+        if (c) {
+            SDL_FreeCursor(static_cast<SDL_Cursor*>(c));
+            c = nullptr;
+        }
+    cursor_height_ = height;
+    for (int pressed = 0; pressed < 2; ++pressed) {
+        int hx = 0, hy = 0;
+        Image image = scaled_cursor(pressed != 0, height, hx, hy);
+        SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(image.rgba.data(), image.width, image.height, 32, image.width * 4, SDL_PIXELFORMAT_RGBA32);
+        if (!surface) return log::warn("cursor: {}", SDL_GetError());
+        cursors_[pressed] = SDL_CreateColorCursor(surface, hx, hy);
+        SDL_FreeSurface(surface);
+        if (!cursors_[pressed]) return log::warn("cursor: {}", SDL_GetError());
+    }
+    SDL_SetCursor(static_cast<SDL_Cursor*>(cursors_[mouse_down_ ? 1 : 0]));
+    log::info("cursor: the glove, {} pixels", height);
 }
 
 void Window::create_surface() {
@@ -258,6 +289,8 @@ void Window::create_surface() {
 }
 
 Window::~Window() {
+    for (void* c : cursors_)
+        if (c) SDL_FreeCursor(static_cast<SDL_Cursor*>(c));
     for (auto& [id, pad] : pads_) SDL_GameControllerClose(static_cast<SDL_GameController*>(pad));
     if (context_) SDL_GL_DeleteContext(context_);
     if (window_) SDL_DestroyWindow(window_);
@@ -341,6 +374,10 @@ void Window::draw_hints(const HintOverlay& overlay) {
     }
     for (const auto& label : overlay.labels) {
         auto f = layout_hint(label, game_w_, game_h_);
+        fills.insert(fills.end(), f.begin(), f.end());
+    }
+    if (overlay.cursor) {
+        auto f = layout_cursor(*overlay.cursor);
         fills.insert(fills.end(), f.begin(), f.end());
     }
     // Scissored clears onto the game's surface; only the state they touch is put back.
@@ -493,6 +530,7 @@ std::vector<Input> Window::poll() {
                 drawable_size(game_w_, game_h_);
                 out.push_back(ResizeInput{game_w_, game_h_});
             }
+            if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED && cursor_height_) make_cursors();
             else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) out.push_back(FocusInput{true});
             else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) out.push_back(FocusInput{false});
             break;
@@ -500,6 +538,7 @@ std::vector<Input> Window::poll() {
             if (ev.button.which == SDL_TOUCH_MOUSEID) break;  // the finger events below have it
             if (ev.button.button == SDL_BUTTON_LEFT) {
                 mouse_down_ = true;
+                if (cursors_[1]) SDL_SetCursor(static_cast<SDL_Cursor*>(cursors_[1]));
                 touch(TouchInput::Began, 1, static_cast<float>(ev.button.x), static_cast<float>(ev.button.y));
             } else if (ev.button.button == SDL_BUTTON_X1) {
                 out.push_back(BackInput{});
@@ -509,11 +548,13 @@ std::vector<Input> Window::poll() {
             if (ev.button.which == SDL_TOUCH_MOUSEID) break;
             if (ev.button.button == SDL_BUTTON_LEFT && mouse_down_) {
                 mouse_down_ = false;
+                if (cursors_[0]) SDL_SetCursor(static_cast<SDL_Cursor*>(cursors_[0]));
                 touch(TouchInput::Ended, 1, static_cast<float>(ev.button.x), static_cast<float>(ev.button.y));
             }
             break;
         case SDL_MOUSEMOTION:
             if (ev.motion.which == SDL_TOUCH_MOUSEID) break;
+            out.push_back(MouseInput{});
             if (mouse_down_) touch(TouchInput::Moved, 1, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
             else if (hover_) touch(TouchInput::Moved, kHoverPointer, static_cast<float>(ev.motion.x), static_cast<float>(ev.motion.y));
             break;

@@ -113,6 +113,12 @@ std::optional<std::vector<std::uint8_t>> ApkIndex::read(const std::string& name)
     return out;
 }
 
+std::vector<std::string> ApkIndex::names() const {
+    std::vector<std::string> out;
+    for (const auto& [name, entry] : entries_) out.push_back(name);
+    return out;
+}
+
 namespace {
 
 // One DER element: where its contents start and end, and where the whole element ends.

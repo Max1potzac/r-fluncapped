@@ -444,10 +444,16 @@ void run(HttpState& s, Transaction& t) {
             }
         }
         if (reply.empty() && path.size() >= 9 && path.compare(path.size() - 9, 9, ".manifest") == 0) {
-            reply = "{\"packageUrl\":\"update/\","
-                    "\"remoteManifestUrl\":\"update/project_update.manifest\","
-                    "\"remoteVersionUrl\":\"update/version_update.manifest\","
-                    "\"version\":\"8\",\"assets\":{},\"searchPaths\":[]}";
+            // Byte-identical to the APK's own assets/UpdateManifest.json (version "8", no asset list).
+            // AssetsManagerEx then finds remote == local: same version AND no asset diff, so it reports
+            // already-up-to-date. Earlier an empty "assets":{} made its differ treat every local asset as
+            // deleted and re-request the manifest in a tight loop, so we deliberately omit that field.
+            reply = "{\n"
+                    "    \"packageUrl\": \"update/\",\n"
+                    "    \"remoteManifestUrl\": \"update/project_update.manifest\",\n"
+                    "    \"remoteVersionUrl\": \"update/version_update.manifest\",\n"
+                    "    \"version\": \"8\"\n"
+                    "}\n";
             kind = "up-to-date manifest";
         }
         log::info("cdn stub: {} -> {} ({} bytes)", t.request.url, kind, reply.size());

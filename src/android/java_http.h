@@ -18,6 +18,7 @@ namespace rfu::android {
 // (the title screen's banners) are kept from their last good download, for when a later one fails.
 void implement_http(Runtime& rt, bool online,
                     const std::string& transaction_class = "com/popcap/SexyAppFramework/AndroidHttpTransaction",
-                    const std::filesystem::path& cache_dir = {});
+                    const std::filesystem::path& cache_dir = {},
+                    const std::string& hold_ui = {});
 
 }  // namespace rfu::android

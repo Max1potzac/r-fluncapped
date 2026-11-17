@@ -233,6 +233,10 @@ int main(int argc, char** argv) {
             } else if (arg == "--cloud-dir") {
                 // Optional: tuned per-endpoint responses (<req>.json / <req>.raw) for the stub.
                 set_env("RFU_CLOUD_DIR", value());
+            } else if (arg == "--cloud-record") {
+                // On a normal ONLINE run, save each cloud response to <dir>/<req>.raw so a later
+                // --cloud-stub --cloud-dir <dir> run can replay the session offline.
+                set_env("RFU_CLOUD_RECORD", value());
             } else if (arg == "--obb") {
                 app.obb = rfu::path_from_utf8(value());
             } else if (arg == "--apk") {
@@ -416,6 +420,23 @@ int main(int argc, char** argv) {
             std::string why = !in ? "can't read it" : !errors.empty() ? errors.front() : rfu::apply_patches(rt, patches);
             if (why.empty()) rfu::log::info("patch {}: {} changes applied", file, patches.size());
             else rfu::log::warn("patch {} left out: {}", file, why);
+        }
+
+        // PvZ2 China offline cloud replay: with the cloud stub on, bypass the account-mismatch
+        // dialog and let the sync-result handler run, so a captured session served by the stub can
+        // complete and open the world map. Byte-checked against libSrc.so, so it's left out on a
+        // different game build (and on the global game, which has no libSrc.so).
+        if (std::getenv("RFU_CLOUD_STUB")) {
+            static const char* kChinaCloudBypass =
+                "# name: PvZ2 China offline cloud replay\n"
+                "libSrc.so+0x2240b6c 36 00 00 14 was a9 00 00 b5\n"
+                "libSrc.so+0x2240b7c 32 00 00 14 was 40 06 00 34\n"
+                "libSrc.so+0x248758c 1f 20 03 d5 was 00 03 00 36\n";
+            std::vector<std::string> errors;
+            auto patches = rfu::parse_patches(kChinaCloudBypass, errors);
+            std::string why = !errors.empty() ? errors.front() : rfu::apply_patches(rt, patches);
+            if (why.empty()) rfu::log::info("china cloud-bypass: {} changes applied", patches.size());
+            else rfu::log::warn("china cloud-bypass left out: {}", why);
         }
 
         if (app.window.hover) app.window.hover = rfu::install_hover_collect(rt, pvz2);

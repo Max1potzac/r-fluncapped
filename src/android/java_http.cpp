@@ -415,30 +415,42 @@ void run(HttpState& s, Transaction& t) {
     // "nothing to update" and proceeds (an empty res_shipping/file_list is exactly what the offline
     // stub uses). Only the online record pass strictly needs this; doing it under the stub too lets an
     // offline replay drop its separate --cdn-dir without the update check hanging.
+    //
+    // Exception: the cocos AssetsManagerEx hot-update manifests (…/*.manifest) must be *valid* JSON.
+    // An empty body hits "Error parsing manifest file" and the title retries the check forever. Serve a
+    // minimal manifest that reads as already-up-to-date instead: AssetsManagerEx downloads nothing while
+    // the remote version is not greater than the local one. Mirror the version the APK ships in its own
+    // assets/UpdateManifest.json ("8"), so the remote equals the local and the check resolves with no
+    // download; the empty asset list means there is nothing to fetch even if a build compares loosely.
     if ((std::getenv("RFU_CLOUD_STUB") || std::getenv("RFU_CLOUD_RECORD")) && cloud_stub::is_cdn_host(t.request.url)) {
         std::string reply;
-        bool have = false;
-        if (cdn_dir) {
-            std::string path;
-            auto scheme = t.request.url.find("://");
-            if (scheme != std::string::npos) {
-                auto slash = t.request.url.find('/', scheme + 3);
-                if (slash != std::string::npos) path = t.request.url.substr(slash + 1);
-            }
-            auto q = path.find('?');
-            if (q != std::string::npos) path = path.substr(0, q);
-            if (!path.empty()) {
-                std::filesystem::path f = std::filesystem::path(cdn_dir) / path;
-                std::error_code ec;
-                if (std::filesystem::is_regular_file(f, ec)) {
-                    std::ifstream in(f, std::ios::binary);
-                    std::ostringstream ss; ss << in.rdbuf();
-                    reply = ss.str();
-                    have = true;
-                }
+        const char* kind = "empty200";
+        std::string path;
+        auto scheme = t.request.url.find("://");
+        if (scheme != std::string::npos) {
+            auto slash = t.request.url.find('/', scheme + 3);
+            if (slash != std::string::npos) path = t.request.url.substr(slash + 1);
+        }
+        auto q = path.find('?');
+        if (q != std::string::npos) path = path.substr(0, q);
+        if (cdn_dir && !path.empty()) {
+            std::filesystem::path f = std::filesystem::path(cdn_dir) / path;
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(f, ec)) {
+                std::ifstream in(f, std::ios::binary);
+                std::ostringstream ss; ss << in.rdbuf();
+                reply = ss.str();
+                kind = "file";
             }
         }
-        log::info("cdn stub: {} -> {} ({} bytes)", t.request.url, have ? "file" : "empty200", reply.size());
+        if (reply.empty() && path.size() >= 9 && path.compare(path.size() - 9, 9, ".manifest") == 0) {
+            reply = "{\"packageUrl\":\"update/\","
+                    "\"remoteManifestUrl\":\"update/project_update.manifest\","
+                    "\"remoteVersionUrl\":\"update/version_update.manifest\","
+                    "\"version\":\"8\",\"assets\":{},\"searchPaths\":[]}";
+            kind = "up-to-date manifest";
+        }
+        log::info("cdn stub: {} -> {} ({} bytes)", t.request.url, kind, reply.size());
         {
             std::lock_guard lock(t.mutex);
             t.response = platform::HttpResponse{};

@@ -422,11 +422,13 @@ int main(int argc, char** argv) {
             else rfu::log::warn("patch {} left out: {}", file, why);
         }
 
-        // PvZ2 China offline cloud replay: with the cloud stub on, bypass the account-mismatch
-        // dialog and let the sync-result handler run, so a captured session served by the stub can
-        // complete and open the world map. Byte-checked against libSrc.so, so it's left out on a
-        // different game build (and on the global game, which has no libSrc.so).
-        if (std::getenv("RFU_CLOUD_STUB")) {
+        // PvZ2 China cloud replay: bypass the account-mismatch dialog and let the sync-result handler
+        // run, so the game accepts its cloud login/sync and opens the world map. Needed both for an
+        // offline run served by the stub (RFU_CLOUD_STUB) and for an online capture run (RFU_CLOUD_RECORD),
+        // where the game talks to the real server but the same emulated account/sync handshake must still
+        // be let through for the capture to reach the profile sync. Byte-checked against libSrc.so, so it's
+        // left out on a different game build (and on the global game, which has no libSrc.so).
+        if (std::getenv("RFU_CLOUD_STUB") || std::getenv("RFU_CLOUD_RECORD")) {
             static const char* kChinaCloudBypass =
                 "# name: PvZ2 China offline cloud replay\n"
                 "libSrc.so+0x2240b6c 36 00 00 14 was a9 00 00 b5\n"

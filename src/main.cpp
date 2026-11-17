@@ -447,6 +447,32 @@ int main(int argc, char** argv) {
                 });
             }
         }
+        // RFU_LUA_DUMP=<dir>: hook luaL_loadbuffer (lua_State*, const char* buff, size_t sz,
+        // const char* name) and write each loaded chunk to <dir>/NNN_<name>.luac. A study aid to
+        // recover the game's Lua bytecode (decompressed from the RSB bundles at load time).
+        if (const char* dumpdir = std::getenv("RFU_LUA_DUMP")) {
+            rfu::GuestAddr base = pvz2.base();
+            std::string dir = dumpdir;
+            rfu::hook(rt, base + 0x5264da8, "lua-dump", [&rt, dir](rfu::CallContext& c) {
+                static int n = 0;
+                std::uint64_t buff = c.x(1), sz = c.x(2), namep = c.x(3);
+                std::string name = namep ? rt.mem().read_cstr(namep, 256) : "anon";
+                std::string safe;
+                for (char ch : name) safe += (std::isalnum((unsigned char)ch) || ch == '.' || ch == '_' || ch == '-') ? ch : '_';
+                if (safe.size() > 80) safe = safe.substr(safe.size() - 80);
+                if (sz == 0 || sz > (64u << 20) || !rt.mem().is_committed(buff, sz)) {
+                    rfu::log::info("lua-dump: skip {} (sz={:#x} buff={:#x})", name, sz, buff);
+                    return;
+                }
+                std::vector<char> data(sz);
+                rt.mem().read_bytes(buff, data.data(), sz);
+                std::string path = fmt::format("{}/{:03d}_{}.luac", dir, n++, safe);
+                std::ofstream out(path, std::ios::binary);
+                out.write(data.data(), static_cast<std::streamsize>(sz));
+                rfu::log::info("lua-dump: {} ({} bytes) -> {}", name, sz, path);
+            });
+            rfu::log::info("lua-dump: armed, writing to {}", dir);
+        }
         // RFU_FORCE_RET=<off>=<val>,...: force the guest function at each offset of the main library
         // to return <val> immediately (skip its body). A lever for bypassing gates (e.g. a profile
         // count check). Offset is hex; value is hex (0x..) or decimal. A study/bring-up aid.

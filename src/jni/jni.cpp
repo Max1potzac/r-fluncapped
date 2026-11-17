@@ -159,9 +159,25 @@ void call_method(CallContext& c) {
         return c.ret(0);
     }
     std::string type = return_type(m->signature);
+    static const char* trace_jni = std::getenv("RFU_TRACE_JNI");
+    if (trace_jni) {
+        const std::string& cn = m->class_name;
+        if (cn.find("Purchase") != std::string::npos || cn.find("TW") != std::string::npos ||
+            cn.find("Account") != std::string::npos || cn.find("Talk") != std::string::npos ||
+            cn.find("Login") != std::string::npos || cn.find("User") != std::string::npos)
+            log::info("jni-call: {} (impl={})", describe(*m), J(c).implementation(*m) ? "yes" : "default");
+    }
     if (auto impl = J(c).implementation(*m)) {
         JavaCall call{c, J(c), *m, c.x(1), java_args(c, m->signature, mid_reg + 1)};
-        return ret_value(c, type, (*impl)(call));
+        std::uint64_t r = (*impl)(call);
+        if (trace_jni && type == "Ljava/lang/String;" && r) {
+            const std::string& cn = m->class_name;
+            if (cn.find("Purchase") != std::string::npos || cn.find("TW") != std::string::npos ||
+                cn.find("Account") != std::string::npos || cn.find("Talk") != std::string::npos ||
+                cn.find("User") != std::string::npos)
+                log::info("jni-ret: {} -> {:?}", m->name, J(c).string_of(r));
+        }
+        return ret_value(c, type, r);
     }
     log_once(J(c), c.x(mid_reg), *m, "method");
     ret_value(c, type, J(c).default_value(m->signature));

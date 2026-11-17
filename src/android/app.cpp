@@ -497,7 +497,11 @@ void App::implement_java() {
         prefs.erase(j.string_arg(0));
         return 0;
     });
-    impl(cls_game_app, "Config_ConfigReadString", [this](jni::JavaCall& j) { return nullable_str(prefs.get(j.string_arg(0), 's')); });
+    impl(cls_game_app, "Config_ConfigReadString", [this](jni::JavaCall& j) {
+        auto v = prefs.get(j.string_arg(0), 's');
+        if (std::getenv("RFU_TRACE_CFG")) log::info("cfg: ReadString {:?} -> {:?}", j.string_arg(0), v.value_or("<null>"));
+        return nullable_str(v);
+    });
     impl(cls_game_app, "Config_ConfigReadInteger", [this](jni::JavaCall& j) -> std::uint64_t {
         auto v = prefs.get(j.string_arg(0), 'i');
         return static_cast<std::uint32_t>(v ? std::stoi(*v) : 0);
@@ -507,6 +511,7 @@ void App::implement_java() {
         return v && *v == "1";
     });
     impl(cls_game_app, "Config_ConfigWriteString", [this](jni::JavaCall& j) -> std::uint64_t {
+        if (std::getenv("RFU_TRACE_CFG")) log::info("cfg: WriteString {:?} = {:?}", j.string_arg(0), j.string_arg(1));
         prefs.put(j.string_arg(0), 's', j.string_arg(1));
         return 1;
     });
@@ -840,35 +845,73 @@ void App::implement_java_china() {
         if (const char* c = std::getenv("RFU_SDK_CODE")) login_code = std::strtoull(c, nullptr, 0);
         int relogin = 0;
         if (const char* r = std::getenv("RFU_SDK_RELOGIN")) relogin = std::atoi(r);
-        run_on_ui([this, tw, self, login_code] {
+        // The channel user id the SDK hands the game. By default a synthetic offline id, but a run
+        // replaying a captured cloud session must pass the same channel user id the capture used, or
+        // the game rejects the replayed (server-signed) session and never adopts its account. Set it
+        // out of band with RFU_SDK_USER so no real account id is baked into the source.
+        std::string sdk_user = "rfu-offline-" + device_id;
+        if (const char* u = std::getenv("RFU_SDK_USER")) sdk_user = u;
+        run_on_ui([this, tw, self, login_code, sdk_user] {
             std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
             call(tw, "Native_SDKInitStart", self, {driver});
             call(tw, "Native_SDKInitEnd", self, {driver, 0});
             call(tw, "Native_SDKLoginStart", self, {driver});
-            call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str("rfu-offline-" + device_id)});
+            call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str(sdk_user)});
         });
         // Experiment: re-fire the login-complete callback on later frames, in case the welcome
         // dialog subscribes to it only after our first (early) fire. Self-reschedules `relogin` times.
         if (relogin > 0) {
             auto refire = std::make_shared<std::function<void(int)>>();
-            *refire = [this, tw, self, login_code, refire](int n) {
+            *refire = [this, tw, self, login_code, sdk_user, refire](int n) {
                 std::uint64_t driver = jni.field(self, "mNativeDriverPtr").value_or(0);
                 call(tw, "Native_SDKLoginStart", self, {driver});
-                call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str("rfu-offline-" + device_id)});
+                call(tw, "Native_SDKLoginEnd", self, {driver, login_code, str(sdk_user)});
                 if (n > 1) run_on_ui([refire, n] { (*refire)(n - 1); });
             };
             run_on_ui([refire, relogin] { (*refire)(relogin); });
         }
         return 0;
     });
-    impl(tw, "GetDeviceID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });
-    impl(tw, "GetUniqueID", [this, ret_str](jni::JavaCall&) { return ret_str(device_id); });
-    impl(tw, "GetUniqueCharacterID", [ret_str](jni::JavaCall&) {
+    impl(tw, "SetIDs", [this](jni::JavaCall& j) -> std::uint64_t {
+        log::info("trace: TWPurchase.SetIDs(a={:?}, b={:?}, c={:?})", j.string_arg(0), j.string_arg(1), j.string_arg(2));
+        return 0;
+    });
+    auto trace_get = [](const char* name, const std::string& v) {
+        if (std::getenv("RFU_TRACE_CFG")) log::info("tw.get: {} -> {:?}", name, v);
+    };
+    impl(tw, "GetDeviceID", [this, ret_str, trace_get](jni::JavaCall&) {
+        const char* o = std::getenv("RFU_SDK_DEVICEID"); std::string v = o ? o : device_id;
+        trace_get("GetDeviceID", v); return ret_str(v);
+    });
+    impl(tw, "GetUniqueID", [this, ret_str, trace_get](jni::JavaCall&) {
+        const char* o = std::getenv("RFU_SDK_UNIQUEID"); std::string v = o ? o : device_id;
+        trace_get("GetUniqueID", v); return ret_str(v);
+    });
+    impl(tw, "GetUniqueCharacterID", [ret_str, trace_get](jni::JavaCall&) {
         std::string id = random_uuid();
         id.erase(std::remove(id.begin(), id.end(), '-'), id.end());
+        trace_get("GetUniqueCharacterID", id);
         return ret_str(id);
     });
-    for (const char* name : {"GetSignature", "GetChannelID", "GetTWRequestHead", "GetDeclare", "GetGameCenterUrl", "GetChannelUpdateUrl"})
+    // Account getters: the game reads these to learn "who am I logged in as" for the local-save
+    // account-match check. Default empty (guest); RFU_SDK_ACCT lets a replay present the bound
+    // account id out of band, so no real account id is baked into the source. Logged under RFU_TRACE_CFG.
+    for (const char* name : {"GetAccountName", "GetAccountInfo", "GetUserDefineID", "GetUUID", "GetUUIDString", "GetProfileId", "GetSessionId", "GetAccessToken"}) {
+        impl(tw, name, [ret_str, trace_get, name](jni::JavaCall&) {
+            const char* a = std::getenv("RFU_SDK_ACCT");
+            std::string v = a ? a : "";
+            trace_get(name, v);
+            return ret_str(v);
+        });
+    }
+    // GetChannelID is normally empty offline, but replaying a captured cloud session needs the
+    // same channel id the capture used, since the game folds it into the identity it signs/sends.
+    // Supplied out of band via RFU_SDK_CHANNEL so no channel id is baked into the source.
+    impl(tw, "GetChannelID", [ret_str](jni::JavaCall&) {
+        const char* ch = std::getenv("RFU_SDK_CHANNEL");
+        return ret_str(ch ? ch : "");
+    });
+    for (const char* name : {"GetSignature", "GetTWRequestHead", "GetDeclare", "GetGameCenterUrl", "GetChannelUpdateUrl"})
         impl(tw, name, [ret_str](jni::JavaCall&) { return ret_str(""); });
 
     // --- AndroidUIEventManager: the native engine drains the input queue through this, not

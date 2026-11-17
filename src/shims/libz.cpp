@@ -97,12 +97,14 @@ void register_libz(ShimRegistry& reg) {
     });
 
     reg.add("inflateInit_", [](CallContext& c) {
+        if (c.x(0) == 0) return ret_int(c, Z_STREAM_ERROR);  // zlib: a Z_NULL stream -> Z_STREAM_ERROR
         z_stream* h = begin(c, c.x(0));
         int r = inflateInit(h);
         to_guest(c, c.x(0), *h);
         ret_int(c, r);
     });
     reg.add("inflateInit2_", [](CallContext& c) {
+        if (c.x(0) == 0) return ret_int(c, Z_STREAM_ERROR);
         z_stream* h = begin(c, c.x(0));
         int r = inflateInit2(h, static_cast<int>(c.x(1)));
         to_guest(c, c.x(0), *h);
@@ -110,17 +112,21 @@ void register_libz(ShimRegistry& reg) {
     });
     reg.add("inflate", [](CallContext& c) { with_stream(c, [&](z_stream& h) { return inflate(&h, static_cast<int>(c.x(1))); }); });
     reg.add("inflateReset", [](CallContext& c) {
+        if (c.x(0) == 0) return ret_int(c, Z_STREAM_ERROR);
         c.mem().write<std::uint64_t>(c.x(0) + kTotalIn, 0);
         c.mem().write<std::uint64_t>(c.x(0) + kTotalOut, 0);
         with_stream(c, [](z_stream& h) { return inflateReset(&h); });
     });
     reg.add("inflateEnd", [](CallContext& c) {
+        GuestAddr g = c.x(0);  // capture before with_stream: it calls c.ret(), which clobbers x0
+        if (g == 0) return ret_int(c, Z_STREAM_ERROR);  // inflateEnd(Z_NULL): zlib returns Z_STREAM_ERROR
         with_stream(c, [](z_stream& h) { return inflateEnd(&h); });
-        c.mem().write<GuestAddr>(c.x(0) + kState, 0);
-        drop_stream(c, c.x(0));
+        c.mem().write<GuestAddr>(g + kState, 0);
+        drop_stream(c, g);
     });
     // deflateInit2_(strm, level, method, windowBits, memLevel, strategy, version, size)
     reg.add("deflateInit2_", [](CallContext& c) {
+        if (c.x(0) == 0) return ret_int(c, Z_STREAM_ERROR);
         z_stream* h = begin(c, c.x(0));
         int r = deflateInit2(h, static_cast<int>(c.x(1)), static_cast<int>(c.x(2)), static_cast<int>(c.x(3)), static_cast<int>(c.x(4)),
                              static_cast<int>(c.x(5)));
@@ -129,14 +135,17 @@ void register_libz(ShimRegistry& reg) {
     });
     reg.add("deflate", [](CallContext& c) { with_stream(c, [&](z_stream& h) { return deflate(&h, static_cast<int>(c.x(1))); }); });
     reg.add("deflateReset", [](CallContext& c) {
+        if (c.x(0) == 0) return ret_int(c, Z_STREAM_ERROR);
         c.mem().write<std::uint64_t>(c.x(0) + kTotalIn, 0);
         c.mem().write<std::uint64_t>(c.x(0) + kTotalOut, 0);
         with_stream(c, [](z_stream& h) { return deflateReset(&h); });
     });
     reg.add("deflateEnd", [](CallContext& c) {
+        GuestAddr g = c.x(0);  // capture before with_stream: it calls c.ret(), which clobbers x0
+        if (g == 0) return ret_int(c, Z_STREAM_ERROR);  // deflateEnd(Z_NULL): zlib returns Z_STREAM_ERROR
         with_stream(c, [](z_stream& h) { return deflateEnd(&h); });
-        c.mem().write<GuestAddr>(c.x(0) + kState, 0);
-        drop_stream(c, c.x(0));
+        c.mem().write<GuestAddr>(g + kState, 0);
+        drop_stream(c, g);
     });
 
     reg.add("gzopen", [](CallContext& c) {

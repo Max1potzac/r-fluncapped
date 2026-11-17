@@ -363,6 +363,8 @@ void register_libc_stdio(ShimRegistry& reg) {
     auto open = [](CallContext& c) {
         int fd = open_path(c.rt(), guest_path(c, 0), static_cast<int>(c.x(1)));
         log::debug("open({}) = {}", c.str(0), fd);
+        if (std::string(c.str(0)).find("profile_sync") != std::string::npos)
+            log::info("MARKER open({}) flags={:#x} lr=+{:#x}", c.str(0), c.x(1), c.x(30) - 0x10000000);
         if (fd < 0) return c.fail(-fd);
         c.ret(static_cast<std::uint64_t>(fd));
     };
@@ -585,6 +587,21 @@ void register_libc_stdio(ShimRegistry& reg) {
         if (flags < 0) return c.fail(android::kEINVAL, 0);
         int fd = open_path(c.rt(), guest_path(c, 0), flags);
         log::debug("fopen({}, {}) = {}", c.str(0), c.str(1), fd);
+        if (std::string(c.str(0)).find("profile_sync") != std::string::npos) {
+            log::info("MARKER fopen({}, {}) lr=+{:#x}", c.str(0), c.str(1), c.x(30) - 0x10000000);
+            std::uint64_t fp = c.x(29);
+            log::info("MARKER   x29={:#x} x30lr=+{:#x}", fp, c.x(30) - 0x10000000);
+            for (int lvl = 0; lvl < 16 && fp > 0x1000 && (fp & 7) == 0; ++lvl) {
+                std::uint64_t ret = c.mem().read<std::uint64_t>(fp + 8);
+                std::uint64_t nfp = c.mem().read<std::uint64_t>(fp);
+                if (ret >= 0x10000000 && ret < 0x16000000)
+                    log::info("MARKER   frame[{}] lr=+{:#x}", lvl, ret - 0x10000000);
+                else
+                    log::info("MARKER   frame[{}] ret={:#x} (non-code)", lvl, ret);
+                if (nfp <= fp) break;
+                fp = nfp;
+            }
+        }
         if (fd < 0) return c.fail(-fd, 0);
         if (c.str(1)[0] == 'a') files(c.rt()).get(fd)->seek(0, SEEK_END);
         c.ret(new_stream(c.rt(), fd));

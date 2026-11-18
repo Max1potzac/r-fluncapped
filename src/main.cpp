@@ -7,6 +7,7 @@
 // the runtime doesn't implement.
 
 #include "android/app.h"
+#include "android/java_http.h"
 #include "core/hooks.h"
 #include "core/patches.h"
 #include "core/trace.h"
@@ -439,6 +440,23 @@ int main(int argc, char** argv) {
             std::string why = !errors.empty() ? errors.front() : rfu::apply_patches(rt, patches);
             if (why.empty()) rfu::log::info("china cloud-bypass: {} changes applied", patches.size());
             else rfu::log::warn("china cloud-bypass left out: {}", why);
+
+            // The cloud session's crypto seed lives in the cloud manager object, the first
+            // argument of the game's request-encrypt function (libSrc.so+0x21b8870; its libc++
+            // std::string at +0x40 is empty before the V202 login and holds the per-login
+            // session seed after, rotations included). Reporting every encrypt to the stub
+            // keeps its key in sync with the game, so post-login requests decrypt and the
+            // stub's replies encrypt with the key the game is actually using right now.
+            // Byte-checked like the patches above; left out on a different build.
+            if (rt.mem().is_committed(pvz2.base() + 0x21b8870, 4) &&
+                rt.mem().read<std::uint32_t>(pvz2.base() + 0x21b8870) == 0xd102c3ff) {
+                rfu::hook(rt, pvz2.base() + 0x21b8870, "cloud-seed", [&rt](rfu::CallContext& c) {
+                    rfu::android::cloud_stub_note_encrypt_entry(rt, c.x(0));
+                });
+                rfu::log::info("china cloud-seed capture: hooked the request encryptor");
+            } else {
+                rfu::log::warn("china cloud-seed capture left out: unexpected bytes at libSrc.so+0x21b8870 (different build?)");
+            }
         }
 
         if (app.window.hover) app.window.hover = rfu::install_hover_collect(rt, pvz2);

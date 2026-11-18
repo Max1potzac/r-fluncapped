@@ -1038,8 +1038,10 @@ private:
             steps_.push_back({1, 3, to, y});
             return false;
         }
-        if (p.button == PadButton::B || p.button == PadButton::Start) return true;  // back: the game resumes
-        if (p.button != PadButton::A) return false;
+        // Back: the game resumes. But not Start on the title screen, where back quits the game:
+        // there it presses the selection, like A.
+        if (p.button == PadButton::B || (p.button == PadButton::Start && !on_title_)) return true;
+        if (p.button != PadButton::A && p.button != PadButton::Start) return false;
         GuestAddr dialog = menu_dialog();
         if (!dialog) return false;
         auto items = menu_items(dialog);

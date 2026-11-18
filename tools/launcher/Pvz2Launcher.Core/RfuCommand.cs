@@ -30,12 +30,15 @@ public static class RfuCommand
         if (s.Offline) args.Add("--offline");
         // China checks its cloud hosts before letting you play; offline that fails with a "network
         // failure" dialog, so answer those hosts locally. A cloud\ folder of tuned responses
-        // (<req>.json / <req>.raw) next to the game is passed along if present.
+        // (<req>.json / <req>.raw) next to the game holds them, and is also where the stub persists
+        // the uploaded save (_save_v206.json) and the transcript, so progress survives a relaunch.
+        // Ensure it exists so that persistence engages even before any response has been staged.
         if (game.IsChina && s.Offline)
         {
             args.Add("--cloud-stub");
             string cloudDir = Path.Combine(game.Dir, "cloud");
-            if (Directory.Exists(cloudDir)) args.AddRange(["--cloud-dir", cloudDir]);
+            try { Directory.CreateDirectory(cloudDir); } catch { /* fall through; replay still works */ }
+            args.AddRange(["--cloud-dir", cloudDir]);
         }
         else if (game.IsChina && !s.Offline)
         {

@@ -60,6 +60,9 @@ void usage() {
                  "  --controller             play with a game controller: PvZ1 console style on the lawn, a cursor elsewhere (see src/game/game_keys.h)\n"
                  "  --pad-binds <binds>      the controller's buttons for its actions: plant=a,dig=b,use=x,plantfood=y,prevseed=lb,\n"
                  "                           nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start,slowmode=r3\n"
+                 "  --map-buttons <spots>    where the world map's buttons are, for a layout rfu doesn't know (the controller's\n"
+                 "                           shortcuts): settings=137:38,almanac=222:38,zengarden=395:38,shop=-75:53\n"
+                 "                           (pixels at 768 high from the top left, a negative x from the right)\n"
                  "  --pad-mappings <file>    SDL controller mappings (gamecontrollerdb.txt lines) for controllers SDL doesn't know\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
@@ -162,6 +165,7 @@ int main(int argc, char** argv) {
     bool fix_animations = false;
     bool key_hints = false;
     std::vector<rfu::PadBind> pad_binds;
+    rfu::MapButtons map_buttons;
     std::string dump_patches;
     std::vector<std::string> trace_classes;
     bool init_only = false;
@@ -218,6 +222,10 @@ int main(int argc, char** argv) {
             } else if (arg == "--pad-binds") {
                 std::string error;
                 pad_binds = rfu::parse_pad_binds(value(), error);
+                if (!error.empty()) throw std::runtime_error(error);
+            } else if (arg == "--map-buttons") {
+                std::string error;
+                map_buttons = rfu::parse_map_buttons(value(), error);
                 if (!error.empty()) throw std::runtime_error(error);
             } else if (arg == "--pad-mappings") {
                 app.window.pad_mappings = rfu::path_from_utf8(value());
@@ -470,6 +478,7 @@ int main(int argc, char** argv) {
             options.controller = app.window.controller;
             options.pad_hints = key_hints;
             options.pad_binds = pad_binds;
+            options.map_buttons = map_buttons;
             auto keys = rfu::install_game_keys(rt, pvz2, options);
             app.game_keys = keys.key;
             app.game_pad = keys.pad;

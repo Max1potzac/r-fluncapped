@@ -260,6 +260,12 @@ before anything else sees it, and the labels show the button that does each acti
 `--pad-mappings` adds SDL mappings after the controller subsystem starts, so a joystick SDL didn't
 know comes as a controller then; one it still doesn't know is logged with its GUID.
 
+The world map's top buttons (settings, almanac, Zen Garden) and the shop are drawn by the map,
+not widgets or button objects rfu can find, so the pad's shortcuts tap fixed spots: the 1.4.x
+layout, or 1.5.0's when libRFLib has the `UIWorldMapZenGardenButton` string. `--map-buttons`
+overrides any of them for a layout neither matches (pixels at 768 high, a negative x from the
+right edge).
+
 ## Network
 
 The game fetches its CDN content (`https://reflourished.ducnguyen.org/cdn/1.4.2.main.tar`, the

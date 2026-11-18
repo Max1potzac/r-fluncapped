@@ -29,7 +29,9 @@
 #include "platform/window.h"
 
 #include <functional>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace rfu {
@@ -48,11 +50,22 @@ struct PadBind {
 // Empty, with error set, when the text isn't binds.
 std::vector<PadBind> parse_pad_binds(const std::string& text, std::string& error);
 
+// --map-buttons: where the world map's buttons are, for a layout rfu doesn't know, as
+// "settings=137:38,almanac=222:38,zengarden=395:38,shop=-75:53". x and y are pixels of the screen
+// scaled to 768 high, from its top left; a negative x counts from the right edge. A button left
+// out keeps the position rfu knows for the game's layout. Empty, with error set, when the text
+// isn't positions.
+struct MapButtons {
+    std::optional<std::pair<float, float>> settings, almanac, zen_garden, shop;
+};
+MapButtons parse_map_buttons(const std::string& text, std::string& error);
+
 struct GameKeyOptions {
     std::vector<platform::KeyBind> hint_binds;  // the binds whose keys are shown on what they press (--key-hints)
     bool controller = false;                    // the pad's controls on the lawn (--controller)
     bool pad_hints = false;                     // and its buttons shown on what they press
     std::vector<PadBind> pad_binds;             // the pad's buttons, rebound (--pad-binds)
+    MapButtons map_buttons;                     // the world map's buttons, moved (--map-buttons)
 };
 
 struct GameKeyHandlers {

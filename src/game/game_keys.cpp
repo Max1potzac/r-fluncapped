@@ -185,8 +185,9 @@ struct HintBind {
 
 class GameKeys : public std::enable_shared_from_this<GameKeys> {
 public:
-    GameKeys(Runtime& rt, const Module& pvz2, const std::vector<platform::KeyBind>& hint_binds, bool pad_hints, const std::vector<PadBind>& pad_binds)
-        : rt_(rt), base_(pvz2.base()), pad_hints_(pad_hints) {
+    GameKeys(Runtime& rt, const Module& pvz2, const std::vector<platform::KeyBind>& hint_binds, bool pad_hints, const std::vector<PadBind>& pad_binds,
+             const MapButtons& map_buttons)
+        : rt_(rt), base_(pvz2.base()), pad_hints_(pad_hints), map_buttons_(map_buttons) {
         // Each button does its own action, but an action that's rebound leaves its own button
         // idle unless a bind gives it something else.
         for (std::size_t i = 0; i < kPadButtons; ++i) action_of_[i] = static_cast<platform::PadButton>(i);
@@ -959,6 +960,9 @@ private:
     }
 
     void menu_move(int dx, int dy) {
+        // Not while the list is still being dragged to the last one (a held direction stacked
+        // drags up and flung the settings' list), as in the seed chooser.
+        if (!steps_.empty()) return;
         GuestAddr dialog = menu_dialog();
         if (!dialog) return;
         auto items = menu_items(dialog);
@@ -1001,9 +1005,10 @@ private:
         d = std::clamp(d, -v.h * 3 / 4, v.h * 3 / 4);
         std::int32_t x = v.x + std::min(24, v.w / 8), y0 = v.y + v.h / 2 + d / 2;
         steps_.push_back({1, 0, x, y0});
-        constexpr int kSteps = 8;
+        // Slowly, and held still before letting go, so the list doesn't fling on.
+        constexpr int kSteps = 12;
         for (int i = 1; i <= kSteps; ++i) steps_.push_back({1, 1, x, y0 - d * i / kSteps});
-        steps_.push_back({8, 1, x, y0 - d});
+        steps_.push_back({10, 1, x, y0 - d});
         steps_.push_back({1, 3, x, y0 - d});
     }
 
@@ -1050,16 +1055,26 @@ private:
         if (p.button == PadButton::B) return !button_rect(platform::KeyBind::Action::Pause);
         // On the world map: shortcuts to its buttons.
         if (on_map()) {
+            // --map-buttons wins over the layouts rfu knows, for a layout it doesn't.
             std::optional<std::pair<float, float>> at;
-            if (p.button == PadButton::LT) at = map_150_ ? kMapAlmanac150 : kMapAlmanac;
-            else if (p.button == PadButton::RT) at = map_150_ ? kMapZenGarden150 : kMapZenGarden;
-            else if (p.button == PadButton::Start) at = map_150_ ? kMapSettings150 : kMapSettings;
-            if (at) {
-                tap_anchored(at->first, at->second, false);
-                return false;
+            const std::optional<std::pair<float, float>>* own = nullptr;
+            if (p.button == PadButton::LT) {
+                at = map_150_ ? kMapAlmanac150 : kMapAlmanac;
+                own = &map_buttons_.almanac;
+            } else if (p.button == PadButton::RT) {
+                at = map_150_ ? kMapZenGarden150 : kMapZenGarden;
+                own = &map_buttons_.zen_garden;
+            } else if (p.button == PadButton::Start) {
+                at = map_150_ ? kMapSettings150 : kMapSettings;
+                own = &map_buttons_.settings;
+            } else if (p.button == PadButton::Y) {
+                at = std::pair{-kMapShop.first, kMapShop.second};
+                own = &map_buttons_.shop;
             }
-            if (p.button == PadButton::Y) {
-                tap_anchored(kMapShop.first, kMapShop.second, true);
+            if (own && *own) at = **own;
+            if (at) {
+                // A negative x counts from the right edge.
+                tap_anchored(std::abs(at->first), at->second, at->first < 0);
                 return false;
             }
         }
@@ -1347,7 +1362,11 @@ private:
         if (r.y < top + margin) dy = top + margin - r.y;
         else if (r.y + r.h > bottom - margin) dy = bottom - margin - (r.y + r.h);
         if (dy == 0) return;
-        std::int32_t x = r.x + r.w / 2;
+        // Never so short a drag that the game takes it for a tap (which picked the packet under
+        // the finger), and the finger between two columns of packets, not on one, all the same.
+        float least = r.h * 0.3f;
+        if (std::abs(dy) < least) dy = dy > 0 ? least : -least;
+        std::int32_t x = r.x - std::max<std::int32_t>(2, r.w / 40);
         float y0 = dy > 0 ? top + (bottom - top) * 0.2f : bottom - (bottom - top) * 0.2f;
         // A drag needs to go a little way before the list takes it as a scroll.
         float slop = dy > 0 ? r.h * 0.2f : -r.h * 0.2f;
@@ -1917,6 +1936,7 @@ private:
     GuestAddr world_target_ = 0;      // the world the pad last stepped to on the worlds' carousel
     std::int64_t world_next_ = 0;     // when a held direction steps again
     bool map_150_ = false;
+    MapButtons map_buttons_;
     Seen chooser_, view_, reload_;
     GuestAddr ch_sel_ = 0;
     int ch_slot_ = 1;
@@ -1987,8 +2007,48 @@ std::vector<PadBind> parse_pad_binds(const std::string& text, std::string& error
     return binds;
 }
 
+MapButtons parse_map_buttons(const std::string& text, std::string& error) {
+    MapButtons out;
+    std::size_t at = 0;
+    while (at < text.size()) {
+        std::size_t end = text.find(',', at);
+        if (end == std::string::npos) end = text.size();
+        std::string item = text.substr(at, end - at);
+        at = end + 1;
+        for (auto& c : item) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        item.erase(std::remove(item.begin(), item.end(), ' '), item.end());
+        if (item.empty()) continue;
+        std::size_t eq = item.find('='), colon = item.find(':');
+        std::optional<std::pair<float, float>>* slot = nullptr;
+        std::string name = item.substr(0, eq);
+        if (name == "settings") slot = &out.settings;
+        else if (name == "almanac") slot = &out.almanac;
+        else if (name == "zengarden") slot = &out.zen_garden;
+        else if (name == "shop") slot = &out.shop;
+        float x = 0, y = 0;
+        bool ok = slot && eq != std::string::npos && colon != std::string::npos && colon > eq;
+        if (ok) {
+            try {
+                std::size_t nx = 0, ny = 0;
+                std::string xs = item.substr(eq + 1, colon - eq - 1), ys = item.substr(colon + 1);
+                x = std::stof(xs, &nx);
+                y = std::stof(ys, &ny);
+                ok = nx == xs.size() && ny == ys.size() && x != 0 && y >= 0;
+            } catch (...) {
+                ok = false;
+            }
+        }
+        if (!ok) {
+            error = "map buttons: \"" + item + "\" isn't button=x:y (settings, almanac, zengarden or shop)";
+            return {};
+        }
+        *slot = std::pair{x, y};
+    }
+    return out;
+}
+
 GameKeyHandlers install_game_keys(Runtime& rt, const Module& pvz2, const GameKeyOptions& options) {
-    auto keys = std::make_shared<GameKeys>(rt, pvz2, options.hint_binds, options.pad_hints, options.pad_binds);
+    auto keys = std::make_shared<GameKeys>(rt, pvz2, options.hint_binds, options.pad_hints, options.pad_binds, options.map_buttons);
     if (!keys->install(pvz2)) {
         log::warn("game keys (seed, shovel, plant food...): this libPVZ2.so is a build they don't know; left off");
         return {};

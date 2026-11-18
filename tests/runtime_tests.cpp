@@ -192,6 +192,21 @@ void test_pad_binds() {
     EXPECT(rfu::parse_pad_binds("jump=a", error).empty() && !error.empty());
 }
 
+void test_map_buttons() {
+    std::string error;
+    auto m = rfu::parse_map_buttons("Settings=137:38, shop=-75.5:53", error);
+    EXPECT(error.empty() && m.settings && m.shop && !m.almanac && !m.zen_garden);
+    EXPECT(m.settings->first == 137 && m.settings->second == 38 && m.shop->first == -75.5f);
+    rfu::parse_map_buttons("arcade=1:2", error);
+    EXPECT(!error.empty());
+    error.clear();
+    rfu::parse_map_buttons("almanac=12", error);
+    EXPECT(!error.empty());
+    error.clear();
+    rfu::parse_map_buttons("almanac=1x:2", error);
+    EXPECT(!error.empty());
+}
+
 void test_patches() {
     std::vector<std::string> errors;
     auto p = rfu::parse_patches("# name: test\nlibPVZ2.so+0x1a2b3c 1F 20 03 D5 was 00 00 80 52\nlibRFLib.so+10 C0035FD6\n"
@@ -313,7 +328,7 @@ void test_guest_offline(const std::filesystem::path& dir) {
 int main(int argc, char** argv) {
     rfu::log::set_level(rfu::log::Level::Warn);
     std::vector<std::pair<const char*, std::function<void()>>> tests{
-        {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"key hints", test_key_hints}, {"pad binds", test_pad_binds}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}};
+        {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"key hints", test_key_hints}, {"pad binds", test_pad_binds}, {"map buttons", test_map_buttons}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}};
     if (argc > 1) {
         tests.emplace_back("guest", [&] { test_guest(argv[1]); });
         tests.emplace_back("hooks", [&] { test_hooks(argv[1]); });

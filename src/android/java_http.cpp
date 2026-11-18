@@ -7,6 +7,7 @@
 #include "runtime.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -163,22 +165,28 @@ std::string guest_std_string(GuestMemory& mem, GuestAddr addr) {
     return s;
 }
 
-// The cloud session's current crypto seed. The game keeps a singleton (libSrc.so .bss
-// +0x5e672e0) whose std::string at +0x40 is empty until the V202 login, then holds the
-// per-login session seed (chosen by the client, sent to the server inside V202's RSA-encrypted
-// request). Everything after V202 derives its AES key from that string; reading it here lets
-// the stub speak the same crypto the game is speaking right now, online capture included.
-// Empty/unset means the static default seed (cloud::kDefaultSeed).
+// The live cloud manager pointer, captured by the hook on the game's request-encrypt
+// function (libSrc.so+0x21b8870, installed by main.cpp): that function takes the manager
+// as arg0 and reads the crypto seed from its libc++ std::string at +0x40. The string is
+// empty until the V202 login, then holds the per-login session seed (chosen by the client,
+// sent to the server inside V202's RSA-encrypted request); a later "ns" rotation rewrites
+// it in place. g_seed is the last non-empty value seen, for when the pointer is stale.
+std::atomic<GuestAddr> g_manager{0};
+std::mutex g_seed_mutex;
+std::string g_seed;
+
+// The cloud session's current crypto seed. A live read of the captured manager's +0x40
+// string is always current (login, rotation included); everything after V202 derives its
+// AES key from that string, so this lets the stub speak the same crypto the game is
+// speaking right now, online capture included. Empty/unset means the static default seed.
 std::string session_seed(Runtime& rt) {
-    if (Module* m = rt.linker().find_module("libSrc.so")) {
-        GuestAddr g = m->base() + 0x5e672e0;
-        if (rt.mem().is_committed(g, 8)) {
-            GuestAddr obj = rt.mem().read<std::uint64_t>(g);
-            if (obj) {
-                std::string s = guest_std_string(rt.mem(), obj + 0x40);
-                if (!s.empty()) return s;
-            }
-        }
+    if (GuestAddr mgr = g_manager.load()) {
+        std::string s = guest_std_string(rt.mem(), mgr + 0x40);
+        if (!s.empty()) return s;
+    }
+    {
+        std::lock_guard lock(g_seed_mutex);
+        if (!g_seed.empty()) return g_seed;
     }
     return cloud::kDefaultSeed;
 }
@@ -274,21 +282,25 @@ std::string field(const std::string& body, const std::string& name) {
 
 // The plaintext JSON reply for an endpoint, or empty to answer with an empty body. Driven by files
 // under RFU_CLOUD_DIR (<req>.json) while the protocol is still being worked out, so responses can be
-// tuned without rebuilding; .raw next to it is sent verbatim (to try different response framings).
+// tuned without rebuilding. .json wins over .raw: it is re-encrypted with the seed of the current
+// session, so the game can always read it, while a .raw is the verbatim capture, still encrypted
+// with the capture session's (usually different) seed — readable only for endpoints the server
+// answers with the static default seed (everything up to and including the V202 login). The .raw
+// stays as the fallback for endpoints that have no .json yet.
 std::optional<std::string> response_plain(const std::string& req, const std::string& req_json, bool& raw) {
     raw = false;
     if (const char* dir = std::getenv("RFU_CLOUD_DIR")) {
         std::filesystem::path d(dir);
         std::error_code ec;
+        if (std::filesystem::exists(d / (req + ".json"), ec)) {
+            std::ifstream in(d / (req + ".json"), std::ios::binary);
+            std::ostringstream ss; ss << in.rdbuf();
+            return ss.str();
+        }
         if (std::filesystem::exists(d / (req + ".raw"), ec)) {
             std::ifstream in(d / (req + ".raw"), std::ios::binary);
             std::ostringstream ss; ss << in.rdbuf();
             raw = true;
-            return ss.str();
-        }
-        if (std::filesystem::exists(d / (req + ".json"), ec)) {
-            std::ifstream in(d / (req + ".json"), std::ios::binary);
-            std::ostringstream ss; ss << in.rdbuf();
             return ss.str();
         }
     }
@@ -416,6 +428,15 @@ void run(HttpState& s, Transaction& t) {
             std::string d = cloud_stub::json_d_value(req_json);
             if (!d.empty()) {
                 std::ofstream out(std::filesystem::path(cloud_dir_env) / "_save_v206.json", std::ios::trunc);
+                out << d;
+            }
+        }
+        // The big V303 right after boot is the full-profile exchange; its request plaintext
+        // is kept for study (offline profile persistence is built out of this flow).
+        if (req == "V303" && e.size() >= 5000 && !req_json.empty() && cloud_dir_env) {
+            std::string d = cloud_stub::json_d_value(req_json);
+            if (!d.empty()) {
+                std::ofstream out(std::filesystem::path(cloud_dir_env) / "_save_v303.json", std::ios::trunc);
                 out << d;
             }
         }
@@ -884,6 +905,21 @@ void worker(HttpState& s) {
 }
 
 }  // namespace
+
+void cloud_stub_note_encrypt_entry(Runtime& rt, std::uint64_t manager) {
+    if (!manager) return;
+    cloud_stub::g_manager.store(manager);
+    // Refresh our copy of the seed right away (a cheap read on a per-request hook): the
+    // manager's +0x40 string is what this very encrypt call is about to use.
+    std::string s = cloud_stub::guest_std_string(rt.mem(), manager + 0x40);
+    if (!s.empty()) {
+        std::lock_guard lock(cloud_stub::g_seed_mutex);
+        if (cloud_stub::g_seed != s) {
+            cloud_stub::g_seed = s;
+            log::info("cloud stub: session seed captured from the game ({} chars)", s.size());
+        }
+    }
+}
 
 void implement_http(Runtime& rt, bool online, const std::string& transaction_class, const std::filesystem::path& cache_dir,
                     const std::string& hold_ui) {

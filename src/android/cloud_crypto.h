@@ -163,7 +163,8 @@ struct Aes256 {
 };
 }  // namespace detail
 
-// ---- base64url (no padding), matching the game.
+// ---- base64url, matching the game: no '=', but the padding slots are written as ',' (the
+// game substitutes ',' for '=' so the value survives form fields untouched).
 inline std::string b64url_encode(const std::uint8_t* d, std::size_t n) {
     static const char* t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     std::string out;
@@ -205,15 +206,20 @@ struct KeyIv {
     std::string key;  // 32 bytes
     std::string iv;   // 16 bytes
 };
-inline KeyIv key_iv(const std::string& req) {
-    std::string key = md5_hex("1geh6fvq4r20M02s" + req);  // 32 hex chars
+// The seed every cloud message uses until the V202 login installs the session's own seed (the
+// client generates one per login and RSA-encrypts it into V202's request; the game keeps it as a
+// std::string at session+0x40 and both sides derive keys from it afterwards).
+inline const char* kDefaultSeed = "1geh6fvq4r20M02s";
+inline KeyIv key_iv_seed(const std::string& seed, const std::string& req) {
+    std::string key = md5_hex(seed + req);  // 32 hex chars
     std::string iv = md5_hex(key).substr(0, 16);
     return {key, iv};
 }
+inline KeyIv key_iv(const std::string& req) { return key_iv_seed(kDefaultSeed, req); }
 
 // Decrypt the `e` field (base64url) for an endpoint. Returns the plaintext JSON (PKCS7 stripped).
-inline std::string decrypt(const std::string& req, std::string_view e) {
-    auto ki = key_iv(req);
+inline std::string decrypt_with(const std::string& seed, const std::string& req, std::string_view e) {
+    auto ki = key_iv_seed(seed, req);
     auto ct = b64url_decode(e);
     if (ct.empty() || ct.size() % 16 != 0) return {};
     detail::Aes256 aes(reinterpret_cast<const std::uint8_t*>(ki.key.data()));
@@ -237,9 +243,13 @@ inline std::string decrypt(const std::string& req, std::string_view e) {
     return out;
 }
 
+inline std::string decrypt(const std::string& req, std::string_view e) {
+    return decrypt_with(kDefaultSeed, req, e);
+}
+
 // Encrypt a plaintext JSON response for an endpoint, returning the base64url `e` value.
-inline std::string encrypt(const std::string& req, std::string_view plain) {
-    auto ki = key_iv(req);
+inline std::string encrypt_with(const std::string& seed, const std::string& req, std::string_view plain) {
+    auto ki = key_iv_seed(seed, req);
     detail::Aes256 aes(reinterpret_cast<const std::uint8_t*>(ki.key.data()));
     std::vector<std::uint8_t> buf(plain.begin(), plain.end());
     std::uint8_t pad = static_cast<std::uint8_t>(16 - (buf.size() % 16));
@@ -251,7 +261,12 @@ inline std::string encrypt(const std::string& req, std::string_view plain) {
         aes.encrypt_block(buf.data() + off);
         std::memcpy(prev, buf.data() + off, 16);
     }
-    return b64url_encode(buf.data(), buf.size());
+    std::string out = b64url_encode(buf.data(), buf.size());
+    while (out.size() % 4 != 0) out += ',';  // the game's '=' stand-in
+    return out;
+}
+inline std::string encrypt(const std::string& req, std::string_view plain) {
+    return encrypt_with(kDefaultSeed, req, plain);
 }
 
 }  // namespace rfu::android::cloud

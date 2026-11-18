@@ -11,7 +11,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <condition_variable>
+#include <ctime>
 #include <deque>
+
+#include <zlib.h>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -115,6 +118,120 @@ std::shared_ptr<Transaction> find(HttpState& s, GuestAddr self) {
 // own local profile path runs. The request is multipart/form-data with fields `req` (an endpoint
 // code), `e` (base64url(AES-256-CBC(JSON))) and `ev`. See cloud_crypto.h for the scheme.
 namespace cloud_stub {
+
+// Inflate a gzip member (the cloud server answers Content-Encoding: gzip, and rfu forwards the
+// game's own Accept-Encoding, so captured response bodies are gzipped). Returns the input
+// unchanged when it isn't gzip.
+std::string maybe_gunzip(const std::string& body) {
+    if (body.size() < 4 || (static_cast<std::uint8_t>(body[0]) != 0x1f) || (static_cast<std::uint8_t>(body[1]) != 0x8b))
+        return body;
+    z_stream zs{};
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(body.data()));
+    zs.avail_in = static_cast<uInt>(body.size());
+    if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) return body;
+    std::string out;
+    char chunk[16384];
+    int ret;
+    do {
+        zs.next_out = reinterpret_cast<Bytef*>(chunk);
+        zs.avail_out = sizeof(chunk);
+        ret = inflate(&zs, Z_NO_FLUSH);
+        if (ret != Z_OK && ret != Z_STREAM_END && ret != Z_BUF_ERROR) { inflateEnd(&zs); return body; }
+        out.append(chunk, sizeof(chunk) - zs.avail_out);
+    } while (ret != Z_STREAM_END);
+    inflateEnd(&zs);
+    return out;
+}
+
+// Read a libc++ std::string out of the guest (short: byte0 = size<<1, data at +1; long:
+// byte0 bit0 = 1, size at +8, data pointer at +16). Empty when the memory isn't there.
+std::string guest_std_string(GuestMemory& mem, GuestAddr addr) {
+    if (!addr || !mem.is_committed(addr, 24)) return {};
+    std::uint8_t b0 = mem.read<std::uint8_t>(addr);
+    if ((b0 & 1) == 0) {
+        std::size_t len = b0 >> 1;
+        if (len > 23 || !mem.is_committed(addr + 1, len)) return {};
+        std::string s(len, '\0');
+        mem.read_bytes(addr + 1, s.data(), len);
+        return s;
+    }
+    std::uint64_t len = mem.read<std::uint64_t>(addr + 8);
+    GuestAddr data = mem.read<std::uint64_t>(addr + 16);
+    if (len == 0 || len > 65536 || !mem.is_committed(data, len)) return {};
+    std::string s(static_cast<std::size_t>(len), '\0');
+    mem.read_bytes(data, s.data(), len);
+    return s;
+}
+
+// The cloud session's current crypto seed. The game keeps a singleton (libSrc.so .bss
+// +0x5e672e0) whose std::string at +0x40 is empty until the V202 login, then holds the
+// per-login session seed (chosen by the client, sent to the server inside V202's RSA-encrypted
+// request). Everything after V202 derives its AES key from that string; reading it here lets
+// the stub speak the same crypto the game is speaking right now, online capture included.
+// Empty/unset means the static default seed (cloud::kDefaultSeed).
+std::string session_seed(Runtime& rt) {
+    if (Module* m = rt.linker().find_module("libSrc.so")) {
+        GuestAddr g = m->base() + 0x5e672e0;
+        if (rt.mem().is_committed(g, 8)) {
+            GuestAddr obj = rt.mem().read<std::uint64_t>(g);
+            if (obj) {
+                std::string s = guest_std_string(rt.mem(), obj + 0x40);
+                if (!s.empty()) return s;
+            }
+        }
+    }
+    return cloud::kDefaultSeed;
+}
+
+// The value of the top-level "d" member of a JSON object, as text (objects/arrays extracted
+// with a string-aware brace scan). Empty when there is no "d".
+std::string json_d_value(const std::string& json) {
+    auto p = json.find("\"d\"");
+    if (p == std::string::npos) return {};
+    p = json.find(':', p + 3);
+    if (p == std::string::npos) return {};
+    ++p;
+    while (p < json.size() && (json[p] == ' ' || json[p] == '\t')) ++p;
+    if (p >= json.size()) return {};
+    std::size_t start = p;
+    if (json[p] == '{' || json[p] == '[') {
+        int depth = 0;
+        bool in_str = false, esc = false;
+        for (; p < json.size(); ++p) {
+            char c = json[p];
+            if (esc) { esc = false; continue; }
+            if (c == '\\') { esc = true; continue; }
+            if (c == '"') { in_str = !in_str; continue; }
+            if (in_str) continue;
+            if (c == '{' || c == '[') ++depth;
+            else if (c == '}' || c == ']') { if (--depth == 0) return json.substr(start, p - start + 1); }
+        }
+        return {};
+    }
+    if (json[p] == '"') {
+        ++p;
+        for (bool esc = false; p < json.size(); ++p) {
+            char c = json[p];
+            if (esc) { esc = false; continue; }
+            if (c == '\\') { esc = true; continue; }
+            if (c == '"') return json.substr(start, p - start + 1);
+        }
+        return {};
+    }
+    auto end = json.find_first_of(",}", p);
+    return end == std::string::npos ? json.substr(p) : json.substr(p, end - p);
+}
+
+// Replace the first "st":<digits> with the current unix time (V202's server time: a stale one
+// makes the client distrust the session).
+void freshen_server_time(std::string& json) {
+    auto p = json.find("\"st\":");
+    if (p == std::string::npos) return;
+    p += 5;
+    auto end = p;
+    while (end < json.size() && std::isdigit(static_cast<unsigned char>(json[end]))) ++end;
+    if (end > p) json.replace(p, end - p, std::to_string(static_cast<long long>(std::time(nullptr))));
+}
 
 // The game's own cloud hosts. The talkyun/log hosts are telemetry (plain JSON, no reply needed).
 bool is_cloud_host(const std::string& url) {
@@ -222,7 +339,7 @@ std::string recover_ui_from_v202() {
     if (!std::filesystem::exists(path, ec)) return {};
     std::ifstream in(path, std::ios::binary);
     std::ostringstream ss; ss << in.rdbuf();
-    std::string body = ss.str();
+    std::string body = maybe_gunzip(ss.str());
     std::string e = json_string_field(body, "e");
     if (e.empty()) return {};
     std::string plain = cloud::decrypt("V202", e);
@@ -264,10 +381,44 @@ void run(HttpState& s, Transaction& t) {
         std::string body(t.request.body.begin(), t.request.body.end());
         std::string req = cloud_stub::field(body, "req");
         std::string e = cloud_stub::field(body, "e");
+        // Decrypt the request with the seed the game is using right now: the static default
+        // before the V202 login, the per-login session seed after (read from the game's own
+        // memory, see cloud_stub::session_seed). The reply must use the same seed the request
+        // used, or the game can't read it.
+        std::string seed = cloud_stub::session_seed(*s.rt);
+        std::string reply_seed = seed;
         std::string req_json;
-        if (!req.empty() && !e.empty()) req_json = cloud::decrypt(req, e);
+        if (!req.empty() && !e.empty()) {
+            req_json = cloud::decrypt_with(seed, req, e);
+            if (req_json.empty() || req_json.front() != '{') {
+                std::string alt = cloud::decrypt(req, e);
+                if (!alt.empty() && alt.front() == '{') {
+                    req_json = std::move(alt);
+                    reply_seed = cloud::kDefaultSeed;
+                } else {
+                    req_json.clear();
+                }
+            }
+        }
+        if (req == "V202") reply_seed = cloud::kDefaultSeed;  // the login answer is default-seeded
         log::info("cloud stub: {} req={} -> {}", t.request.url, req, req_json.empty() ? "(no payload)" : req_json);
         if (!e.empty() && std::getenv("RFU_CLOUD_RAWE")) log::info("cloud stub: rawe req={} e={}", req, e);
+        // The transcript and the profile store live next to the response files (RFU_CLOUD_DIR):
+        // _transcript.log gets every request/response pair in plaintext (the protocol reference,
+        // and how new endpoints get learned), _save_v206.json the newest full-profile push.
+        const char* cloud_dir_env = std::getenv("RFU_CLOUD_DIR");
+        if (cloud_dir_env) {
+            std::ofstream tr(std::filesystem::path(cloud_dir_env) / "_transcript.log", std::ios::app);
+            tr << "> " << req << " seed=" << (reply_seed == cloud::kDefaultSeed ? "default" : "session") << " "
+               << (req_json.empty() ? "(undecrypted)" : req_json) << "\n";
+        }
+        if (req == "V206" && !req_json.empty() && cloud_dir_env) {
+            std::string d = cloud_stub::json_d_value(req_json);
+            if (!d.empty()) {
+                std::ofstream out(std::filesystem::path(cloud_dir_env) / "_save_v206.json", std::ios::trunc);
+                out << d;
+            }
+        }
         // RFU_SCAN_NEEDLE + RFU_SCAN_REQ: when this request code matches RFU_SCAN_REQ, scan committed
         // guest heap+module memory for the ASCII needle and log every hit address. Used to locate the
         // native "current cloud ui" field at a known moment in the cloud flow.
@@ -383,9 +534,46 @@ void run(HttpState& s, Transaction& t) {
 
         bool raw = false;
         std::optional<std::string> plain = cloud_stub::response_plain(req, req_json, raw);
+        if (plain && !raw) cloud_stub::freshen_server_time(*plain);
+        if (!plain && !req.empty()) {
+            // No staged file for this endpoint: synthesize an answer the game can keep going on.
+            // The big V303 (the full profile download right after boot) gets the newest profile the
+            // game itself pushed (persisted from V206), so progress survives restarts offline and
+            // the "please sync the cloud save first" gate never trips: cloud and local always match.
+            if (req == "V303" && e.size() >= 5000 && cloud_dir_env) {
+                std::ifstream in(std::filesystem::path(cloud_dir_env) / "_save_v206.json", std::ios::binary);
+                std::ostringstream ss;
+                ss << in.rdbuf();
+                std::string d = ss.str();
+                if (!d.empty()) {
+                    plain = "{\"i\":\"V303\",\"r\":0,\"d\":" + d + "}";
+                    log::info("cloud stub: V303 big answered from the stored profile ({} bytes)", d.size());
+                }
+            }
+            if (!plain) {
+                plain = "{\"i\":\"" + req + "\",\"r\":0,\"d\":{}}";
+                log::info("cloud stub: no file for {}; answering an empty success", req);
+            }
+        }
         std::string reply;  // the response body bytes to deliver
         if (plain) {
-            reply = raw ? *plain : (req.empty() ? *plain : cloud::encrypt(req, *plain));
+            // The body is the JSON envelope the real server sends: {"i":..,"r":0,"e":..}, with the
+            // inner plaintext AES-encrypted into e. (.raw stays verbatim, for full-envelope captures.)
+            if (raw) {
+                // A .raw is a verbatim capture, which is gzipped when the server sent it that way;
+                // the stub's own headers don't carry Content-Encoding, so hand the game the
+                // decompressed envelope.
+                reply = cloud_stub::maybe_gunzip(*plain);
+            } else if (e.empty()) {
+                reply = "{\"i\":\"" + req + "\",\"r\":0}";  // no e on the request: none on the answer
+            } else {
+                std::string enc = cloud::encrypt_with(reply_seed, req, *plain);
+                reply = "{\"i\":\"" + req + "\",\"r\":0,\"e\":\"" + enc + "\"}";
+            }
+            if (cloud_dir_env) {
+                std::ofstream tr(std::filesystem::path(cloud_dir_env) / "_transcript.log", std::ios::app);
+                tr << "< " << req << " " << (raw ? std::string("<raw>") : *plain) << "\n";
+            }
             log::info("cloud stub: reply to {} ({} bytes{}): {}", req, reply.size(), raw ? ", raw" : "",
                       raw ? std::string("<raw>") : *plain);
         }
@@ -650,6 +838,26 @@ void run(HttpState& s, Transaction& t) {
             std::ofstream out(f, std::ios::binary);
             out.write(record_buf->data(), static_cast<std::streamsize>(record_buf->size()));
             log::info("cloud record: wrote {} ({} bytes)", f.string(), record_buf->size());
+            // Decrypt the captured envelope with the game's current session seed and keep the
+            // plaintext next to the .raw: a .json is directly servable by the offline stub, and
+            // readable, which the raw capture is not.
+            std::string wire = cloud_stub::maybe_gunzip(*record_buf);
+            std::string ee = cloud_stub::json_string_field(wire, "e");
+            if (!ee.empty()) {
+                std::string seed = cloud_stub::session_seed(*s.rt);
+                std::string plain = cloud::decrypt_with(seed, record_req, ee);
+                if (plain.empty() || plain.front() != '{') plain = cloud::decrypt(record_req, ee);
+                if (!plain.empty() && plain.front() == '{') {
+                    std::ofstream pj(std::filesystem::path(std::getenv("RFU_CLOUD_RECORD")) / (record_req + ".json"),
+                                     std::ios::trunc);
+                    pj << plain;
+                    log::info("cloud record: decrypted {} ({} bytes, {} seed)", record_req, plain.size(),
+                              seed == cloud::kDefaultSeed ? "default" : "session");
+                } else {
+                    log::info("cloud record: {} left encrypted (seed {} did not fit)", record_req,
+                              seed == cloud::kDefaultSeed ? "default" : "session");
+                }
+            }
         }
         if (!t.cancel.load()) fire("HttpTransactionComplete");
     } else {

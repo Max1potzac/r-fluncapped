@@ -24,11 +24,17 @@ namespace Pvz2Launcher;
 ///                     "createDirs": [ folders made before the game starts ],
 ///                     "hooks":    [ launcher features: "keybinds-file", "pad-binds" ],
 ///                     "actions":  [ { "label", "run": "edit-keybinds" | "controller-settings" | "open:<path>" } ],
-///                     "language": "en-US", "strings": "strings.json"   (localization) }
+///                     "language": "en-US", "strings": "strings.json"   (localization),
+///                     "fonts":    { "<the game's font>": "<a font in the mod>" } }
 ///   cdn/...         content over the game's CDN folder (No_Backup/CDN.<version>: levels, strings,
 ///                   liveconfig ...), the content the game downloads and RFLib reads
 ///   files/...       content over the game's external files folder (what Android calls
 ///                   /sdcard/Android/data/<package>/files)
+///   fonts/...       fonts in place of the game's, by its font's file name (BrianneTod.ttf): a
+///                   localization's fonts with the letters the game's lack. Each takes the name of
+///                   the font it replaces, so the game's typefaces (FONTS.RTON) use it.
+///   obb/...         files in place of the OBB's own, at their paths there (PACKAGES/FONTS.rton,
+///                   or .json converted): ordinary files the OBB has, not textures (ObbPatch)
 ///
 /// rfu lays content over the game's files read-only (--overlay), so nothing of the game's is
 /// changed and switching a mod off is just not passing it. A folder with no mod.json and neither
@@ -40,6 +46,9 @@ namespace Pvz2Launcher;
 /// earlier mods'), so text the mod doesn't have isn't lost, and the game's CDN download no longer
 /// wipes them out. A localization's strings file is a plain { "KEY": "text" } object, merged the
 /// same way over the game's LawnStrings-<language>.
+///
+/// Fonts and obb/ files go into the OBB as rfu reads it, through a patch (ObbPatch, --obb-patch),
+/// so the OBB isn't changed either.
 ///
 /// The code patch files in a game's patches/ folder show up as injection mods of their own
 /// ("patches/<file>").
@@ -76,8 +85,11 @@ public static class Mods
         public string? Language { get; init; }
         /// Full path of a localization's strings file.
         public string? Strings { get; init; }
+        /// Its fonts: the game's font file name ("BrianneTod.ttf") -> the mod's font (full path).
+        public IReadOnlyDictionary<string, string> Fonts { get; init; } = new Dictionary<string, string>();
         public ModSource Source { get; init; }
-        /// The mod has files to lay over the game's (cdn/, files/, loose content, or strings).
+        /// The mod has files to lay over the game's (cdn/, files/, loose content, strings, fonts
+        /// or obb/ files).
         public bool HasContent { get; init; }
         /// What's wrong with its mod.json, or null.
         public string? Problem { get; init; }
@@ -100,6 +112,8 @@ public static class Mods
     };
 
     static readonly string[] Roots = ["cdn", "files"];
+    // what goes into the OBB rather than over a folder
+    static readonly string[] ObbRoots = ["fonts", "obb"];
     static readonly HashSet<string> NotContent = new(StringComparer.OrdinalIgnoreCase) { "mod.json", "missing-strings.json", "readme.txt", "readme.md", "license", "license.txt" };
     static readonly JsonDocumentOptions ManifestOptions = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
 
@@ -165,7 +179,24 @@ public static class Mods
         string? stringsPath = language != "" ? Inside(strings) : null;
         var rfu = List("rfu");
 
-        bool laidOut = Roots.Any(root => Directory.Exists(Path.Combine(dir, root)));
+        // fonts: mod.json's, then the fonts/ folder's that mod.json doesn't name, by the game's
+        // font file name
+        var fonts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (has && r.TryGetProperty("fonts", out var fv) && fv.ValueKind == JsonValueKind.Object)
+            foreach (var f in fv.EnumerateObject().Where(f => f.Value.ValueKind == JsonValueKind.String))
+            {
+                string gameFont = Path.GetFileNameWithoutExtension(f.Name.Trim()) + ".ttf";
+                string mine = Inside(f.Value.GetString()!);
+                fonts[gameFont] = mine;
+                if (!File.Exists(mine)) problem ??= $"its font {f.Value.GetString()} is missing";
+            }
+        string fontsDir = Path.Combine(dir, "fonts");
+        if (Directory.Exists(fontsDir))
+            foreach (var f in Directory.EnumerateFiles(fontsDir).Where(IsFont))
+                if (!fonts.Values.Contains(Path.GetFullPath(f), StringComparer.OrdinalIgnoreCase))
+                    fonts.TryAdd(Path.GetFileNameWithoutExtension(f) + ".ttf", f);
+
+        bool laidOut = Roots.Concat(ObbRoots).Any(root => Directory.Exists(Path.Combine(dir, root))) || fonts.Count > 0;
         bool loose = !laidOut && stringsPath == null && Directory.Exists(dir) &&
                      Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
                          .Any(f => !NotContent.Contains(Path.GetFileName(f)) && !f.EndsWith(".patch", StringComparison.OrdinalIgnoreCase));
@@ -200,10 +231,13 @@ public static class Mods
             DefaultOn = defaultOn, Rfu = rfu, Patches = patches, RequiresAny = List("requiresAny"),
             When = when is "offline" or "online" ? when : null,
             CreateDirs = List("createDirs"), Hooks = List("hooks"), Actions = actions,
-            Language = language == "" ? null : language, Strings = stringsPath,
+            Language = language == "" ? null : language, Strings = stringsPath, Fonts = fonts,
             Source = source, HasContent = hasContent, Problem = problem,
         };
     }
+
+    static bool IsFont(string path) =>
+        path.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".otf", StringComparison.OrdinalIgnoreCase);
 
     static bool LooksLikeLevels(string dir) =>
         Directory.Exists(Path.Combine(dir, "levels")) || Directory.Exists(Path.Combine(dir, "cdn", "levels"));
@@ -323,7 +357,9 @@ public static class Mods
     /// One --overlay for rfu: a guest directory and the host directory laid over it.
     public sealed record Overlay(string Guest, string Host);
 
-    public sealed record BuildResult(List<Overlay> Overlays, List<string> Log);
+    /// What to pass rfu: the overlays, and the OBB patch (--obb-patch) when mods have fonts or
+    /// obb/ files.
+    public sealed record BuildResult(List<Overlay> Overlays, List<string> Log, string? ObbPatch = null);
 
     /// The CDN folder the game uses: the newest No_Backup/CDN.* it has made, else CDN.<version>.
     public static string CdnFolderName(GameFolder game)
@@ -351,7 +387,8 @@ public static class Mods
         }
         var mods = picked.Where(m => m.Strings == null).Select(m => m.Dir).ToList();
         var localizations = picked.Where(m => m.Strings != null).ToList();
-        if (picked.Count == 0) return new BuildResult([], log);
+        string? obbPatch = BuildObbPatch(game, picked, log);
+        if (picked.Count == 0) return new BuildResult([], log, obbPatch);
 
         string package = game.Info?.Package is { Length: > 0 } p ? p : "com.ea.game.pvz2_rfl";
         string cdnName = CdnFolderName(game);
@@ -401,7 +438,7 @@ public static class Mods
             sources.Add(mod.Strings!);
         }
 
-        if (plan.Count == 0) return new BuildResult([], log);
+        if (plan.Count == 0) return new BuildResult([], log, obbPatch);
         Directory.CreateDirectory(game.WorkDir);
         string outDir = Path.Combine(game.WorkDir, "overlay");
         string stampPath = Path.Combine(game.WorkDir, "overlay.stamp");
@@ -452,7 +489,85 @@ public static class Mods
 
         var overlays = Roots.Where(r => Directory.Exists(Path.Combine(outDir, r)))
             .Select(r => new Overlay(guest[r], Path.Combine(outDir, r))).ToList();
-        return new BuildResult(overlays, log);
+        return new BuildResult(overlays, log, obbPatch);
+    }
+
+    /// The mods' fonts and obb/ files put into the game's OBB as a patch for rfu, in
+    /// .launcher/obb-patch.bin, or null when there are none (or it can't be made). Made again only
+    /// when the OBB or a file changed.
+    static string? BuildObbPatch(GameFolder game, IReadOnlyList<Mod> mods, List<string> log)
+    {
+        // OBB path -> (the mod's file, whether it's a font), the last mod in load order winning
+        var plan = new Dictionary<string, (string File, bool Font)>(StringComparer.Ordinal);
+        foreach (var mod in mods)
+        {
+            foreach (var (gameFont, file) in mod.Fonts) plan[ObbPatch.Key("PRIMEFONTS/" + gameFont)] = (file, true);
+            string obbDir = Path.Combine(mod.Dir, "obb");
+            if (Directory.Exists(obbDir))
+                foreach (var file in Directory.EnumerateFiles(obbDir, "*", SearchOption.AllDirectories))
+                    plan[ObbPatch.Key(Path.GetRelativePath(obbDir, file))] = (file, false);
+        }
+        string patchPath = Path.Combine(game.WorkDir, "obb-patch.bin"), stampPath = Path.Combine(game.WorkDir, "obb-patch.stamp");
+        if (plan.Count == 0) return null;
+        if (game.Obb == null || !File.Exists(game.Obb))
+        {
+            log.Add("fonts and obb/ files go into the OBB, and this game has none (PvZ2 China's data is in its APK); left out");
+            return null;
+        }
+        var stamp = new StringBuilder($"obb-patch v1\n{game.Obb}|{new FileInfo(game.Obb).Length}|{File.GetLastWriteTimeUtc(game.Obb).Ticks}\n");
+        foreach (var (key, (file, font)) in plan.OrderBy(p => p.Key, StringComparer.Ordinal))
+            stamp.Append($"{key}|{file}|{font}|{(File.Exists(file) ? $"{new FileInfo(file).Length}|{File.GetLastWriteTimeUtc(file).Ticks}" : "-")}\n");
+        if (File.Exists(patchPath) && File.Exists(stampPath) && File.ReadAllText(stampPath) == stamp.ToString())
+        {
+            log.Add($"OBB patch: {plan.Count} file(s), unchanged since the last build");
+            return patchPath;
+        }
+        try
+        {
+            var index = ObbPatch.Read(game.Obb);
+            // an obb/ file as JSON goes in as the RTON the OBB has
+            var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            var fontKeys = plan.Where(p => p.Value.Font).Select(p => p.Key).ToList();
+            var originals = ObbPatch.ReadFiles(game.Obb, index, fontKeys);
+            foreach (var (key, (file, font)) in plan)
+            {
+                if (!File.Exists(file)) { log.Add($"{file} is missing; left out"); continue; }
+                if (font)
+                {
+                    if (!originals.TryGetValue(key, out var original))
+                    {
+                        var known = index.Files.Keys.Where(k => k.StartsWith("PRIMEFONTS\\", StringComparison.Ordinal)).Select(k => Path.GetFileName(k.Replace('\\', '/')));
+                        log.Add($"{Path.GetFileName(file)}: the game has no font {key[11..]} (its fonts: {string.Join(", ", known)}); left out");
+                        continue;
+                    }
+                    try { files[key] = Fonts.WithNames(File.ReadAllBytes(file), original); }
+                    catch (FormatException e) { log.Add($"{Path.GetFileName(file)}: {e.Message}; left out"); }
+                    continue;
+                }
+                string target = key;
+                if (key.EndsWith(".RTON.JSON", StringComparison.Ordinal)) target = key[..^5];
+                else if (key.EndsWith(".JSON", StringComparison.Ordinal) && index.Files.ContainsKey(key[..^5] + ".RTON")) target = key[..^5] + ".RTON";
+                files[target] = target != key ? Pvz2Conv.RtonWriter.FromJson(File.ReadAllBytes(file)) : File.ReadAllBytes(file);
+            }
+            var patch = ObbPatch.Build(game.Obb, index, files, log);
+            Directory.CreateDirectory(game.WorkDir);
+            if (patch.Length == 0)
+            {
+                File.Delete(patchPath);
+                File.WriteAllText(stampPath, stamp.ToString());
+                return null;
+            }
+            File.WriteAllBytes(patchPath, patch);
+            File.WriteAllText(stampPath, stamp.ToString());
+            log.Add($"OBB patch: {files.Count} file(s) put into the OBB as the game reads it");
+            return patchPath;
+        }
+        catch (Exception e) when (e is FormatException or IOException or JsonException or InvalidDataException or UnauthorizedAccessException)
+        {
+            log.Add($"FAIL the OBB patch: {e.Message}; fonts and obb/ files left out");
+            if (File.Exists(stampPath)) File.Delete(stampPath);
+            return null;
+        }
     }
 
     /// Where a mod's file goes: x.rton.json -> x.rton; x.json -> x.rton when the game's file is

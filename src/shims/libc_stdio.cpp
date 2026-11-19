@@ -44,6 +44,7 @@ struct OpenFile {
     bool console = false;         // fp belongs to the host; never close it
     bool memory = false;          // a generated file (/proc/self/maps): data + pos
     std::string data;
+    std::shared_ptr<const FilePatch> patch;  // fp read through a patch (the OBB with mods' files): pos
     std::int64_t pos = 0;
     bool eof = false, error = false;
     std::string guest_path;
@@ -73,6 +74,15 @@ struct OpenFile {
             return static_cast<std::int64_t>(n);
         }
         if (!fp) return -1;
+        if (patch) {
+            std::size_t got = patch->read(static_cast<std::uint64_t>(pos), buf, static_cast<std::size_t>(n), [this](std::uint64_t at, void* out, std::size_t len) {
+                if (host_seek(fp, static_cast<std::int64_t>(at), SEEK_SET) != 0) return std::size_t{0};
+                return std::fread(out, 1, len, fp);
+            });
+            pos += static_cast<std::int64_t>(got);
+            if (got < n) eof = true;
+            return static_cast<std::int64_t>(got);
+        }
         std::size_t got = std::fread(buf, 1, n, fp);
         if (got < n) {
             if (std::feof(fp)) eof = true;
@@ -92,8 +102,9 @@ struct OpenFile {
 
     std::int64_t seek(std::int64_t off, int whence) {
         eof = false;
-        if (memory) {
-            std::int64_t base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? pos : static_cast<std::int64_t>(data.size());
+        if (memory || patch) {
+            std::int64_t end = patch ? static_cast<std::int64_t>(patch->size) : static_cast<std::int64_t>(data.size());
+            std::int64_t base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? pos : end;
             if (base + off < 0) return -1;
             pos = base + off;
             return pos;
@@ -102,7 +113,7 @@ struct OpenFile {
         return host_tell(fp);
     }
 
-    std::int64_t tell() { return memory ? pos : fp && !console ? host_tell(fp) : 0; }
+    std::int64_t tell() { return memory || patch ? pos : fp && !console ? host_tell(fp) : 0; }
 };
 
 struct Files {
@@ -202,6 +213,7 @@ int open_path(Runtime& rt, const std::string& path, int flags) {
     f->fp = std::fopen(host->c_str(), mode);
 #endif
     if (!f->fp) return -map_errno(errno);
+    if (acc == android::kO_RDONLY) f->patch = rt.vfs().patch_of(*host);
     return files(rt).add(std::move(f));
 }
 
@@ -263,7 +275,8 @@ int fill_stat(Runtime& rt, const std::string& path, GuestAddr st) {
             st_mode = android::kS_IFDIR | 0771;
         } else {
             st_mode = android::kS_IFREG | 0660;
-            st_size = fs::file_size(*host, ec);
+            auto patch = rt.vfs().patch_of(*host);
+            st_size = patch ? patch->size : fs::file_size(*host, ec);
         }
         auto t = fs::last_write_time(*host, ec);
         if (!ec) st_mtime = to_unix_seconds(t);

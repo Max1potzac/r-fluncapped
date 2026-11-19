@@ -101,6 +101,7 @@ MODS
     "actions"     buttons: [{"label": "...", "run": "edit-keybinds" |
                   "controller-settings" | "edit-layout" | "open:<path>"}]
     "language", "strings"   a localization's language and strings file
+    "fonts"       fonts in place of the game's: {"<game's font>": "<file>"}
   Old settings (game.json from before) carry over: what was on stays on.
 
 CONTENT (cdn\ and files\ in a mod)
@@ -129,8 +130,15 @@ CONTENT (cdn\ and files\ in a mod)
   LawnStrings-en-US.rton) replaces the game's. Where two mods change the
   same file the one loaded later wins (Load earlier / later).
 
-  Content inside the OBB (plants, zombies, textures, PAM animations) isn't
-  covered yet: that needs the OBB repacked, which pvz2conv can't do yet.
+    obb\...          files in place of the OBB's own, at their paths there
+                     (obb\PACKAGES\FONTS.json for PACKAGES\FONTS.RTON; .json is
+                     converted as above). Only files the OBB already has, and
+                     not textures.
+    fonts\...        fonts in place of the game's own (see LOCALIZATIONS)
+
+  obb\ and fonts\ don't change the OBB either: the launcher writes the
+  changed parts to .launcher\obb-patch.bin and rfu reads the OBB through it.
+  Textures and PAM animations in the OBB aren't covered yet.
 
 LOCALIZATIONS
   A localization is a mod with "language" (en-US...) and a strings file of
@@ -144,6 +152,21 @@ LOCALIZATIONS
   strings" writes missing-strings.json in the mod's folder: every string it
   doesn't have yet, with the game's text, ready to translate and copy in.
   Copy the Pirate English folder to start a translation of your own.
+
+  Fonts: the game's own fonts only have the letters English (and a few
+  others) need, so a Russian or Greek translation shows blanks. Put fonts
+  that have the letters in the mod's fonts\ folder, named like the game's
+  font each one replaces (fonts\BrianneTod.ttf), or list them in mod.json:
+    "fonts": { "BrianneTod": "fonts/MyFont-Cyrillic.ttf" }
+  The game's fonts (Reflourished): AshleyScriptMTStd, BrianneTod,
+  Century751, CroMagnumCondensed, fbUsv8C5eI, House Of Terror, infroman,
+  itcblkad, NewsflashBB, PICO12__, rockwellcondensed, ROGFonts, UnmaskedBB.
+  A name the game doesn't have is logged with the list. Each font takes the
+  name of the one it replaces (the game finds fonts by name), so any .ttf or
+  .otf works as it is. Sizes, colours and which font each kind of text uses
+  are in the OBB's PACKAGES\FONTS.RTON: a mod can change those too, with its
+  own obb\PACKAGES\FONTS.json. Fonts go into the OBB, so PvZ2 China (no OBB)
+  can't take them.
 
 PLAY
   1. With no content or localization on, the launcher asks if you want to load

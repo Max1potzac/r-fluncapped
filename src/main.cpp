@@ -67,6 +67,7 @@ void usage() {
                  "                           shortcuts): settings=137:38,almanac=222:38,zengarden=395:38,shop=-75:53\n"
                  "                           (pixels at 768 high from the top left, a negative x from the right)\n"
                  "  --pad-mappings <file>    SDL controller mappings (gamecontrollerdb.txt lines) for controllers SDL doesn't know\n"
+                 "  --obb-patch <file>       read the OBB with mods' files in it (fonts...), from a patch the launcher makes\n"
                  "  --patch <file>           apply a code patch file after the libraries load (see src/core/patches.h)\n"
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
                  "  --custom-cursor          the glove for the mouse, in place of the system's arrow\n"
@@ -272,6 +273,8 @@ int main(int argc, char** argv) {
                 set_env("RFU_CLOUD_RECORD", value());
             } else if (arg == "--obb") {
                 app.obb = rfu::path_from_utf8(value());
+            } else if (arg == "--obb-patch") {
+                app.obb_patch = rfu::path_from_utf8(value());
             } else if (arg == "--apk") {
                 app.apk = rfu::path_from_utf8(value());
             } else if (arg == "--data") {

@@ -20,12 +20,18 @@
     <EmbeddedResource Include="../mods/**/*" LogicalName="mods/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
-  <!-- RTON both ways, shared with pvz2conv -->
+  <!-- the OBB's packets are zlib or zstd -->
+  <ItemGroup>
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
+  </ItemGroup>
+
+  <!-- RTON both ways, and the OBB's name tables, shared with pvz2conv -->
   <ItemGroup>
     <Compile Include="../../pvz2conv/BinReader.cs" Link="pvz2conv/BinReader.cs" />
     <Compile Include="../../pvz2conv/Rton.cs" Link="pvz2conv/Rton.cs" />
     <Compile Include="../../pvz2conv/RtonWriter.cs" Link="pvz2conv/RtonWriter.cs" />
     <Compile Include="../../pvz2conv/RtonCrypt.cs" Link="pvz2conv/RtonCrypt.cs" />
+    <Compile Include="../../pvz2conv/Trie.cs" Link="pvz2conv/Trie.cs" />
   </ItemGroup>
 
 </Project>

@@ -5,13 +5,15 @@ namespace Pvz2Launcher;
 /// rfu's command line for a game, from its folder and settings.
 public static class RfuCommand
 {
-    public static List<string> Build(GameFolder game, IReadOnlyList<Mods.Overlay> overlays)
+    public static List<string> Build(GameFolder game, IReadOnlyList<Mods.Overlay> overlays, string? obbPatch = null)
     {
         var s = game.Settings;
         var args = new List<string> { "--lib-dir", game.LibDir, "--data", game.DataDir, "--log-file", game.LogPath };
         // China runs from the APK (its data is inside it); the global game runs from its OBB.
         if (game.IsChina) args.AddRange(["--apk", game.Apk!]);
         else args.AddRange(["--obb", game.Obb!]);
+        // mods' fonts and obb/ files, put into the OBB as rfu reads it
+        if (!game.IsChina && obbPatch != null) args.AddRange(["--obb-patch", obbPatch]);
         if (game.Info is { } info)
         {
             if (info.Package != "") args.AddRange(["--package", info.Package]);

@@ -128,6 +128,7 @@ Options:
 | `--pad-layout <file>` | with `--controller`: buttons that tap a spot on one screen in place of what they do there, as `map y tap 95% 7%` lines (screens: `lawn`, `chooser`, `menu`, `map`, `other`, `any`). Several add up, later ones winning. The launcher's keybind layout editor writes them |
 | `--map-buttons <spots>` | with `--controller`: where the world map's buttons are, for a map layout rfu doesn't know yet, as `settings=137:38,almanac=222:38,zengarden=395:38,shop=-75:53` (pixels of the screen scaled to 768 high, from the top left; a negative x counts from the right). Buttons left out keep the built-in positions. Add it under the launcher's extra arguments |
 | `--pad-mappings <file>` | with `--controller`: SDL mappings (gamecontrollerdb.txt lines) for controllers SDL doesn't know, such as the launcher's controllers.txt |
+| `--obb-patch <file>` | read the OBB with some of its files replaced (mods' fonts, `PACKAGES/FONTS.rton`), from a patch the launcher makes; the OBB itself isn't changed (see `src/core/file_patch.h`) |
 | `--patch <file>` | code patches to apply after the libraries load, checked against the bytes they expect (see `src/core/patches.h`) |
 | `--icon <file.png>`, `--title <text>` | the window's icon (pvz2conv takes the game's out of the APK) and title |
 | `--version-name <x.y.z>` | the APK's version name, which the game reports (default 1.4.0) |

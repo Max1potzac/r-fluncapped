@@ -93,16 +93,18 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         if (!restart && !s.Offline) await UpdateObbAsync(game);
 
         var overlays = new List<Mods.Overlay>();
+        string? obbPatch = null;
         if (Mods.AnyContentOn(game))
         {
             var built = await Task.Run(() => Mods.Build(game, Mods.Active(game).Where(m => m.HasContent).Select(m => m.Key).ToList()));
             built.Log.ForEach(ui.Log);
             overlays = built.Overlays;
+            obbPatch = built.ObbPatch;
         }
 
         string? rfu = Tools.Find(launcherDir, "rfu");
         if (rfu == null) { ui.ShowProblem($"rfu isn't next to the launcher ({launcherDir}). Put rfu.exe and its DLLs there."); return null; }
-        var args = RfuCommand.Build(game, overlays);
+        var args = RfuCommand.Build(game, overlays, obbPatch);
         ui.Log($"starting {game.DisplayName}");
         var psi = new ProcessStartInfo(rfu) { WorkingDirectory = game.Dir, UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);

@@ -64,6 +64,17 @@ changing it: the game's CDN download rewrites the folder underneath, and the ove
 The launcher builds one overlay for the CDN folder and one for the external files folder from the
 mods switched on, converting JSON to RTON where the game's file is RTON and merging LawnStrings.
 
+
+`--obb-patch <file>` changes how the OBB reads, not the OBB (`Vfs::patch`, `src/core/file_patch.h`):
+the file is a list of byte ranges to read in place of the OBB's own, and a size past its end.
+Opening the OBB read-only gives a handle that reads through it, `stat` reports the patched size,
+and `mmap` (which reads through the handle) sees the same bytes. A patch made for an OBB of
+another size is ignored with a warning. The launcher makes it from mods' `fonts/` and `obb/`
+files (`ObbPatch.cs`): each resource group with a replaced file gets its packet written again
+after the OBB's end, with part 0 stored, and the RSB's entries for the group and its memory pool
+are pointed at it. A font replacing one of the game's takes that font's `name` table, since
+`FONTS.RTON`'s typefaces pick a font by its family name.
+
 ## Code patches
 
 `--patch <file>` applies small changes to a loaded library after every initializer has run, so

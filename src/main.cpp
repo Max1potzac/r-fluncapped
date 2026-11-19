@@ -59,8 +59,10 @@ void usage() {
                  "  --keybinds <file>        keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling or spots of the screen (see src/platform/keybinds.h)\n"
                  "  --key-hints              show each keybind's key (or controller button) on the seed packet or button it presses\n"
                  "  --controller             play with a game controller: PvZ1 console style on the lawn, a cursor elsewhere (see src/game/game_keys.h)\n"
-                 "  --pad-binds <binds>      the controller's buttons for its actions: plant=a,dig=b,use=x,plantfood=y,prevseed=lb,\n"
-                 "                           nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start,slowmode=r3\n"
+                 "  --pad-binds <binds>      the controller's buttons for its actions, each screen on its own: plant=a,dig=b,use=x,\n"
+                 "                           plantfood=y,...; chooser.take=a, menu.press=a, map.shop=y, other.touch=a... (see src/game/game_keys.h)\n"
+                 "  --pad-layout <file>      controller buttons that tap spots of the screen, per screen: \"map y tap 95% 7%\" lines;\n"
+                 "                           several add up, later ones winning\n"
                  "  --map-buttons <spots>    where the world map's buttons are, for a layout rfu doesn't know (the controller's\n"
                  "                           shortcuts): settings=137:38,almanac=222:38,zengarden=395:38,shop=-75:53\n"
                  "                           (pixels at 768 high from the top left, a negative x from the right)\n"
@@ -166,6 +168,7 @@ int main(int argc, char** argv) {
     bool fix_animations = false;
     bool key_hints = false;
     std::vector<rfu::PadBind> pad_binds;
+    std::vector<rfu::PadTap> pad_taps;
     rfu::MapButtons map_buttons;
     std::string dump_patches;
     std::vector<std::string> trace_classes;
@@ -235,6 +238,15 @@ int main(int argc, char** argv) {
                 std::string error;
                 pad_binds = rfu::parse_pad_binds(value(), error);
                 if (!error.empty()) throw std::runtime_error(error);
+            } else if (arg == "--pad-layout") {
+                std::string file = value();
+                std::ifstream in(rfu::path_from_utf8(file));
+                if (!in) throw std::invalid_argument("can't read " + file);
+                std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                std::vector<std::string> errors;
+                auto taps = rfu::parse_pad_layout(text, errors);
+                pad_taps.insert(pad_taps.end(), taps.begin(), taps.end());
+                for (const auto& e : errors) std::cerr << "rfu: " << file << ": " << e << "\n";
             } else if (arg == "--map-buttons") {
                 std::string error;
                 map_buttons = rfu::parse_map_buttons(value(), error);
@@ -490,6 +502,7 @@ int main(int argc, char** argv) {
             options.controller = app.window.controller;
             options.pad_hints = key_hints;
             options.pad_binds = pad_binds;
+            options.pad_taps = pad_taps;
             options.map_buttons = map_buttons;
             auto keys = rfu::install_game_keys(rt, pvz2, options);
             app.game_keys = keys.key;

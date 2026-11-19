@@ -190,6 +190,30 @@ void test_pad_binds() {
     EXPECT(rfu::parse_pad_binds("plant=q", error).empty() && !error.empty());
     error.clear();
     EXPECT(rfu::parse_pad_binds("jump=a", error).empty() && !error.empty());
+    // Each screen has its own actions; no screen is the lawn's.
+    error.clear();
+    binds = rfu::parse_pad_binds("Chooser.take=x,map.shop=lb,use=a,menu.press=y", error);
+    EXPECT(error.empty() && binds.size() == 4);
+    EXPECT(binds[0].screen == rfu::PadScreen::Chooser && binds[0].action == PadButton::A && binds[0].button == PadButton::X);
+    EXPECT(binds[1].screen == rfu::PadScreen::Map && binds[1].action == PadButton::Y && binds[1].button == PadButton::LB);
+    EXPECT(binds[2].screen == rfu::PadScreen::Lawn && binds[2].action == PadButton::X && binds[2].button == PadButton::A);
+    EXPECT(binds[3].screen == rfu::PadScreen::Menu && binds[3].action == PadButton::A && binds[3].button == PadButton::Y);
+    EXPECT(rfu::parse_pad_binds("map.plant=a", error).empty() && !error.empty());
+    error.clear();
+    EXPECT(rfu::parse_pad_binds("shop.touch=a", error).empty() && !error.empty());
+}
+
+void test_pad_layout() {
+    using rfu::platform::PadButton;
+    std::vector<std::string> errors;
+    auto taps = rfu::parse_pad_layout("# the shop moved\nmap Y tap 95% 7.5%\r\n\n  any back tap 50% 0%  # middle top\n", errors);
+    EXPECT(errors.empty() && taps.size() == 1 + rfu::kPadScreens);
+    EXPECT(taps[0].screen == rfu::PadScreen::Map && taps[0].button == PadButton::Y);
+    EXPECT(std::abs(taps[0].x - 0.95f) < 1e-5f && std::abs(taps[0].y - 0.075f) < 1e-5f);
+    EXPECT(taps[1].screen == rfu::PadScreen::Lawn && taps.back().screen == rfu::PadScreen::Other && taps.back().button == PadButton::Back);
+    taps = rfu::parse_pad_layout("shop a tap 1% 1%\nmap q tap 1% 1%\nmap a tap 1 1\nmap a tap 120% 5%\nmap a press\nlawn rb tap 10% 20%\n", errors);
+    EXPECT(errors.size() == 5 && taps.size() == 1 && taps[0].button == PadButton::RB);
+    EXPECT(errors[0].rfind("line 1:", 0) == 0 && errors[4].rfind("line 5:", 0) == 0);
 }
 
 void test_map_buttons() {

@@ -2,7 +2,7 @@ namespace Pvz2Launcher;
 
 /// Controller settings: the controllers plugged in and what SDL (so the game) makes of each, its
 /// buttons lighting up as they're pressed, a set-up for one SDL doesn't know (a mapping, saved in
-/// controllers.txt), and which button does each of the lawn's actions.
+/// controllers.txt), and which button does each action, screen by screen.
 sealed class ControllerForm : Form
 {
     readonly GameFolder _game;
@@ -14,7 +14,10 @@ sealed class ControllerForm : Form
     readonly Label _prompt = new() { AutoSize = true, MaximumSize = new Size(560, 0), Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
     readonly Button _skip = new() { Text = "Skip this one", AutoSize = true, Visible = false };
     readonly Label _clash = new() { AutoSize = true, ForeColor = Color.Firebrick, MaximumSize = new Size(560, 0) };
-    readonly Dictionary<string, ComboBox> _bindBoxes = [];
+    readonly ComboBox _screen = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
+    readonly List<(Label Label, ComboBox Box)> _rows = [];
+    PadSetup.Screen _shown = PadSetup.Screens[0];
+    bool _filling;
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 30 };
 
     readonly bool _sdl;
@@ -34,7 +37,7 @@ sealed class ControllerForm : Form
         _binds = new Dictionary<string, string>(game.Settings.PadBinds);
         Text = $"Controller settings - {game.DisplayName}";
         AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        AutoSizeMode = AutoSizeMode.GrowOnly;  // a screen with fewer actions doesn't shrink it
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -48,31 +51,46 @@ sealed class ControllerForm : Form
         stack.Controls.Add(Row(_setUp, _skip));
         stack.Controls.Add(_prompt);
 
-        stack.Controls.Add(Heading("Buttons for the lawn's actions"));
-        var grid = new TableLayoutPanel { AutoSize = true, ColumnCount = 2 };
-        foreach (var a in PadSetup.Actions)
+        stack.Controls.Add(Heading("Buttons, screen by screen"));
+        foreach (var sc in PadSetup.Screens) _screen.Items.Add(sc.Label);
+        stack.Controls.Add(Row(new Label { Text = "Screen:", AutoSize = true, Margin = new Padding(3, 7, 6, 3) }, _screen));
+        stack.Controls.Add(new Label
         {
+            Text = "Each screen has its own buttons: moving an action here leaves the same button alone on the other screens.",
+            AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SystemColors.GrayText,
+        });
+        var grid = new TableLayoutPanel { AutoSize = true, ColumnCount = 2 };
+        int most = PadSetup.Screens.Max(sc => sc.Actions.Length);
+        for (int i = 0; i < most; i++)
+        {
+            int row = i;
             var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
             foreach (var b in PadSetup.Buttons) box.Items.Add(b.Label);
-            string current = _binds.TryGetValue(a.Name, out var v) ? v : a.Default;
-            box.SelectedIndex = Math.Max(0, Array.FindIndex(PadSetup.Buttons, b => b.Name == current));
             box.SelectedIndexChanged += (_, _) =>
             {
-                _binds[a.Name] = PadSetup.Buttons[box.SelectedIndex].Name;
+                if (_filling || row >= _shown.Actions.Length || box.SelectedIndex < 0) return;
+                _binds[_shown.Key(_shown.Actions[row])] = PadSetup.Buttons[box.SelectedIndex].Name;
                 ShowClashes();
             };
-            _bindBoxes[a.Name] = box;
-            grid.Controls.Add(new Label { Text = a.Label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 7, 12, 3) });
+            var label = new Label { AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 7, 12, 3) };
+            _rows.Add((label, box));
+            grid.Controls.Add(label);
             grid.Controls.Add(box);
         }
         stack.Controls.Add(grid);
         stack.Controls.Add(_clash);
-        stack.Controls.Add(new Label { Text = "The d-pad and left stick move the cursor; the right stick is kept for powerups.", AutoSize = true, ForeColor = SystemColors.GrayText });
+        stack.Controls.Add(new Label
+        {
+            Text = "The d-pad and left stick move the cursor; the right stick is kept for powerups. " +
+                   "To have a button tap a spot on one screen (a button the game moved, or a fan mod's own), place it in the keybind layout editor (Game tab).",
+            AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SystemColors.GrayText,
+        });
 
-        var defaults = new Button { Text = "Defaults", AutoSize = true };
+        var defaults = new Button { Text = "Defaults for this screen", AutoSize = true };
         defaults.Click += (_, _) =>
         {
-            foreach (var a in PadSetup.Actions) _bindBoxes[a.Name].SelectedIndex = Array.FindIndex(PadSetup.Buttons, b => b.Name == a.Default);
+            foreach (var a in _shown.Actions) _binds.Remove(_shown.Key(a));
+            ShowScreen();
         };
         var ok = new Button { Text = "Save", AutoSize = true, DialogResult = DialogResult.OK };
         var cancel = new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel };
@@ -86,8 +104,9 @@ sealed class ControllerForm : Form
         _devices.SelectedIndexChanged += (_, _) => Open(_devices.SelectedIndex);
         FormClosing += (_, e) =>
         {
-            if (DialogResult == DialogResult.OK && PadSetup.Clashes(_binds).Count > 0 &&
-                MessageBox.Show(this, "Some actions share a button; only one of each will work. Save anyway?", Text, MessageBoxButtons.YesNo) != DialogResult.Yes)
+            var clashing = PadSetup.Screens.Where(sc => PadSetup.Clashes(_binds, sc).Count > 0).Select(sc => sc.Label).ToList();
+            if (DialogResult == DialogResult.OK && clashing.Count > 0 &&
+                MessageBox.Show(this, $"Some actions share a button ({string.Join(", ", clashing)}); only one of each will work. Save anyway?", Text, MessageBoxButtons.YesNo) != DialogResult.Yes)
                 e.Cancel = true;
         };
         FormClosed += (_, _) =>
@@ -97,12 +116,16 @@ sealed class ControllerForm : Form
             if (_sdl) Sdl.Quit();
             if (DialogResult == DialogResult.OK)
             {
-                _game.Settings.PadBinds = _binds.Where(b => PadSetup.Actions.Any(a => a.Name == b.Key && a.Default != b.Value))
-                    .ToDictionary(b => b.Key, b => b.Value);
+                _game.Settings.PadBinds = PadSetup.Moved(_binds);
                 _game.SaveSettings();
             }
         };
-        ShowClashes();
+        _screen.SelectedIndexChanged += (_, _) =>
+        {
+            _shown = PadSetup.Screens[Math.Max(0, _screen.SelectedIndex)];
+            ShowScreen();
+        };
+        _screen.SelectedIndex = 0;  // fills the rows
         // the launcher's theme
         BackColor = Ui.Theme.Current.Panel;
         ForeColor = Ui.Theme.Current.Text;
@@ -133,10 +156,30 @@ sealed class ControllerForm : Form
         return row;
     }
 
+    // The shown screen's actions in the rows, each on its button; rows it doesn't need are hidden.
+    void ShowScreen()
+    {
+        _filling = true;
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            var (label, box) = _rows[i];
+            bool used = i < _shown.Actions.Length;
+            label.Visible = box.Visible = used;
+            if (!used) continue;
+            var a = _shown.Actions[i];
+            label.Text = a.Label;
+            box.SelectedIndex = Math.Max(0, Array.FindIndex(PadSetup.Buttons, b => b.Name == PadSetup.ButtonOf(_binds, _shown, a)));
+        }
+        _filling = false;
+        ShowClashes();
+    }
+
     void ShowClashes()
     {
-        var clashes = PadSetup.Clashes(_binds);
-        _clash.Text = clashes.Count == 0 ? "" : "On the same button: " + string.Join(", ", clashes);
+        var clashes = PadSetup.Clashes(_binds, _shown);
+        var elsewhere = PadSetup.Screens.Where(sc => sc != _shown && PadSetup.Clashes(_binds, sc).Count > 0).Select(sc => sc.Label).ToList();
+        _clash.Text = (clashes.Count == 0 ? "" : "On the same button: " + string.Join(", ", clashes) + ". ") +
+                      (elsewhere.Count == 0 ? "" : "Also clashing: " + string.Join(", ", elsewhere) + ".");
     }
 
     static void Close(ref IntPtr joystick, ref IntPtr controller)

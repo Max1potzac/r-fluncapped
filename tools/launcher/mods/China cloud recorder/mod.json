@@ -1,0 +1,13 @@
+{
+  "id": "china-cloud-record",
+  "name": "Record cloud session (PvZ2 China)",
+  "description": "Online, records PvZ2 China's cloud session into the game's cloud folder, so a later offline run can replay it and open the map without a server.",
+  "author": "r-fluncapped",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Network",
+  "games": ["china"],
+  "when": "online",
+  "default": true,
+  "rfu": ["--cloud-record", "{game}/cloud"]
+}

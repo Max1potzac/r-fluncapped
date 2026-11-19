@@ -1,0 +1,17 @@
+{
+  // PvZ2 China checks its cloud hosts before it lets you play. Offline, rfu answers them from the
+  // game's cloud\ folder (tuned <req>.json / <req>.raw responses), and keeps the uploaded save and
+  // the session transcript there, so progress survives a relaunch.
+  "id": "china-cloud-stub",
+  "name": "Offline cloud (PvZ2 China)",
+  "description": "Answers PvZ2 China's cloud hosts locally while offline, so it gets past its \"network failure\" dialogs and keeps your progress.",
+  "author": "r-fluncapped",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Network",
+  "games": ["china"],
+  "when": "offline",
+  "default": true,
+  "createDirs": ["{game}/cloud"],
+  "rfu": ["--cloud-stub", "--cloud-dir", "{game}/cloud"]
+}

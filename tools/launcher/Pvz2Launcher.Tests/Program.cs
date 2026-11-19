@@ -14,6 +14,7 @@ void Expect(bool ok, string what)
 
 string root = Path.Combine(Path.GetTempPath(), "pvz2launcher_tests");
 if (Directory.Exists(root)) Directory.Delete(root, true);
+BuiltinMods.Seed(Path.Combine(root, "mods"));
 
 var tests = new (string Name, Action Run)[]
 {
@@ -26,6 +27,9 @@ var tests = new (string Name, Action Run)[]
     ("update check", UpdateCheckTest),
     ("obb update", ObbUpdateTest),
     ("rfu command", RfuCommandTest),
+    ("mod library", ModLibraryTest),
+    ("legacy settings", LegacySettingsTest),
+    ("localization", LocalizationTest),
     ("controller setup", PadSetupTest),
 };
 foreach (var (name, run) in tests)
@@ -392,35 +396,37 @@ void RfuCommandTest()
     g.Settings.Assets = "low";
     g.Settings.Resolution = "1280x720";
     g.Settings.Offline = true;
-    g.Settings.Keybinds = true;
-    g.EnsureKeybindsFile();
+    Mods.Set(g, Mod("keybinds", g), true);
     Directory.CreateDirectory(g.PatchesDir);
     File.WriteAllText(Path.Combine(g.PatchesDir, "a.patch"), "");
-    g.Settings.Patches = ["a.patch", "gone.patch"];
+    g.Settings.Mods.AddRange(["patches/a.patch", "patches/gone.patch"]);
     var args = RfuCommand.Build(g, [new Mods.Overlay("/x", "/host/x")]);
     string line = string.Join(" ", args);
     foreach (var want in new[] { "--assets low", "--resolution 1280x720", "--offline", "--package com.ea.game.pvz2_rfl",
                                  "--version-code 675", "--version-name 1.4.2", "--overlay /x=/host/x", "--keybinds", "--key-hints", "--controller", "--hover", "--fix-animations" })
         Expect(line.Contains(want), $"rfu gets {want}: {line}");
+    int ki = args.IndexOf("--keybinds");
+    Expect(ki >= 0 && args[ki + 1] == g.KeybindsPath && File.Exists(g.KeybindsPath), $"keybinds: {{game}} filled in and the file written: {line}");
     Expect(args.Count(a => a == "--patch") == 1, "only patches that exist");
-    Expect(!args.Contains("--no-mod-libs"), "mod libraries always load");
-    g.Settings.HoverCollect = false;
+    Expect(!args.Contains("--no-mod-libs") && !args.Contains("--cloud-stub"), "mod libraries always load; no China stub");
+    void Switch(string id, bool on) => Mods.Set(g, Mod(id, g), on);
+    Switch("hover-collect", false);
     Expect(!RfuCommand.Build(g, []).Contains("--hover"), "hover to collect can be switched off");
     Expect(!RfuCommand.Build(g, []).Contains("--custom-cursor"), "the Windows cursor by default");
-    g.Settings.CustomCursor = true;
+    Switch("glove-cursor", true);
     Expect(RfuCommand.Build(g, []).Contains("--custom-cursor"), "the glove cursor when it's on");
-    g.Settings.FixAnimations = false;
+    Switch("fix-animations", false);
     Expect(!RfuCommand.Build(g, []).Contains("--fix-animations"), "the animations fix can be switched off");
-    g.Settings.KeyHints = false;
+    Switch("key-hints", false);
     Expect(!RfuCommand.Build(g, []).Contains("--key-hints"), "keybind hints can be switched off");
-    g.Settings.KeyHints = true;
-    g.Settings.Keybinds = false;
+    Switch("key-hints", true);
+    Switch("keybinds", false);
     Expect(RfuCommand.Build(g, []).Contains("--key-hints"), "controller hints without keybinds");
-    g.Settings.Controller = false;
+    Switch("controller", false);
     var noPad = RfuCommand.Build(g, []);
     Expect(!noPad.Contains("--controller") && !noPad.Contains("--key-hints"), "the controller can be switched off, and hints with it and keybinds");
     Expect(RfuCommand.IsSize("1920x1080") && !RfuCommand.IsSize("big") && !RfuCommand.IsSize("10x10"), "sizes");
-    g.Settings.Controller = true;
+    Switch("controller", true);
     Expect(!RfuCommand.Build(g, []).Contains("--pad-binds"), "no binds while every action is on its button");
     g.Settings.PadBinds["dig"] = "x";
     g.Settings.PadBinds["use"] = "b";
@@ -431,6 +437,136 @@ void RfuCommandTest()
     File.WriteAllText(g.ControllerMappingsPath, "x\n");
     Expect(RfuCommand.Build(g, []).Contains("--pad-mappings"), "the mappings file is passed on");
     File.Delete(g.ControllerMappingsPath);
+}
+
+// The shared mods/ folder: built-in mods written once, categorised by game, shadowed by a game's own.
+void ModLibraryTest()
+{
+    string shared = Path.Combine(root, "mods");
+    Expect(BuiltinMods.Folders.Count >= 9 && BuiltinMods.Folders.Contains("Hover to collect") && BuiltinMods.Folders.Contains("Pirate English"),
+        $"built-in mods embedded: {string.Join(", ", BuiltinMods.Folders)}");
+    Expect(File.Exists(Path.Combine(shared, "Hover to collect", "mod.json")), "built-in mods written to the shared folder");
+    Directory.Delete(Path.Combine(shared, "Glove cursor"), true);
+    Expect(BuiltinMods.Seed(shared).Count == 0 && !Directory.Exists(Path.Combine(shared, "Glove cursor")), "a deleted built-in stays deleted");
+    BuiltinMods.Restore(shared);
+    Expect(Directory.Exists(Path.Combine(shared, "Glove cursor")), "restore writes it back");
+
+    var rfl = MakeGame("LibRfl");
+    var china = MakeChinaGame("LibChina");
+    Expect(rfl.Family == "reflourished" && china.Family == "china", "families");
+    var hover = Mod("hover-collect", rfl);
+    Expect(hover.Kind == Mods.ModKind.Injection && hover.Category == "Gameplay" && hover.IsBuiltin, "manifest read");
+    Expect(Mods.AppliesTo(hover, rfl) && !Mods.AppliesTo(hover, china), "global injections aren't for China");
+    var stub = Mod("china-cloud-stub", china);
+    Expect(Mods.AppliesTo(stub, china) && !Mods.AppliesTo(stub, rfl), "the China stub is only for China");
+    var noLib = Mod("rfl-no-rflib", rfl);
+    Expect(Mods.AppliesTo(noLib, rfl) && !Mods.AppliesTo(noLib, china) && !Mods.IsOn(rfl, noLib), "a Reflourished-only sample, off by default");
+    Expect(Mods.IsOn(rfl, hover) && Mods.IsOn(china, stub) && !Mods.IsOn(china, hover), "on by default where they fit");
+    Expect(!RfuCommand.Build(china, []).Contains("--hover"), "China gets no global injections");
+    china.Settings.Offline = false;
+    var online = RfuCommand.Build(china, []);
+    Expect(online.Contains("--cloud-record") && !online.Contains("--cloud-stub"), $"China online records: {string.Join(" ", online)}");
+
+    // switched off stays off, even though it's on by default
+    Mods.Set(rfl, hover, false);
+    rfl.SaveSettings();
+    rfl.Refresh();
+    Expect(!Mods.IsOn(rfl, Mod("hover-collect", rfl)), "switched off stays off");
+
+    // a mod of the game's own hides the shared one of the same folder name; versions narrow it
+    string own = Path.Combine(rfl.ModsDir, "Hover to collect");
+    Directory.CreateDirectory(own);
+    File.WriteAllText(Path.Combine(own, "mod.json"), """{"id":"hover-collect","name":"My hover","rfu":["--hover"],"versions":["9."]}""");
+    var mine = Mods.List(rfl).Single(m => m.Key == "Hover to collect");
+    Expect(mine.Name == "My hover" && mine.Source == Mods.ModSource.Game, "the game's own mod wins");
+    Expect(!Mods.AppliesTo(mine, rfl), "versions: 9.x only");
+    Directory.Delete(own, true);
+
+    // a broken mod.json is shown with its problem and never runs
+    string bad = Path.Combine(rfl.ModsDir, "Broken");
+    Directory.CreateDirectory(bad);
+    File.WriteAllText(Path.Combine(bad, "mod.json"), "{ nope");
+    var broken = Mods.List(rfl).Single(m => m.Key == "Broken");
+    Expect(broken.Problem != null, "broken manifest reported");
+    Mods.Set(rfl, broken, true);
+    Expect(!Mods.Active(rfl).Contains(broken), "broken mod left out");
+    Directory.Delete(bad, true);
+
+    // a code patch inside a mod folder
+    string patchMod = Path.Combine(shared, "My Patch");
+    Directory.CreateDirectory(patchMod);
+    File.WriteAllText(Path.Combine(patchMod, "mod.json"), """{"name":"My patch","games":["reflourished"]}""");
+    File.WriteAllText(Path.Combine(patchMod, "fix.patch"), "libPVZ2.so+0x10 00\n");
+    var pm = Mods.List(rfl).Single(m => m.Key == "My Patch");
+    Expect(pm.Kind == Mods.ModKind.Injection && pm.Category == "Code patches" && !pm.HasContent, "a mod with a .patch is an injection");
+    Mods.Set(rfl, pm, true);
+    var withPatch = RfuCommand.Build(rfl, []);
+    Expect(withPatch.Contains(Path.Combine(patchMod, "fix.patch")), "its patch is passed to rfu");
+    Directory.Delete(patchMod, true);
+}
+
+// game.json from before injections were mods: the switches become Mods entries once.
+void LegacySettingsTest()
+{
+    string dir = Path.Combine(root, "games", "Legacy");
+    Directory.CreateDirectory(Path.Combine(dir, "lib", "arm64-v8a"));
+    File.WriteAllText(Path.Combine(dir, "lib", "arm64-v8a", "libPVZ2.so"), "");
+    File.WriteAllText(Path.Combine(dir, "main.675.com.ea.game.pvz2_rfl.obb"), "");
+    File.WriteAllText(Path.Combine(dir, "_apk_manifest.json"),
+        """{"package":"com.ea.game.pvz2_rfl","version_name":"1.4.2","version_code":"675","obb":"main.675.com.ea.game.pvz2_rfl.obb"}""");
+    Directory.CreateDirectory(Path.Combine(dir, "mods", "Levels"));
+    File.WriteAllText(Path.Combine(dir, "mods", "Levels", "un1.json"), "{}");
+    File.WriteAllText(Path.Combine(dir, "game.json"), """
+        {"DisplayName":"Old","HoverCollect":false,"FixAnimations":true,"Keybinds":true,"KeyHints":true,"Controller":false,
+         "CustomCursor":true,"Patches":["x.patch"],"Mods":["Levels"]}
+        """);
+    var g = GameFolder.Open(dir);
+    var on = g.Settings.Mods;
+    Expect(on.Contains("Levels") && on.Contains("Frozen animations fix") && on.Contains("Keybinds") && on.Contains("Keybind hints") &&
+           on.Contains("Glove cursor") && on.Contains("patches/x.patch"), $"switched on: {string.Join(", ", on)}");
+    Expect(!on.Contains("Hover to collect") && !on.Contains("Controller support"), "switched off stays off, though on by default");
+    Expect(!g.Settings.HasLegacyInjections && !File.ReadAllText(g.SettingsPath).Contains("HoverCollect"), "old switches dropped from game.json");
+    Expect(on.IndexOf("Levels") == 0, "content keeps its place in the load order");
+}
+
+// A localization: plain strings merged over the game's LawnStrings for its language.
+void LocalizationTest()
+{
+    var g = MakeGame("LocGame");
+    string cdn = Path.Combine(g.DataDir, "external", "files", "No_Backup", "CDN.1.4.2");
+    Directory.CreateDirectory(cdn);
+    var pirate = Mod("pirate-english", g);
+    Expect(pirate.Kind == Mods.ModKind.Localization && pirate.Language == "en-US" && pirate.HasContent && !Mods.IsOn(g, pirate), "the sample localization");
+    Mods.Set(g, pirate, true);
+    var early = Mods.Build(g, Mods.Active(g).Where(m => m.HasContent).Select(m => m.Key).ToList());
+    Expect(early.Overlays.Count == 0 && early.Log.Any(l => l.Contains("no LawnStrings-en-US")), "no game strings yet: left out, not a partial file");
+    Expect(Mods.Coverage(g, pirate) == null, "no coverage without game strings");
+
+    File.WriteAllBytes(Path.Combine(cdn, "LawnStrings-en-US.rton"), Pvz2Conv.RtonWriter.FromJson("""
+        {"version":1,"objects":[{"objclass":"LawnStringsData","objdata":{"LocStringValues":
+        ["LETS_ROCK_BUTTON","LET'S ROCK!","LTE_NEW_EVENT","A brand new event","ZEN_GARDEN","Zen Garden"]}}]}
+        """u8));
+    Expect(Mods.AnyContentOn(g), "a localization counts as content");
+    Mods.Build(g, Mods.Active(g).Where(m => m.HasContent).Select(m => m.Key).ToList());
+    string built = Path.Combine(g.WorkDir, "overlay", "cdn", "LawnStrings-en-US.rton");
+    Expect(File.Exists(built), "strings built over the game's file");
+    if (File.Exists(built))
+    {
+        string json = ToJson(File.ReadAllBytes(built));
+        Expect(json.Contains("HOIST THE SAILS!") && json.Contains("A brand new event") && json.Contains("Captain") && !json.Contains("Zen Garden"),
+            $"the mod's strings win, an event's new string falls back to the game's: {json}");
+    }
+    var c = Mods.Coverage(g, pirate);
+    Expect(c is { Covered: 2, Total: 3 } && c.Missing.Single().Key == "LTE_NEW_EVENT", $"coverage: {c?.Covered}/{c?.Total}");
+    string? missing = Mods.WriteMissing(g, pirate);
+    Expect(missing != null && File.ReadAllText(missing).Contains("\"LTE_NEW_EVENT\": \"A brand new event\""), "missing strings written for translating");
+    Expect(Mods.List(g).Single(m => m.Id == "pirate-english").HasContent, "missing-strings.json doesn't make it loose content");
+}
+
+Mods.Mod Mod(string id, GameFolder? game = null)
+{
+    game ??= MakeGame("ModLookup");
+    return Mods.List(game).First(m => m.Id == id);
 }
 
 void PadSetupTest()

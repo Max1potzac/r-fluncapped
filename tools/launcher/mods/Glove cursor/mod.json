@@ -1,0 +1,12 @@
+{
+  "id": "glove-cursor",
+  "name": "Glove cursor",
+  "description": "The controller's glove for the mouse too, in place of the Windows arrow.",
+  "author": "r-fluncapped",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Visuals",
+  "games": ["*"],
+  "default": false,
+  "rfu": ["--custom-cursor"]
+}

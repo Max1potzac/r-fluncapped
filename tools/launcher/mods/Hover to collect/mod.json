@@ -1,0 +1,14 @@
+{
+  // Built in: rfu's "hover to collect" injection, as a mod file you can edit, copy or delete.
+  "id": "hover-collect",
+  "name": "Hover to collect",
+  "description": "Moving the mouse over sun, coins and plant food picks them up, no clicking needed.",
+  "author": "r-fluncapped",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Gameplay",
+  // libPVZ2 offsets of the global game's build (rfu checks the code there and leaves it off on another build)
+  "games": ["global"],
+  "default": true,
+  "rfu": ["--hover"]
+}

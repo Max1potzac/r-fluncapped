@@ -28,41 +28,24 @@ public static class RfuCommand
         if (!s.VSync) args.Add("--no-vsync");
         if (s.Angle) args.Add("--angle");
         if (s.Offline) args.Add("--offline");
-        // China checks its cloud hosts before letting you play; offline that fails with a "network
-        // failure" dialog, so answer those hosts locally. A cloud\ folder of tuned responses
-        // (<req>.json / <req>.raw) next to the game holds them, and is also where the stub persists
-        // the uploaded save (_save_v206.json) and the transcript, so progress survives a relaunch.
-        // Ensure it exists so that persistence engages even before any response has been staged.
-        if (game.IsChina && s.Offline)
+        // The code injections: each mod switched on brings its own rfu arguments and code patches
+        // (the China cloud stub and recorder are mods too).
+        bool padBinds = false;
+        foreach (var mod in Mods.Active(game))
         {
-            args.Add("--cloud-stub");
-            string cloudDir = Path.Combine(game.Dir, "cloud");
-            try { Directory.CreateDirectory(cloudDir); } catch { /* fall through; replay still works */ }
-            args.AddRange(["--cloud-dir", cloudDir]);
+            foreach (var dir in mod.CreateDirs)
+            {
+                try { Directory.CreateDirectory(Mods.Expand(dir, mod, game)); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            if (mod.Hooks.Contains("keybinds-file")) game.EnsureKeybindsFile();
+            args.AddRange(mod.Rfu.Select(a => Mods.Expand(a, mod, game)));
+            foreach (var patch in mod.Patches.Where(File.Exists)) args.AddRange(["--patch", patch]);
+            padBinds |= mod.Hooks.Contains("pad-binds");
         }
-        else if (game.IsChina && !s.Offline)
+        if (padBinds)
         {
-            // Online: record the cloud session to the game's cloud\ folder (first occurrence per
-            // request code), so a later offline run replays it and opens the map without a server.
-            args.AddRange(["--cloud-record", Path.Combine(game.Dir, "cloud")]);
-        }
-
-        if (s.HoverCollect) args.Add("--hover");
-        if (s.CustomCursor) args.Add("--custom-cursor");
-        if (s.FixAnimations) args.Add("--fix-animations");
-        bool keybinds = s.Keybinds && File.Exists(game.KeybindsPath);
-        if (keybinds) args.AddRange(["--keybinds", game.KeybindsPath]);
-        if (s.Controller)
-        {
-            args.Add("--controller");
             if (PadSetup.BindsArg(s.PadBinds) is { } binds) args.AddRange(["--pad-binds", binds]);
             if (File.Exists(game.ControllerMappingsPath)) args.AddRange(["--pad-mappings", game.ControllerMappingsPath]);
-        }
-        if (s.KeyHints && (keybinds || s.Controller)) args.Add("--key-hints");
-        foreach (var patch in s.Patches)
-        {
-            string path = Path.Combine(game.PatchesDir, patch);
-            if (File.Exists(path)) args.AddRange(["--patch", path]);
         }
         foreach (var o in overlays) args.AddRange(["--overlay", $"{o.Guest}={o.Host}"]);
         args.AddRange(s.ExtraArgs);

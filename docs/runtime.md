@@ -255,8 +255,14 @@ The pad's touches go to LawnApp's handlers (`TouchBegan`/`Moved`/`Ended` thunks,
 The almanac's lists measure a drag from the previous point and the time: with the current point
 there, and no time, they never scrolled.
 
-`--pad-binds` moves actions to other buttons (each button is translated to the action it does
-before anything else sees it, and the labels show the button that does each action now).
+`--pad-binds` moves actions to other buttons, each screen on its own: the lawn, the seed chooser,
+the menus (pause, settings, title), the world map and everything else. When a button goes down,
+the screen that's up picks its table and the button is translated to the action it does there
+before anything else sees it; it comes up as what it went down as, even if the screen changed in
+between. So moving "take a packet" on the chooser leaves A alone on the lawn. The labels show the
+button that does each action now. `--pad-layout` files make a button tap a spot (in percent of
+the screen) on one screen in place of its action there, for a button rfu doesn't find by itself
+(a fan mod's own, or one an update moved); with `--key-hints` the button is labelled at its spot.
 `--pad-mappings` adds SDL mappings after the controller subsystem starts, so a joystick SDL didn't
 know comes as a controller then; one it still doesn't know is logged with its GUID.
 

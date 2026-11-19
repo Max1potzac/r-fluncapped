@@ -845,22 +845,33 @@ sealed class MainForm : BackdropForm, ILaunchUi
         {
             Log($"keybind layout saved as a mod: {dir}");
             if (Mods.Find(_game, Path.GetFileName(dir)) is { } m && !Mods.IsOn(_game, m)) { Mods.Set(_game, m, true); _game.SaveSettings(); }
+            if (form.SavedPad) PadOn();
             ReloadMods();
             FillChips();
             FillMods();
         }
         else if (form.SavedKeybinds)
         {
-            Log($"keybind layout saved to {_game.KeybindsPath}");
+            Log($"keybind layout saved to {_game.KeybindsPath}" + (form.SavedPad ? $" and {_game.PadLayoutPath}" : ""));
             if (Mods.List(_game).FirstOrDefault(m => m.Id == "keybinds") is { } kb && !Mods.IsOn(_game, kb))
             {
                 Mods.Set(_game, kb, true);
                 _game.SaveSettings();
                 Log("Keybinds switched on, so the layout is used");
             }
+            if (form.SavedPad) PadOn();
             RecomputeActive();
             _modList.Invalidate();
         }
+    }
+
+    /// Controller support on, for a layout with controller buttons in it.
+    void PadOn()
+    {
+        if (_game == null || Mods.List(_game).FirstOrDefault(m => m.Id == "controller") is not { } pad || Mods.IsOn(_game, pad)) return;
+        Mods.Set(_game, pad, true);
+        _game.SaveSettings();
+        Log("Controller support switched on, so the layout's buttons are used");
     }
 
     void ControllerSettings()

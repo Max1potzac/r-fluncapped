@@ -28,6 +28,7 @@
 
 #include "platform/window.h"
 
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <string>
@@ -39,16 +40,42 @@ namespace rfu {
 class Runtime;
 class Module;
 
-// --pad-binds: the button for each of the lawn's actions, as "plant=a,dig=b,use=x,plantfood=y,
-// prevseed=lb,nextseed=rb,vacuum=lt,vacuum2=rt,fastforward=l3,pause=start,slowmode=r3". An action
-// is the button that does it by default (A for plant...); a bound action's default button does nothing
-// unless it's bound to something too.
+// The screens the controller's buttons are bound on, each on its own: moving an action on one
+// leaves the same button alone on the others. Lawn is a level in play (the tile box, or the free
+// cursor there); Chooser the seed chooser; Menu the pause menu, the settings and the title screen;
+// Map the world map; Other everywhere else (the cursor).
+enum class PadScreen { Lawn, Chooser, Menu, Map, Other };
+constexpr std::size_t kPadScreens = 5;
+
+// --pad-binds: the button for each action, as "plant=a,dig=b,chooser.take=x,map.shop=lb". An
+// action without a screen is the lawn's (plant=a,dig=b,use=x,plantfood=y,prevseed=lb,nextseed=rb,
+// vacuum=lt,vacuum2=rt,fastforward=l3,pause=start,slowmode=r3,freecursor=back); the others:
+//   chooser.  take=a remove=b letsrock=x viewlawn=y prevslot=lb nextslot=rb reload=lt almanac=rt pause=start freecursor=back
+//   menu.     press=a back=b start=start prevbanner=lb nextbanner=rb
+//   map.      touch=a back=b shop=y almanac=lt zengarden=rt settings=start
+//   other.    touch=a back=b pause=start fastforward=l3
+// An action is the button that does it by default on its screen (A for plant...); a bound action's
+// default button does nothing on that screen unless it's bound to something too.
 struct PadBind {
-    platform::PadButton action;  // the action, as its default button
+    PadScreen screen = PadScreen::Lawn;
+    platform::PadButton action;  // the action, as its default button on the screen
     platform::PadButton button;  // the button that does it
 };
 // Empty, with error set, when the text isn't binds.
 std::vector<PadBind> parse_pad_binds(const std::string& text, std::string& error);
+
+// --pad-layout: buttons that tap a spot of the screen on one screen, in place of what they'd do
+// there, for a button rfu doesn't know (a fan mod's own, or one an update moved). A file of lines
+//   <screen> <button> tap <x>% <y>%
+// with the screen as above or "any" (all of them), x and y from the top left; # starts a comment.
+// Later lines (and files) win over earlier ones for the same screen and button.
+struct PadTap {
+    PadScreen screen;
+    platform::PadButton button;
+    float x, y;  // fractions of the screen
+};
+// The taps, and an error for each line that isn't one (with its number).
+std::vector<PadTap> parse_pad_layout(const std::string& text, std::vector<std::string>& errors);
 
 // --map-buttons: where the world map's buttons are, for a layout rfu doesn't know, as
 // "settings=137:38,almanac=222:38,zengarden=395:38,shop=-75:53". x and y are pixels of the screen
@@ -65,6 +92,7 @@ struct GameKeyOptions {
     bool controller = false;                    // the pad's controls on the lawn (--controller)
     bool pad_hints = false;                     // and its buttons shown on what they press
     std::vector<PadBind> pad_binds;             // the pad's buttons, rebound (--pad-binds)
+    std::vector<PadTap> pad_taps;               // and tapping spots of the screen (--pad-layout)
     MapButtons map_buttons;                     // the world map's buttons, moved (--map-buttons)
 };
 

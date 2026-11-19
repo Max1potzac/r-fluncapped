@@ -46,6 +46,8 @@ public static class RfuCommand
         {
             if (PadSetup.BindsArg(s.PadBinds) is { } binds) args.AddRange(["--pad-binds", binds]);
             if (File.Exists(game.ControllerMappingsPath)) args.AddRange(["--pad-mappings", game.ControllerMappingsPath]);
+            // the game's own spots last, so they win over a layout mod's
+            if (File.Exists(game.PadLayoutPath)) args.AddRange(["--pad-layout", game.PadLayoutPath]);
         }
         foreach (var o in overlays) args.AddRange(["--overlay", $"{o.Guest}={o.Host}"]);
         args.AddRange(s.ExtraArgs);

@@ -27,6 +27,8 @@ public sealed class GameFolder
     public string LibDir => Path.Combine(Dir, "lib", "arm64-v8a");
     public string IconPath => Path.Combine(Dir, "icon.png");
     public string KeybindsPath => Path.Combine(Dir, "keybinds.txt");
+    /// The controller buttons placed on the screen in the keybind layout editor (rfu's --pad-layout).
+    public string PadLayoutPath => Path.Combine(Dir, KeybindLayout.PadLayoutFile);
     /// SDL mappings for controllers SDL doesn't know, made in the controller settings: one file
     /// beside the games' folders, as a controller is the same in every game.
     public string ControllerMappingsPath => Path.Combine(Path.GetDirectoryName(Dir) ?? Dir, "controllers.txt");

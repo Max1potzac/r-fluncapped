@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -137,6 +138,7 @@ PadLabel pad_label(platform::PadButton b, platform::PadType type) {
         case PadButton::LT: return {"L2", 0xFFFFFF};
         case PadButton::RT: return {"R2", 0xFFFFFF};
         case PadButton::Start: return {"OPT", 0xFFFFFF};
+        case PadButton::Back: return {"SHARE", 0xFFFFFF};
         default: break;
         }
         break;
@@ -151,7 +153,9 @@ PadLabel pad_label(platform::PadButton b, platform::PadType type) {
         case PadButton::LT: return {"ZL", 0xFFFFFF};
         case PadButton::RT: return {"ZR", 0xFFFFFF};
         case PadButton::L3: return {"LS", 0xFFFFFF};
+        case PadButton::R3: return {"RS", 0xFFFFFF};
         case PadButton::Start: return {"+", 0xFFFFFF};
+        case PadButton::Back: return {"-", 0xFFFFFF};
         default: break;
         }
         break;
@@ -171,7 +175,9 @@ PadLabel pad_label(platform::PadButton b, platform::PadType type) {
     case PadButton::LT: return {"LT", 0xFFFFFF};
     case PadButton::RT: return {"RT", 0xFFFFFF};
     case PadButton::L3: return {"L3", 0xFFFFFF};
+    case PadButton::R3: return {"R3", 0xFFFFFF};
     case PadButton::Start: return {"MENU", 0xFFFFFF};
+    case PadButton::Back: return {"VIEW", 0xFFFFFF};
     default: return {"", 0xFFFFFF};
     }
 }
@@ -185,15 +191,18 @@ struct HintBind {
 
 class GameKeys : public std::enable_shared_from_this<GameKeys> {
 public:
-    GameKeys(Runtime& rt, const Module& pvz2, const std::vector<platform::KeyBind>& hint_binds, bool pad_hints, const std::vector<PadBind>& pad_binds,
-             const MapButtons& map_buttons)
-        : rt_(rt), base_(pvz2.base()), pad_hints_(pad_hints), map_buttons_(map_buttons) {
-        // Each button does its own action, but an action that's rebound leaves its own button
-        // idle unless a bind gives it something else.
-        for (std::size_t i = 0; i < kPadButtons; ++i) action_of_[i] = static_cast<platform::PadButton>(i);
-        for (const auto& b : pad_binds) action_of_[static_cast<std::size_t>(b.action)].reset();
-        for (const auto& b : pad_binds) action_of_[static_cast<std::size_t>(b.button)] = b.action;
-        for (const auto& b : hint_binds) {
+    GameKeys(Runtime& rt, const Module& pvz2, const GameKeyOptions& options)
+        : rt_(rt), base_(pvz2.base()), pad_hints_(options.pad_hints), map_buttons_(options.map_buttons) {
+        // On each screen, each button does its own action, but an action that's rebound there
+        // leaves its own button idle there unless a bind gives it something else. The other
+        // screens keep theirs.
+        for (auto& screen : action_of_)
+            for (std::size_t i = 0; i < kPadButtons; ++i) screen[i] = static_cast<platform::PadButton>(i);
+        for (const auto& b : options.pad_binds) action_of_[index(b.screen)][index(b.action)].reset();
+        for (const auto& b : options.pad_binds) action_of_[index(b.screen)][index(b.button)] = b.action;
+        // A button that taps a spot does only that, on its screen.
+        for (const auto& t : options.pad_taps) tap_of_[index(t.screen)][index(t.button)] = std::pair{t.x, t.y};
+        for (const auto& b : options.hint_binds) {
             if (!platform::is_game_action(b.action)) continue;
             // A second key for the same thing isn't shown.
             bool dup = std::any_of(hints_.begin(), hints_.end(), [&](const HintBind& h) { return h.action == b.action && h.slot == b.slot; });
@@ -359,23 +368,43 @@ public:
             }
             return false;
         }
-        auto action = action_of_[static_cast<std::size_t>(pressed.button)];
-        if (!action) return false;
+        std::size_t i = index(pressed.button);
+        if (i >= kPadButtons) return false;
         platform::PadInput p = pressed;
-        p.button = *action;
         pad_type_ = p.type;
         pad_active_ = true;
-        // While a character talks, any button is the tap that moves it on, and nothing else
-        // happens (the chooser's or the lawn's controls start once it's done).
-        if (p.down && mode() == Mode::Dialogue) {
-            Sizes z = sizes();
-            tap(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
-            return false;
+        Mode m = Mode::None;
+        if (!p.down) {
+            // A button comes up as what it went down as, whatever screen it's on now.
+            auto as = held_as_[i];
+            held_as_[i].reset();
+            if (!as) return false;
+            p.button = *as;
+        } else {
+            Mode under = screen_mode();
+            m = free_cursor_ && (under == Mode::Lawn || under == Mode::Chooser) ? Mode::Cursor : under;
+            // While a character talks, any button is the tap that moves it on, and nothing else
+            // happens (the chooser's or the lawn's controls start once it's done).
+            if (m == Mode::Dialogue) {
+                Sizes z = sizes();
+                tap(static_cast<std::int32_t>(z.lw / 2), static_cast<std::int32_t>(z.lh / 2));
+                return false;
+            }
+            PadScreen s = screen_of(under);
+            // A spot of the screen this button taps here (--pad-layout), in place of its action.
+            if (auto spot = tap_of_[index(s)][i]) {
+                Sizes z = sizes();
+                if (z.ok()) tap(static_cast<std::int32_t>(spot->first * z.lw), static_cast<std::int32_t>(spot->second * z.lh));
+                return false;
+            }
+            auto action = action_of_[index(s)][i];
+            if (!action) return false;
+            held_as_[i] = *action;
+            p.button = *action;
         }
         // Select held two seconds in a level: the free cursor in place of the lawn's tile box (and
         // back). The level's other screens and the menus have the cursor already.
         if (p.button == PadButton::Back) {
-            Mode m = p.down ? mode() : Mode::None;
             select_since_ = p.down && board_up() && (m == Mode::Lawn || m == Mode::Chooser || (free_cursor_ && m == Mode::Cursor)) ? now_ticks() : 0;
             return false;
         }
@@ -383,7 +412,6 @@ public:
         if (dir != dirs_.end()) {
             dir->held = p.down;
             if (p.down) {
-                Mode m = mode();
                 if (m == Mode::Lawn) move(dir->dx, dir->dy);
                 else if (m == Mode::Menu) menu_move(dir->dx, dir->dy);
                 else if (m == Mode::Chooser) chooser_move(dir->dx, dir->dy);
@@ -401,7 +429,7 @@ public:
             lawn_pad(p);
             return false;
         }
-        switch (mode()) {
+        switch (m) {
         case Mode::Lawn: lawn_pad(p); return false;
         case Mode::Menu: return menu_pad(p);
         case Mode::Cursor: return cursor_pad(p);
@@ -656,6 +684,10 @@ public:
                 }
             }
             select_dial(out);
+            if (pad_hints_ && std::any_of(tap_of_.begin(), tap_of_.end(), [](const auto& s) {
+                    return std::any_of(s.begin(), s.end(), [](const auto& t) { return t.has_value(); });
+                }))
+                tap_labels(out, lawn ? PadScreen::Lawn : screen_of(screen_mode()));
             return out;
         }
         select_dial(out);
@@ -690,10 +722,9 @@ public:
         using platform::PadButton;
         auto label = [&](PadButton action, int x, int y, platform::HintLabel::Anchor anchor) {
             // The button that does the action now.
-            std::size_t i = 0;
-            while (i < kPadButtons && action_of_[i] != action) ++i;
-            if (i == kPadButtons) return;
-            PadLabel l = pad_label(static_cast<PadButton>(i), pad_type_);
+            auto b = button_for(PadScreen::Lawn, action);
+            if (!b) return;
+            PadLabel l = pad_label(*b, pad_type_);
             out.labels.push_back({l.text, x, y, anchor, l.rgb});
         };
         int n = static_cast<int>(packets.size());
@@ -717,6 +748,7 @@ public:
             const Rect& r = powers[i].rect;
             out.labels.push_back({std::string("R") + kArrows[i], static_cast<int>(r.x * fx), static_cast<int>(r.y * fy), platform::HintLabel::Anchor::TopLeft, 0xFFFFFF});
         }
+        tap_labels(out, PadScreen::Lawn);
         return out;
     }
 
@@ -835,8 +867,13 @@ private:
     // What the pad does now.
     enum class Mode { Lawn, Menu, Cursor, Chooser, Dialogue, None };
     Mode mode() {
+        Mode m = screen_mode();
+        return free_cursor_ && (m == Mode::Lawn || m == Mode::Chooser) ? Mode::Cursor : m;
+    }
+    // The screen that's up, whether or not the free cursor is on there.
+    Mode screen_mode() {
         if (dialogue()) return Mode::Dialogue;
-        if (lawn()) return free_cursor_ ? Mode::Cursor : Mode::Lawn;
+        if (lawn()) return Mode::Lawn;
         if (menu_dialog()) return Mode::Menu;
         // The seed chooser (and the look at the lawn from it) has controls of its own.
         auto& mem = rt_.mem();
@@ -846,8 +883,38 @@ private:
         // objectives can be up first, with no chooser yet.
         if (board && board_vtable_ && mem.read<std::uint64_t>(board) == board_vtable_ &&
             (before_level() || (mem.read<std::int32_t>(board + kBoardState) == 3 && (live(chooser_, chooser_vtable_) || live(view_, view_vtable_)))))
-            return free_cursor_ ? Mode::Cursor : Mode::Chooser;
+            return Mode::Chooser;
         return sizes().ok() ? Mode::Cursor : Mode::None;
+    }
+    // The screen the pad's binds are for, from screen_mode()'s.
+    PadScreen screen_of(Mode under) {
+        switch (under) {
+        case Mode::Lawn: return PadScreen::Lawn;
+        case Mode::Chooser: return PadScreen::Chooser;
+        case Mode::Menu: return PadScreen::Menu;
+        case Mode::Cursor: return on_map() ? PadScreen::Map : PadScreen::Other;
+        default: return PadScreen::Other;
+        }
+    }
+    template <class E> static constexpr std::size_t index(E e) { return static_cast<std::size_t>(e); }
+
+    // The button that does an action on a screen now, if one does (and doesn't tap a spot there).
+    std::optional<platform::PadButton> button_for(PadScreen s, platform::PadButton action) const {
+        for (std::size_t i = 0; i < kPadButtons; ++i)
+            if (action_of_[index(s)][i] == action && !tap_of_[index(s)][i]) return static_cast<platform::PadButton>(i);
+        return std::nullopt;
+    }
+
+    // The buttons that tap spots on this screen, labelled where they tap.
+    void tap_labels(platform::HintOverlay& out, PadScreen s) {
+        if (!pad_hints_) return;
+        Sizes z = sizes();
+        if (!z.ok()) return;
+        for (std::size_t i = 0; i < kPadButtons; ++i)
+            if (auto spot = tap_of_[index(s)][i]) {
+                PadLabel l = pad_label(static_cast<platform::PadButton>(i), pad_type_);
+                if (!l.text.empty()) out.labels.push_back({l.text, static_cast<int>(spot->first * z.sw), static_cast<int>(spot->second * z.sh), platform::HintLabel::Anchor::TopLeft, l.rgb});
+            }
     }
 
     // A character's talking (Crazy Dave's "tap to continue"): the screen's middle goes to the
@@ -1522,10 +1589,9 @@ private:
         }
         if (!pad_hints_) return;
         auto label = [&](platform::PadButton action, const Rect& r) {
-            std::size_t i = 0;
-            while (i < kPadButtons && action_of_[i] != action) ++i;
-            if (i == kPadButtons) return;
-            PadLabel l = pad_label(static_cast<platform::PadButton>(i), pad_type_);
+            auto b = button_for(PadScreen::Chooser, action);
+            if (!b) return;
+            PadLabel l = pad_label(*b, pad_type_);
             out.labels.push_back({l.text, static_cast<int>((r.x + r.w) * fx), static_cast<int>((r.y + r.h) * fy), platform::HintLabel::Anchor::BottomRight, l.rgb});
         };
         if (start) label(platform::PadButton::X, *start);
@@ -1913,7 +1979,11 @@ private:
     };
     bool pad_hints_;
     static constexpr std::size_t kPadButtons = static_cast<std::size_t>(platform::PadButton::RRight) + 1;
-    std::array<std::optional<platform::PadButton>, kPadButtons> action_of_;  // what each button does
+    // What each button does on each screen (as the button that does it by default), or the spot
+    // it taps there; and what each held button went down as.
+    std::array<std::array<std::optional<platform::PadButton>, kPadButtons>, kPadScreens> action_of_;
+    std::array<std::array<std::optional<std::pair<float, float>>, kPadButtons>, kPadScreens> tap_of_;
+    std::array<std::optional<platform::PadButton>, kPadButtons> held_as_;
     GuestAddr board_vtable_ = 0, cursor_vtable_ = 0;
     Seen plant_cursor_;
     std::deque<std::pair<GuestAddr, Seen>> aim_cursors_;  // the aiming cursors' vtables, and the last of each seen
@@ -1974,39 +2044,152 @@ private:
 
 }  // namespace
 
+namespace {
+
+using platform::PadButton;
+struct Named {
+    const char* name;
+    PadButton button;
+};
+constexpr Named kButtonNames[] = {
+    {"a", PadButton::A},   {"b", PadButton::B},       {"x", PadButton::X},       {"y", PadButton::Y},         {"lb", PadButton::LB},
+    {"rb", PadButton::RB}, {"lt", PadButton::LT},     {"rt", PadButton::RT},     {"l3", PadButton::L3},       {"r3", PadButton::R3},
+    {"start", PadButton::Start}, {"back", PadButton::Back}, {"up", PadButton::Up}, {"down", PadButton::Down}, {"left", PadButton::Left},
+    {"right", PadButton::Right}};
+constexpr const char* kScreenNames[kPadScreens] = {"lawn", "chooser", "menu", "map", "other"};
+
+// Each screen's actions, by the buttons that do them by default there.
+struct ScreenActions {
+    const Named* begin;
+    const Named* end;
+};
+constexpr Named kLawnActions[] = {
+    {"plant", PadButton::A},     {"dig", PadButton::B},       {"use", PadButton::X},          {"plantfood", PadButton::Y},
+    {"prevseed", PadButton::LB}, {"nextseed", PadButton::RB}, {"vacuum", PadButton::LT},      {"vacuum2", PadButton::RT},
+    {"fastforward", PadButton::L3}, {"pause", PadButton::Start}, {"slowmode", PadButton::R3}, {"freecursor", PadButton::Back}};
+constexpr Named kChooserActions[] = {
+    {"take", PadButton::A},      {"remove", PadButton::B},    {"letsrock", PadButton::X}, {"viewlawn", PadButton::Y},
+    {"prevslot", PadButton::LB}, {"nextslot", PadButton::RB}, {"reload", PadButton::LT},  {"almanac", PadButton::RT},
+    {"pause", PadButton::Start}, {"freecursor", PadButton::Back}};
+constexpr Named kMenuActions[] = {
+    {"press", PadButton::A}, {"back", PadButton::B}, {"start", PadButton::Start}, {"prevbanner", PadButton::LB}, {"nextbanner", PadButton::RB}};
+constexpr Named kMapActions[] = {
+    {"touch", PadButton::A},   {"back", PadButton::B},       {"shop", PadButton::Y},
+    {"almanac", PadButton::LT}, {"zengarden", PadButton::RT}, {"settings", PadButton::Start}};
+constexpr Named kOtherActions[] = {{"touch", PadButton::A}, {"back", PadButton::B}, {"pause", PadButton::Start}, {"fastforward", PadButton::L3}};
+constexpr ScreenActions kActions[kPadScreens] = {
+    {std::begin(kLawnActions), std::end(kLawnActions)},   {std::begin(kChooserActions), std::end(kChooserActions)},
+    {std::begin(kMenuActions), std::end(kMenuActions)},   {std::begin(kMapActions), std::end(kMapActions)},
+    {std::begin(kOtherActions), std::end(kOtherActions)}};
+
+std::string lower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+const Named* find_named(const Named* begin, const Named* end, const std::string& name) {
+    auto it = std::find_if(begin, end, [&](const Named& n) { return name == n.name; });
+    return it == end ? nullptr : it;
+}
+std::optional<PadScreen> screen_named(const std::string& name) {
+    for (std::size_t i = 0; i < kPadScreens; ++i)
+        if (name == kScreenNames[i]) return static_cast<PadScreen>(i);
+    return std::nullopt;
+}
+
+}  // namespace
+
 std::vector<PadBind> parse_pad_binds(const std::string& text, std::string& error) {
-    using platform::PadButton;
-    static const std::pair<const char*, PadButton> kActions[] = {
-        {"plant", PadButton::A},     {"dig", PadButton::B},     {"use", PadButton::X},
-        {"plantfood", PadButton::Y}, {"prevseed", PadButton::LB}, {"nextseed", PadButton::RB},
-        {"vacuum", PadButton::LT},   {"vacuum2", PadButton::RT}, {"fastforward", PadButton::L3},
-        {"pause", PadButton::Start}, {"slowmode", PadButton::R3}};
-    static const std::pair<const char*, PadButton> kButtonNames[] = {
-        {"a", PadButton::A},   {"b", PadButton::B},       {"x", PadButton::X},       {"y", PadButton::Y},         {"lb", PadButton::LB},
-        {"rb", PadButton::RB}, {"lt", PadButton::LT},     {"rt", PadButton::RT},     {"l3", PadButton::L3},       {"r3", PadButton::R3},
-        {"start", PadButton::Start}, {"back", PadButton::Back}, {"up", PadButton::Up}, {"down", PadButton::Down}, {"left", PadButton::Left},
-        {"right", PadButton::Right}};
     std::vector<PadBind> binds;
     std::size_t at = 0;
     while (at < text.size()) {
         std::size_t end = text.find(',', at);
         if (end == std::string::npos) end = text.size();
-        std::string item = text.substr(at, end - at);
+        std::string item = lower(text.substr(at, end - at));
         at = end + 1;
-        for (auto& c : item) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         item.erase(std::remove(item.begin(), item.end(), ' '), item.end());
         if (item.empty()) continue;
         std::size_t eq = item.find('=');
         std::string name = item.substr(0, eq), button = eq == std::string::npos ? "" : item.substr(eq + 1);
-        auto a = std::find_if(std::begin(kActions), std::end(kActions), [&](const auto& k) { return name == k.first; });
-        auto b = std::find_if(std::begin(kButtonNames), std::end(kButtonNames), [&](const auto& k) { return button == k.first; });
-        if (a == std::end(kActions) || b == std::end(kButtonNames)) {
-            error = "pad binds: \"" + item + "\" isn't action=button";
+        // "chooser.take": the screen, then its action; no screen is the lawn.
+        PadScreen screen = PadScreen::Lawn;
+        std::size_t dot = name.find('.');
+        if (dot != std::string::npos) {
+            auto named = screen_named(name.substr(0, dot));
+            if (!named) {
+                error = "pad binds: \"" + item + "\" names no screen (lawn, chooser, menu, map or other)";
+                return {};
+            }
+            screen = *named;
+            name = name.substr(dot + 1);
+        }
+        const ScreenActions& actions = kActions[static_cast<std::size_t>(screen)];
+        auto a = find_named(actions.begin, actions.end, name);
+        auto b = find_named(std::begin(kButtonNames), std::end(kButtonNames), button);
+        if (!a || !b) {
+            error = "pad binds: \"" + item + "\" isn't [screen.]action=button";
             return {};
         }
-        binds.push_back({a->second, b->second});
+        binds.push_back({screen, a->button, b->button});
     }
     return binds;
+}
+
+std::vector<PadTap> parse_pad_layout(const std::string& text, std::vector<std::string>& errors) {
+    std::vector<PadTap> taps;
+    std::size_t at = 0;
+    int number = 0;
+    while (at <= text.size()) {
+        std::size_t end = text.find('\n', at);
+        if (end == std::string::npos) end = text.size();
+        std::string line = text.substr(at, end - at);
+        at = end + 1;
+        ++number;
+        if (auto hash = line.find('#'); hash != std::string::npos) line.erase(hash);
+        std::vector<std::string> words;
+        std::size_t i = 0;
+        while (i < line.size()) {
+            while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+            std::size_t j = i;
+            while (j < line.size() && !std::isspace(static_cast<unsigned char>(line[j]))) ++j;
+            if (j > i) words.push_back(lower(line.substr(i, j - i)));
+            i = j;
+        }
+        if (words.empty()) continue;
+        auto fail = [&](const std::string& why) { errors.push_back("line " + std::to_string(number) + ": " + why); };
+        if (words.size() != 5 || words[2] != "tap") {
+            fail("wants <screen> <button> tap <x>% <y>%");
+            continue;
+        }
+        auto screen = screen_named(words[0]);
+        bool any = words[0] == "any";
+        if (!screen && !any) {
+            fail("unknown screen " + words[0] + " (lawn, chooser, menu, map, other or any)");
+            continue;
+        }
+        auto b = find_named(std::begin(kButtonNames), std::end(kButtonNames), words[1]);
+        if (!b) {
+            fail("unknown button " + words[1]);
+            continue;
+        }
+        auto percent = [](const std::string& w, float& out) {
+            if (w.size() < 2 || w.back() != '%') return false;
+            try {
+                std::size_t used = 0;
+                out = std::stof(w.substr(0, w.size() - 1), &used) / 100;
+                return used == w.size() - 1 && out >= 0 && out <= 1;
+            } catch (const std::exception&) {
+                return false;
+            }
+        };
+        float x = 0, y = 0;
+        if (!percent(words[3], x) || !percent(words[4], y)) {
+            fail("the spot wants percentages of the screen, 0% to 100%, like 50% 10%");
+            continue;
+        }
+        for (std::size_t k = 0; k < kPadScreens; ++k)
+            if (any || static_cast<PadScreen>(k) == *screen) taps.push_back({static_cast<PadScreen>(k), b->button, x, y});
+    }
+    return taps;
 }
 
 MapButtons parse_map_buttons(const std::string& text, std::string& error) {
@@ -2050,7 +2233,7 @@ MapButtons parse_map_buttons(const std::string& text, std::string& error) {
 }
 
 GameKeyHandlers install_game_keys(Runtime& rt, const Module& pvz2, const GameKeyOptions& options) {
-    auto keys = std::make_shared<GameKeys>(rt, pvz2, options.hint_binds, options.pad_hints, options.pad_binds, options.map_buttons);
+    auto keys = std::make_shared<GameKeys>(rt, pvz2, options);
     if (!keys->install(pvz2)) {
         log::warn("game keys (seed, shovel, plant food...): this libPVZ2.so is a build they don't know; left off");
         return {};

@@ -96,7 +96,8 @@ MODS
     "when"        "offline" or "online": only then
     "createDirs"  folders made before the game starts
     "hooks"       launcher features: "keybinds-file" (writes keybinds.txt),
-                  "pad-binds" (the buttons from Controller settings)
+                  "pad-binds" (the buttons from Controller settings, and
+                  the game's controller-layout.txt)
     "actions"     buttons: [{"label": "...", "run": "edit-keybinds" |
                   "controller-settings" | "edit-layout" | "open:<path>"}]
     "language", "strings"   a localization's language and strings file
@@ -225,11 +226,20 @@ KEYBIND LAYOUT EDITOR (Game tab)
   Bluestacks style: load a screenshot of the game (any size), click where a
   key should press and press the key; drag a key to move it, right-click to
   remove it, double-click to change it. Positions are kept in percent, so
-  they fit any resolution. "Save to keybinds.txt" puts them in the game's
-  keybinds (other lines stay). "Save as layout mod" makes a mod for this game
-  and version (keybinds.txt, layout.json and the screenshot), handy for a
-  fan mod whose buttons sit elsewhere; rfu adds its keys over the game's own
-  keybinds (a key both bind does what the layout says).
+  they fit any resolution. "Save for this game" puts them in the game's
+  keybinds.txt (other lines stay). "Save as layout mod" makes a mod for this
+  game and version (keybinds.txt, layout.json and the screenshot), handy for
+  a fan mod whose buttons sit elsewhere; rfu adds its keys over the game's
+  own keybinds (a key both bind does what the layout says).
+  "Controller" at the top places controller buttons instead, for one screen
+  at a time (Lawn, Seed chooser, Pause menu, World map, Everywhere else, or
+  Every screen): click a spot and pick the button. On that screen the
+  button then taps its spot in place of what it does; every other screen
+  keeps the button as it was. Use it for a button the controller doesn't
+  know, like one a fan mod adds or an update moves (RFL 1.5's map buttons).
+  They're saved in the game's controller-layout.txt (or the layout mod's),
+  and with keybind hints on the game labels each button at its spot.
+  Saving controller buttons switches Controller support on.
 
 CONTROLLER
   Any controller Windows knows (Xbox, PlayStation, Switch Pro...) plays the
@@ -291,8 +301,11 @@ CONTROLLER
   One it doesn't (some DualShock 4s, generic pads) can be set up there: it
   asks for each button in turn and saves it in games\controllers.txt, which
   every game then reads. Below that, any action can be moved to another
-  button. More controls (powerups,
-  menus) are on the way.
+  button, screen by screen: pick the screen (Lawn, Seed chooser, Pause menu,
+  World map, Everywhere else) and move its actions. Each screen keeps its
+  own buttons, so putting "take the packet" on X in the seed chooser leaves
+  A planting on the lawn and pressing in the menus. "Defaults for this
+  screen" puts that screen back.
 
 CODE PATCHES (*.patch in a mod, or a game's patches\)
   Small fixes as bytes for rfu to put into a library after it loads, after

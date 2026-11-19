@@ -9,7 +9,8 @@
   "games": ["global"],
   "default": true,
   "rfu": ["--controller"],
-  // the launcher adds the buttons moved in Controller settings, and games\controllers.txt
+  // the launcher adds the buttons moved in Controller settings, games\controllers.txt and the
+  // game's controller-layout.txt (buttons placed in the keybind layout editor)
   "hooks": ["pad-binds"],
   "actions": [{ "label": "Controller settings", "run": "controller-settings" }]
 }

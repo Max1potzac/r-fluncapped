@@ -590,8 +590,48 @@ void KeybindLayoutTest()
     Mods.Set(g, mod, true);
     var args = RfuCommand.Build(g, []);
     Expect(args.Contains(Path.Combine(dir, "keybinds.txt")), $"its keybinds go to rfu: {string.Join(" ", args)}");
+    Expect(!args.Contains("--pad-layout"), "no controller spots, no controller layout");
     var china = MakeChinaGame("LayoutChina");
     Expect(!Mods.AppliesTo(mod, china), "not for another game");
+
+    // controller buttons, per screen: the game's own file, and in a layout mod
+    KeybindLayout.Marker[] both = [new("Q", 0.5f, 0.25f), new("y", 0.95f, 0.075f, "map", Pad: true), new("rt", 0.2f, 0.05f, "any", Pad: true)];
+    Mods.Set(g, Mod("controller", g), true);
+    KeybindLayout.WritePad(g.PadLayoutPath, both);
+    string pad = File.ReadAllText(g.PadLayoutPath);
+    Expect(pad.Contains("map y tap 95% 7.5%") && pad.Contains("any rt tap 20% 5%") && !pad.Contains("Q tap"), $"controller spots written: {pad}");
+    File.AppendAllText(g.PadLayoutPath, "chooser lb tap 1% 2%   # by hand\nnot a spot\n");
+    var padBack = KeybindLayout.ReadPad(g.PadLayoutPath);
+    Expect(padBack.Count == 3 && padBack.All(m => m.Pad) && padBack[0] == both[1] && padBack[2].State == "chooser", "controller spots read back");
+    KeybindLayout.WritePad(g.PadLayoutPath, both);
+    Expect(KeybindLayout.ReadPad(g.PadLayoutPath).Count == 2 && File.ReadAllText(g.PadLayoutPath).Contains("not a spot"), "written again: the editor's spots, other lines kept");
+    KeybindLayout.Write(g.KeybindsPath, both);
+    Expect(KeybindLayout.Read(g.KeybindsPath).Count == 1, "keybinds.txt gets only the keys");
+    args = RfuCommand.Build(g, []);
+    int pi = args.IndexOf("--pad-layout");
+    Expect(pi >= 0 && args[pi + 1] == g.PadLayoutPath && args.LastIndexOf("--pad-layout") == pi, $"the game's controller layout goes to rfu: {string.Join(" ", args)}");
+    Mods.Set(g, Mod("controller", g), false);
+    Expect(!RfuCommand.Build(g, []).Contains(g.PadLayoutPath), "not without the controller");
+    Mods.Set(g, Mod("controller", g), true);
+    File.WriteAllText(g.PadLayoutPath, "not a spot\n");
+    KeybindLayout.WritePad(g.PadLayoutPath, []);
+    Expect(File.Exists(g.PadLayoutPath), "a file with lines of its own stays");
+    File.WriteAllText(g.PadLayoutPath, "# only comments\nmap a tap 1% 1%\n");
+    KeybindLayout.WritePad(g.PadLayoutPath, []);
+    Expect(!File.Exists(g.PadLayoutPath), "no spots left, no file");
+    KeybindLayout.WritePad(g.PadLayoutPath, both);
+
+    dir = KeybindLayout.SaveAsMod(Path.Combine(root, "mods"), "RFL 1.5 layout", "com.ea.game.pvz2_rfl", "1.4", both, shot);
+    Expect(File.Exists(Path.Combine(dir, KeybindLayout.PadLayoutFile)) && File.ReadAllText(Path.Combine(dir, KeybindLayout.PadLayoutFile)).Contains("map y tap 95% 7.5%"), "the mod's controller layout");
+    (back, _) = KeybindLayout.ReadMod(dir);
+    Expect(back.SequenceEqual(both), "the mod's markers read back, keys and buttons");
+    mod = Mods.List(g).Single(m => m.Key == "RFL 1.5 layout");
+    args = RfuCommand.Build(g, []);
+    pi = args.IndexOf(Path.Combine(dir, KeybindLayout.PadLayoutFile));
+    Expect(pi > 0 && args[pi - 1] == "--pad-layout" && pi < args.IndexOf(g.PadLayoutPath), $"the mod's controller layout goes first, the game's wins: {string.Join(" ", args)}");
+    dir = KeybindLayout.SaveAsMod(Path.Combine(root, "mods"), "RFL 1.5 layout", "com.ea.game.pvz2_rfl", "1.4", [both[1]], shot);
+    Expect(!File.Exists(Path.Combine(dir, "keybinds.txt")) && Mods.List(g).Single(m => m.Key == "RFL 1.5 layout").Rfu.SequenceEqual(["--pad-layout", "{mod}/" + KeybindLayout.PadLayoutFile]), "a controller-only layout has no keybinds");
+    File.Delete(g.PadLayoutPath);
     Directory.Delete(dir, true);
 }
 
@@ -603,11 +643,21 @@ Mods.Mod Mod(string id, GameFolder? game = null)
 
 void PadSetupTest()
 {
+    var lawn = PadSetup.Screens[0];
+    var chooser = PadSetup.Screens.Single(s => s.Name == "chooser");
     var binds = new Dictionary<string, string> { ["plant"] = "b" };
-    Expect(PadSetup.Clashes(binds).Count == 2, "plant and dig both on B clash");
+    Expect(PadSetup.Clashes(binds, lawn).Count == 2, "plant and dig both on B clash");
+    Expect(PadSetup.Clashes(binds, chooser).Count == 0, "the lawn's binds don't clash on the chooser");
     binds["dig"] = "a";
-    Expect(PadSetup.Clashes(binds).Count == 0, "swapped, no clash");
+    Expect(PadSetup.Clashes(binds, lawn).Count == 0, "swapped, no clash");
     Expect(PadSetup.BindsArg(new Dictionary<string, string> { ["plant"] = "nonsense" }) == null, "an unknown button is the default");
+    // each screen on its own: only the screens with a moved action are passed, with their screen
+    string arg = PadSetup.BindsArg(new Dictionary<string, string> { ["chooser.take"] = "x", ["chooser.letsrock"] = "a" })!;
+    Expect(arg.Contains("chooser.take=x") && arg.Contains("chooser.letsrock=a") && arg.Contains("chooser.pause=start") && !arg.Contains("plant=") && !arg.Contains("map."), arg);
+    Expect(PadSetup.Clashes(new Dictionary<string, string> { ["chooser.take"] = "x" }, chooser).Count == 2, "take and let's rock both on X clash");
+    var moved = PadSetup.Moved(new Dictionary<string, string> { ["plant"] = "a", ["map.shop"] = "x", ["junk"] = "a" });
+    Expect(moved.Count == 1 && moved["map.shop"] == "x", "only moved actions are kept");
+    Expect(PadSetup.Screens.Select(s => s.Name).SequenceEqual(["lawn", "chooser", "menu", "map", "other"]), "rfu's screens, in its order");
     string m = PadSetup.Mapping("030000004c050000c405000000000000", "Wireless, Controller",
         [new("a", PadSetup.Button(1)), new("dpup", PadSetup.Hat(0, 1)), new("leftx", PadSetup.Axis(0, false)), new("lefty", PadSetup.Axis(1, true)), new("x", "")]);
     Expect(m == "030000004c050000c405000000000000,Wireless Controller,a:b1,dpup:h0.1,leftx:a0,lefty:a1~,platform:Windows,", m);

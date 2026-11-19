@@ -23,44 +23,131 @@ SETTING UP
   ask for one either: the launcher downloads the newest OBB into the game's
   folder (about 1.3 GB), and asks for the file only if that fails.
 
-THE MENU
-  Display           assets (high 1536 / low 768), the resolution the game
+THE WINDOW
+  It looks like PvZ2's own menus: wooden frames, glossy buttons. "Theme"
+  switches Light (a day on the lawn), Dark (the night levels) or Auto
+  (Windows' own app setting); it's kept in launcher.json.
+  Your Games        each game, its icon, kind (Reflourished, PvZ2, PvZ2 China,
+                    other fan mods) and version. Add game / Remove game
+                    (sends the game's folder - APK, OBB, saves, its own mods,
+                    settings - to the Recycle Bin, after asking).
+  The banner        the picked game's name (click to rename), version, OBB,
+                    and PLAY (see below).
+  Mods tab          every mod for this game (see MODS), as cards with an
+                    on/off switch. Chips along the top filter by category;
+                    "All games" shows the mods made for other games too,
+                    greyed out. A picked mod shows its folder and what it can
+                    do: Controller settings, Edit keybinds, List missing
+                    strings, Load earlier / later (content), Open folder.
+                    "+ Add mod" copies a folder in; "Restore" writes the
+                    built-in mods back as they came.
+  Display tab       assets (high 1536 / low 768), the resolution the game
                     draws at, window size, full screen, VSync, ANGLE.
-  Code injections   hover to collect (on by default: moving the mouse over sun,
-                    coins and plant food picks them up), the frozen animations
-                    fix (on by default: a Citron that finishes charging before
-                    the first wave or after the last zombie goes on to its
-                    charged idle), keybinds, keybind hints (on by default:
-                    each key in a small badge on the seed packet or button
-                    it presses), controller support (on by default, see
-                    below), the glove cursor (off by default: the
-                    controller's glove for the mouse too, in place of
-                    Windows' arrow), and each code patch in patches\.
-                    Offline skips the CDN and the update checks. "Download
+  Game tab          Offline skips the CDN and the update checks. "Download
                     OBB updates" (Reflourished, on by default) is step 3 of
-                    PLAY. A mod's own
-                    libraries (Reflourished's libRFLib, AltverZ's libSnowie)
-                    are part of the game and always load; the menu lists them.
-  Custom content    the mods in mods\, ticked ones in load order (the lowest
-                    wins where two change the same file). Up / Down reorder.
-  Update game       a new version: pick its APK, then its OBB. An APK that
-                    downloads its own OBB (Reflourished 1.5.0+) isn't asked
-                    for one: the launcher downloads it next to the APK, or
-                    brings the OBB you have up to date. The old APK and OBB
-                    go to old\, saves stay. Asked for the OBB file only if
-                    the download fails. A version number in the game's
-                    name follows the new APK's file name.
-  Remove game       sends the game's folder (APK, OBB, saves, mods,
-                    settings) to the Recycle Bin, after asking.
-  Play              see below. "Unpack resources" unpacks the OBB into
-                    unpacked\ as PNG and JSON, for making content. "Last log"
-                    opens rfu-log.txt from the last run.
+                    PLAY. Keybinds, the keybind layout editor, controller
+                    settings; Update game, Unpack resources (the OBB as PNG
+                    and JSON, for making content), Game folder, Last log.
+                    A mod's own libraries (Reflourished's libRFLib, AltverZ's
+                    libSnowie) are part of the game and always load.
+  Log tab           what the launcher did; the last line is along the bottom.
   Settings are saved as game.json in the game's folder as you change them.
 
+MODS
+  Everything you can switch on for a game is a mod: a folder with a mod.json.
+  Mods in the launcher's mods\ folder (beside games\) are for every game
+  they fit; a game's own mods\ folder holds mods for it alone (and hides a
+  shared one with the same folder name).
+
+  The launcher's own code injections are mods, written into mods\ the first
+  time it starts, so they can be read, changed, copied or deleted:
+    Hover to collect        sun, coins and plant food picked up by moving
+                            the mouse over them (on by default)
+    Frozen animations fix   a Citron that finishes charging before the first
+                            wave goes on to its charged idle (on)
+    Keybinds                keys from the game's keybinds.txt (see below)
+    Keybind hints           each key or button in a badge on what it
+                            presses (on; needs Keybinds or Controller)
+    Controller support      see CONTROLLER (on)
+    Glove cursor            the controller's glove for the mouse too
+    Offline cloud / Record cloud session (PvZ2 China only, on): the China
+                            cloud stub offline, the recorder online
+  and some samples:
+    Pirate English          a localization (see below)
+    Run without libRFLib    Reflourished only: starts it without its own
+                            library, to tell its problems from rfu's
+  A deleted built-in mod stays deleted (mods\.builtin.json remembers);
+  "Restore" brings them all back.
+
+  mod.json (// comments are fine):
+    "id", "name", "description", "author", "version"
+    "kind"        injection, content or localization (worked out if left out)
+    "category"    Gameplay, Controls, Fixes, Visuals, Language, Levels,
+                  Network, Debug... (the chips); anything goes
+    "games"       which games it's for: "global" (any but China),
+                  "reflourished", "pvz2" (EA's own), "china", "other" (fan
+                  mods such as AltverZ), a package name, or "*". Left out:
+                  every game.
+    "versions"    ["1.5"]: only for a game whose version starts so
+    "default"     true: switched on for a game that hasn't seen it yet
+    "rfu"         rfu arguments; {game}, {mod} and {data} are those folders
+    "patches"     code patch files in the mod (left out: every *.patch in it)
+    "requiresAny" ids of mods one of which must be on too
+    "when"        "offline" or "online": only then
+    "createDirs"  folders made before the game starts
+    "hooks"       launcher features: "keybinds-file" (writes keybinds.txt),
+                  "pad-binds" (the buttons from Controller settings)
+    "actions"     buttons: [{"label": "...", "run": "edit-keybinds" |
+                  "controller-settings" | "edit-layout" | "open:<path>"}]
+    "language", "strings"   a localization's language and strings file
+  Old settings (game.json from before) carry over: what was on stays on.
+
+CONTENT (cdn\ and files\ in a mod)
+  rfu lays a mod over the game's own files without changing them: switch it
+  off and the game is as it was, and the game's CDN download can't overwrite
+  it, so there's no need to turn Wi-Fi off for custom strings.
+
+    cdn\...          over the CDN folder (files\No_Backup\CDN.<version>):
+                     levels, LawnStrings, liveconfig ...
+    files\...        over the game's files folder (Android's
+                     /sdcard/Android/data/<package>/files)
+
+  A folder with neither cdn\ nor files\ (and no "kind": "injection") is all
+  CDN content, the way level packs are shared: loose level files (anything
+  with a LevelDefinition) go into levels\, a LawnStrings file into the CDN
+  folder itself, folders as they are. So a level pack folder can be added
+  exactly as downloaded.
+
+  On the way, files are converted to what the game reads:
+    x.json         becomes x.rton where the game's own file is x.rton
+    x.rton.json    always becomes x.rton
+    LawnStrings    merged: the mod's strings go over the game's current ones
+                   (and over earlier mods'), so text the mod doesn't have
+                   isn't lost. The merge is redone after each CDN download.
+  A file spelled differently from the game's (LawnStrings-en-us.rton for
+  LawnStrings-en-US.rton) replaces the game's. Where two mods change the
+  same file the one loaded later wins (Load earlier / later).
+
+  Content inside the OBB (plants, zombies, textures, PAM animations) isn't
+  covered yet: that needs the OBB repacked, which pvz2conv can't do yet.
+
+LOCALIZATIONS
+  A localization is a mod with "language" (en-US...) and a strings file of
+  plain "KEY": "text" lines (see mods\Pirate English). Its strings are
+  merged over the game's own LawnStrings-<language> each time you play, so:
+    a key the mod has       shows the mod's text
+    a key it doesn't have   shows the game's own text - say a new
+                            Reflourished event's strings the translation
+                            doesn't cover yet
+  The card shows how many of the game's strings it covers. "List missing
+  strings" writes missing-strings.json in the mod's folder: every string it
+  doesn't have yet, with the game's text, ready to translate and copy in.
+  Copy the Pirate English folder to start a translation of your own.
+
 PLAY
-  1. With no custom content ticked, the launcher asks if you want to load
+  1. With no content or localization on, the launcher asks if you want to load
      some (a folder; tick "Don't ask again" to stop it asking). The folder is
-     copied into the game's mods\ and ticked.
+     copied into the game's mods\ and switched on.
   2. With no custom content, it checks for a new version of the game. It
      downloads the game's CDN content for your version (only when it changed)
      and reads ForceUpdateConfigData's MinVersion, the same value the game
@@ -78,9 +165,9 @@ PLAY
      starts it again. An OBB that matches no recent version (changed by hand,
      or too old) can only be replaced whole: you're asked first, and the old
      one goes to old\. Off when the game's own Settings > Automatic OBB
-     Updates is off, when "Download OBB updates" is unticked, or offline. A
+     Updates is off, when "Download OBB updates" is off, or offline. A
      failed update is logged and the game starts with the OBB it has.
-  4. The ticked mods are built into .launcher\overlay (only when something
+  4. The content mods switched on are built into .launcher\overlay (only when something
      changed) and rfu starts with them laid over the game's files.
 
   The game's Settings > Import/Export Files (custom levels, saves, quest
@@ -115,7 +202,7 @@ CUSTOM CONTENT (mods\<name>\)
   covered yet: that needs the OBB repacked, which pvz2conv can't do yet.
 
 KEYBINDS (keybinds.txt)
-  Tick "Keybinds" and press "Edit keybinds". One key per line:
+  Switch the Keybinds mod on and press "Edit keybinds". One key per line:
     1 seed 1            1 picks the first seed packet (top of the seed bank)
     D shovel            D picks up the shovel; D again puts it back
     F plantfood         F picks up plant food (then click a plant);
@@ -133,6 +220,16 @@ KEYBINDS (keybinds.txt)
   add those lines to it). The mouse wheel scrolls too, sideways with Shift.
   Key names are SDL's (A, 1, Space, F1, Left_Shift, Keypad_1). Keybinds are
   off while the game shows its keyboard, so typing a name still works.
+
+KEYBIND LAYOUT EDITOR (Game tab)
+  Bluestacks style: load a screenshot of the game (any size), click where a
+  key should press and press the key; drag a key to move it, right-click to
+  remove it, double-click to change it. Positions are kept in percent, so
+  they fit any resolution. "Save to keybinds.txt" puts them in the game's
+  keybinds (other lines stay). "Save as layout mod" makes a mod for this game
+  and version (keybinds.txt, layout.json and the screenshot), handy for a
+  fan mod whose buttons sit elsewhere; rfu adds its keys over the game's own
+  keybinds (a key both bind does what the layout says).
 
 CONTROLLER
   Any controller Windows knows (Xbox, PlayStation, Switch Pro...) plays the
@@ -197,9 +294,10 @@ CONTROLLER
   button. More controls (powerups,
   menus) are on the way.
 
-CODE PATCHES (patches\*.patch)
+CODE PATCHES (*.patch in a mod, or a game's patches\)
   Small fixes as bytes for rfu to put into a library after it loads, after
-  RFLib's own patches. Each file is a toggle in the menu:
+  RFLib's own patches. A mod's .patch files go with it; each file in a game's
+  patches\ folder is a mod of its own (category "Code patches"):
     # name: Example fix
     # description: what it does
     libPVZ2.so+0x1a2b3c 1F 20 03 D5 was 00 00 80 52
@@ -212,3 +310,5 @@ BUILDING
   gives one self-contained publish\PvZ2Launcher.exe.
   Pvz2Launcher.Core has everything but the window and builds anywhere; its
   tests: dotnet run --project Pvz2Launcher.Tests
+  The built-in mods are tools\launcher\mods in the source, built into the
+  launcher. The window's drawing (Ui\Draw.cs) is plain GDI+.

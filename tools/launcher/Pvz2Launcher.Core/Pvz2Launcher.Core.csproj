@@ -15,6 +15,11 @@
     <InternalsVisibleTo Include="Pvz2Launcher.Tests" />
   </ItemGroup>
 
+  <!-- the mods that come with the launcher (see BuiltinMods), named mods/<folder>/<file> -->
+  <ItemGroup>
+    <EmbeddedResource Include="../mods/**/*" LogicalName="mods/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- RTON both ways, shared with pvz2conv -->
   <ItemGroup>
     <Compile Include="../../pvz2conv/BinReader.cs" Link="pvz2conv/BinReader.cs" />

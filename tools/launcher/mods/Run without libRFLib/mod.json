@@ -1,0 +1,14 @@
+{
+  // Sample: an injection only for Reflourished. rfu's --no-mod-libs leaves the mod's own library
+  // (libRFLib) unloaded, which tells a Reflourished bug from an rfu one.
+  "id": "rfl-no-rflib",
+  "name": "Run without libRFLib",
+  "description": "Starts Reflourished without its own code library, for telling a Reflourished problem from an rfu one. Most of Reflourished's additions won't work.",
+  "author": "r-fluncapped (sample)",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Debug",
+  "games": ["reflourished"],
+  "default": false,
+  "rfu": ["--no-mod-libs"]
+}

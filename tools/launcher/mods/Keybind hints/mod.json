@@ -1,0 +1,14 @@
+{
+  "id": "key-hints",
+  "name": "Keybind hints",
+  "description": "Each key or controller button in a small badge on the seed packet or button it presses.",
+  "author": "r-fluncapped",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Controls",
+  "games": ["global"],
+  "default": true,
+  "rfu": ["--key-hints"],
+  // only does something with one of these on
+  "requiresAny": ["keybinds", "controller"]
+}

@@ -1,0 +1,17 @@
+{
+  // Sample localization. strings.json is a plain list of "KEY": "text"; the launcher merges it over
+  // the game's own LawnStrings for "language" (here LawnStrings-en-US), so every string it doesn't
+  // list stays as the game has it. Keys are the game's own: unpack the game's LawnStrings with
+  // pvz2conv (or "Unpack resources") to find them. Copy this folder to start a translation.
+  "id": "pirate-english",
+  "name": "Pirate English",
+  "description": "Arr! The menus, buttons and battle cries of the lawn, as a pirate would have them.",
+  "author": "r-fluncapped (sample)",
+  "version": "1.0",
+  "kind": "localization",
+  "category": "Language",
+  "games": ["global"],
+  "default": false,
+  "language": "en-US",
+  "strings": "strings.json"
+}

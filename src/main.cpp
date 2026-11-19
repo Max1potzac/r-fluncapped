@@ -24,6 +24,7 @@
 #include <fmt/ranges.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #ifdef _WIN32
 #include <io.h>
@@ -200,7 +201,18 @@ int main(int argc, char** argv) {
                 if (!in) throw std::invalid_argument("can't read " + file);
                 std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
                 std::vector<std::string> errors;
-                app.window.keybinds = rfu::platform::parse_keybinds(text, errors);
+                // Several --keybinds files add up (the game's own, then a mod's layout): a key a
+                // later file binds drops what an earlier one gave it.
+                auto binds = rfu::platform::parse_keybinds(text, errors);
+                auto& all = app.window.keybinds;
+                auto same = [](const std::string& a, const std::string& b) {
+                    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                               return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+                           });
+                };
+                for (const auto& b : binds)
+                    std::erase_if(all, [&](const rfu::platform::KeyBind& old) { return same(old.key, b.key); });
+                all.insert(all.end(), binds.begin(), binds.end());
                 for (const auto& e : errors) std::cerr << "rfu: " << file << ": " << e << "\n";
             } else if (arg == "--icon") {
                 app.window.icon = rfu::path_from_utf8(value());

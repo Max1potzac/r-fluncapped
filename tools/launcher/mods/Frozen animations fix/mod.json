@@ -1,0 +1,12 @@
+{
+  "id": "fix-animations",
+  "name": "Frozen animations fix",
+  "description": "A plant that finishes charging before the first wave or after the last zombie (Citron) goes on to its charged idle instead of freezing.",
+  "author": "r-fluncapped",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Fixes",
+  "games": ["global"],
+  "default": true,
+  "rfu": ["--fix-animations"]
+}

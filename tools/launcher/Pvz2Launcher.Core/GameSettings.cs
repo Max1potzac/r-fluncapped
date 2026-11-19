@@ -23,18 +23,26 @@ public sealed class GameSettings
     // the update server's latest.json; null: the one the game uses, for the games that have one; "": none
     public string? ObbUpdateUrl { get; set; }
 
-    // code injections
-    public bool HoverCollect { get; set; } = true;     // sun, coins and plant food picked up by moving the mouse over them
-    public bool FixAnimations { get; set; } = true;    // plants that freeze on an animation while the level isn't running
-    public bool Keybinds { get; set; }
-    public bool KeyHints { get; set; } = true;         // with keybinds: each key shown on the packet or button it presses
-    public bool Controller { get; set; } = true;       // a game controller plays the lawn, PvZ1 console style
-    public bool CustomCursor { get; set; }             // the glove for the mouse, in place of Windows' arrow
-    public Dictionary<string, string> PadBinds { get; set; } = [];  // the controller's button for an action, by PadSetup's names; others on their defaults
-    public List<string> Patches { get; set; } = [];     // file names in patches/ that are switched on
-
-    // custom content: folder names in mods/ that are switched on, in load order (the last wins)
+    // Mods (code injections, content, localizations): their keys (folder names, or patches/<file>)
+    // that are switched on, in load order (the last wins where two change the same file). See Mods.
     public List<string> Mods { get; set; } = [];
+    // the mods this game has been offered: one on by default is switched on only the first time
+    public List<string> SeenMods { get; set; } = [];
+    public Dictionary<string, string> PadBinds { get; set; } = [];  // the controller's button for an action, by PadSetup's names; others on their defaults
+
+    // Before injections were mod files, game.json had a switch for each. Read once and turned
+    // into Mods entries (Mods.Sync), then left out.
+    public bool? HoverCollect { get; set; }
+    public bool? FixAnimations { get; set; }
+    public bool? Keybinds { get; set; }
+    public bool? KeyHints { get; set; }
+    public bool? Controller { get; set; }
+    public bool? CustomCursor { get; set; }
+    public List<string>? Patches { get; set; }
+    [JsonIgnore]
+    public bool HasLegacyInjections => HoverCollect != null || FixAnimations != null || Keybinds != null || KeyHints != null ||
+                                       Controller != null || CustomCursor != null || Patches != null;
+
     public bool AskForCustomContent { get; set; } = true;
 
     // The game's CDN archive for a version, {version} standing for the APK's version name. Empty: no

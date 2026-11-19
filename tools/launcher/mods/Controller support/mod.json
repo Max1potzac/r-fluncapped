@@ -1,0 +1,15 @@
+{
+  "id": "controller",
+  "name": "Controller support",
+  "description": "Xbox, PlayStation and Switch controllers play the lawn like PvZ1's console version: a cursor box, LB/RB for seeds, A to plant.",
+  "author": "r-fluncapped",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Controls",
+  "games": ["global"],
+  "default": true,
+  "rfu": ["--controller"],
+  // the launcher adds the buttons moved in Controller settings, and games\controllers.txt
+  "hooks": ["pad-binds"],
+  "actions": [{ "label": "Controller settings", "run": "controller-settings" }]
+}

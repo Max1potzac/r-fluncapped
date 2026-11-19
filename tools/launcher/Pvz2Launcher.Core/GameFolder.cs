@@ -8,7 +8,8 @@ namespace Pvz2Launcher;
 ///   game.json       the menu's settings
 ///   keybinds.txt    keys for seed packets, the shovel, or spots of the screen (rfu --keybinds)
 ///   patches/        code patch files, each one a toggle (rfu --patch)
-///   mods/           custom content, one folder per mod (see Mods)
+///   mods/           this game's own mods, one folder each (see Mods); the shared ones are in the
+///                   launcher's mods/, beside games/
 ///   data/           the game's saves and downloads (rfu --data)
 ///   unpacked/       the OBB's resources, when asked for (pvz2conv)
 ///   .launcher/      built mods and the update check's cache
@@ -31,6 +32,10 @@ public sealed class GameFolder
     public string ControllerMappingsPath => Path.Combine(Path.GetDirectoryName(Dir) ?? Dir, "controllers.txt");
     public string PatchesDir => Path.Combine(Dir, "patches");
     public string ModsDir => Path.Combine(Dir, "mods");
+    /// The launcher's folder: the one games/ is in.
+    public string LauncherDir => Path.GetDirectoryName(Path.GetDirectoryName(Dir) ?? Dir) ?? Dir;
+    /// Mods for every game they fit, beside games/ (the built-in ones are written there).
+    public string SharedModsDir => Path.Combine(LauncherDir, "mods");
     public string DataDir => Path.Combine(Dir, "data");
     public string UnpackedDir => Path.Combine(Dir, "unpacked");
     public string WorkDir => Path.Combine(Dir, ".launcher");
@@ -45,6 +50,15 @@ public sealed class GameFolder
     /// PvZ2 China: a single library (libSrc.so) whose data is in the APK, with no OBB. rfu runs it
     /// from --lib-dir plus --apk instead of --lib-dir plus --obb.
     public bool IsChina => File.Exists(Path.Combine(LibDir, "libSrc.so")) || Info?.Package == "com.popcap.pvz2cthdlx";
+
+    /// Which kind of PvZ2 this is, as mods name it in "games": reflourished, pvz2 (EA's own
+    /// international game), china, or other (a fan-made standalone mod such as AltverZ).
+    public string Family => IsChina ? "china" : Info?.Package switch
+    {
+        "com.ea.game.pvz2_rfl" => "reflourished",
+        "com.ea.game.pvz2_row" or "com.ea.game.pvz2_na" or "com.ea.game.pvz2_googleplay" or "com.ea.game.pvz2_kr" => "pvz2",
+        _ => "other",
+    };
 
     /// Whether an APK is PvZ2 China (libSrc.so and no libPVZ2.so), by peeking its arm64 libraries.
     /// Lets the "Add game" flow skip asking for an OBB the China game doesn't have.
@@ -98,6 +112,8 @@ public sealed class GameFolder
         // settings made before the APK was read: the CDN address the game's defaults have
         // (an empty one is the person switching the check off, and stays)
         if (!first && Info != null && Settings.CdnUrl == null) Settings.CdnUrl = GameSettings.Defaults(Info.Package, Name).CdnUrl;
+        // older settings' injection switches, and mods on by default the game hasn't seen yet
+        if (Info != null && Mods.Sync(this)) Settings.Save(SettingsPath);
     }
 
     public void SaveSettings() => Settings.Save(SettingsPath);

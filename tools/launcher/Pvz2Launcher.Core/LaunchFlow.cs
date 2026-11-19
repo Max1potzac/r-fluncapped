@@ -43,10 +43,13 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         if (game.Problem() is { } problem) { ui.ShowProblem(problem); return null; }
 
         var s = game.Settings;
-        s.Mods.RemoveAll(m => !Directory.Exists(Path.Combine(game.ModsDir, m)));
+        BuiltinMods.Seed(game.SharedModsDir);
+        var known = Mods.List(game);
+        s.Mods.RemoveAll(m => !known.Any(k => string.Equals(k.Key, m, StringComparison.OrdinalIgnoreCase)));
+        Mods.Sync(game);
 
         // Custom content: the mods switched on, or a folder picked now.
-        if (!restart && s.Mods.Count == 0 && s.AskForCustomContent && ui.AskForCustomContent(game) is { } folder)
+        if (!restart && !Mods.AnyContentOn(game) && s.AskForCustomContent && ui.AskForCustomContent(game) is { } folder)
         {
             switch (Mods.Classify(folder))
             {
@@ -59,7 +62,7 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
                     return null;
                 default:
                     string name = Mods.Import(game, folder);
-                    s.Mods.Add(name);
+                    Mods.Set(game, Mods.Find(game, name)!, true);
                     ui.Log($"added custom content \"{name}\" to {game.ModsDir}");
                     break;
             }
@@ -67,7 +70,7 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         game.SaveSettings();
 
         // No custom content: check the CDN for a new version, as the game would.
-        if (!restart && s.Mods.Count == 0 && !s.Offline)
+        if (!restart && !Mods.AnyContentOn(game) && !s.Offline)
         {
             ui.Log("checking for a new version...");
             var result = await UpdateCheck.RunAsync(game, http);
@@ -90,13 +93,12 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         if (!restart && !s.Offline) await UpdateObbAsync(game);
 
         var overlays = new List<Mods.Overlay>();
-        if (s.Mods.Count > 0)
+        if (Mods.AnyContentOn(game))
         {
-            var built = await Task.Run(() => Mods.Build(game, s.Mods));
+            var built = await Task.Run(() => Mods.Build(game, Mods.Active(game).Where(m => m.HasContent).Select(m => m.Key).ToList()));
             built.Log.ForEach(ui.Log);
             overlays = built.Overlays;
         }
-        if (s.Keybinds) game.EnsureKeybindsFile();
 
         string? rfu = Tools.Find(launcherDir, "rfu");
         if (rfu == null) { ui.ShowProblem($"rfu isn't next to the launcher ({launcherDir}). Put rfu.exe and its DLLs there."); return null; }

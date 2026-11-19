@@ -1,0 +1,16 @@
+{
+  "id": "keybinds",
+  "name": "Keybinds",
+  "description": "Keys for seed packets, the shovel, plant food, fast-forward, pause, scrolling or any spot of the screen, from the game's keybinds.txt.",
+  "author": "r-fluncapped",
+  "version": "1.0",
+  "kind": "injection",
+  "category": "Controls",
+  "games": ["global"],
+  "default": false,
+  // {game} is the game's folder, {mod} this mod's folder
+  "rfu": ["--keybinds", "{game}/keybinds.txt"],
+  // the launcher writes a keybinds.txt that explains itself when the game has none
+  "hooks": ["keybinds-file"],
+  "actions": [{ "label": "Edit keybinds", "run": "edit-keybinds" }]
+}

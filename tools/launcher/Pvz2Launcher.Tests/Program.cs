@@ -32,6 +32,7 @@ var tests = new (string Name, Action Run)[]
     ("localization", LocalizationTest),
     ("keybind layout", KeybindLayoutTest),
     ("controller setup", PadSetupTest),
+    ("fonts and OBB patch", ObbPatchTest),
 };
 foreach (var (name, run) in tests)
 {
@@ -667,6 +668,206 @@ void PadSetupTest()
     PadSetup.SaveMapping(path, "0300AA,New,a:b2,platform:Windows,");
     var lines = File.ReadAllLines(path);
     Expect(lines.Length == 2 && lines.Contains("0300bb,Other,a:b0,platform:Windows,") && lines.Contains("0300AA,New,a:b2,platform:Windows,"), "a mapping replaces its GUID's line");
+}
+
+// A localization's fonts and obb/ files: put into a small RSB (as the OBB is laid out) by a
+// patch rfu reads it through, the OBB itself untouched.
+void ObbPatchTest()
+{
+    // fonts: the mod's font takes the name table of the game's
+    byte[] game = MakeFont("BrianneTod", "OLD!"), mine = MakeFont("Cyrillic Sans", "NEW!");
+    Expect(Pvz2Launcher.Fonts.Family(mine) == "Cyrillic Sans" && Pvz2Launcher.Fonts.Family(game) == "BrianneTod", "family names read");
+    byte[] grafted = Pvz2Launcher.Fonts.WithNames(mine, game);
+    Expect(Pvz2Launcher.Fonts.Family(grafted) == "BrianneTod", "the new font answers to the game's name");
+    Expect(grafted.AsSpan().IndexOf("NEW!"u8) > 0 && grafted.AsSpan().IndexOf("OLD!"u8) < 0, "its glyphs kept, the game's not taken");
+    Expect(SfntSum(grafted) == 0xB1B0AFBA, "head.checkSumAdjustment makes the font's sum right");
+    try { Pvz2Launcher.Fonts.WithNames("ttcf\0\0\0\0\0\0\0\0"u8.ToArray(), game); Expect(false, "a collection is refused"); }
+    catch (FormatException) { }
+
+    var g = MakeGame("FontGame");
+    byte[] fontsRton = Pvz2Conv.RtonWriter.FromJson("""{"version":1,"objects":[{"objclass":"PrimeText_PotentialTypeface","objdata":{"TypeName":"Body","Font":"BrianneTod"}}]}"""u8);
+    var groups = new (string Name, (string Path, byte[] Data)[] Files, bool Packed)[]
+    {
+        ("LoadingFonts", [("PRIMEFONTS\\BRIANNETOD.TTF", game), ("PRIMEFONTS\\HOUSE OF TERROR.TTF", MakeFont("House Of Terror", "HOT!"))], true),
+        ("Packages", [("PACKAGES\\FONTS.RTON", fontsRton), ("PACKAGES\\OTHER.RTON", "other"u8.ToArray())], false),
+    };
+    File.WriteAllBytes(g.Obb!, MakeRsb(groups));
+    byte[] before = File.ReadAllBytes(g.Obb!);
+    var index = ObbPatch.Read(g.Obb!);
+    Expect(index.Files.Count == 4 && index.Files["PACKAGES\\FONTS.RTON"] == 1, $"the RSB's file list: {string.Join(", ", index.Files.Keys)}");
+
+    string dir = Path.Combine(g.ModsDir, "Russian");
+    Directory.CreateDirectory(Path.Combine(dir, "fonts"));
+    Directory.CreateDirectory(Path.Combine(dir, "obb", "PACKAGES"));
+    File.WriteAllText(Path.Combine(dir, "mod.json"), """{"name":"Russian","language":"ru","fonts":{"House Of Terror":"fonts/Terror-Cyr.otf"}}""");
+    File.WriteAllText(Path.Combine(dir, "strings.json"), """{"PLAY":"Играть"}""");
+    File.WriteAllBytes(Path.Combine(dir, "fonts", "BrianneTod.ttf"), mine);
+    File.WriteAllBytes(Path.Combine(dir, "fonts", "NotAGameFont.ttf"), mine);
+    File.WriteAllBytes(Path.Combine(dir, "fonts", "Terror-Cyr.otf"), MakeFont("Terror Cyr", "HOC!"));
+    File.WriteAllText(Path.Combine(dir, "obb", "PACKAGES", "fonts.json"),
+        """{"version":1,"objects":[{"objclass":"PrimeText_PotentialTypeface","objdata":{"TypeName":"Body","Font":"BrianneTod","Size":30}}]}""");
+    var mod = Mods.List(g).Single(m => m.Key == "Russian");
+    Expect(mod.Kind == Mods.ModKind.Localization && mod.Problem == null && mod.Fonts.Count == 3 && !mod.Fonts.ContainsKey("Terror-Cyr.ttf"), $"fonts found: {string.Join(", ", mod.Fonts.Keys)} {mod.Problem}");
+
+    var r = Mods.Build(g, ["Russian"]);
+    Expect(r.ObbPatch != null && File.Exists(r.ObbPatch), $"a patch made: {string.Join(" | ", r.Log)}");
+    Expect(r.Log.Any(l => l.Contains("no font NOTAGAMEFONT.TTF") && l.Contains("BRIANNETOD.TTF")), "a font the game hasn't is named, with the game's fonts");
+    Expect(File.ReadAllBytes(g.Obb!).SequenceEqual(before), "the OBB isn't changed");
+    var args = RfuCommand.Build(g, r.Overlays, r.ObbPatch);
+    int pi = args.IndexOf("--obb-patch");
+    Expect(pi > args.IndexOf("--obb") && args[pi + 1] == r.ObbPatch, $"the patch goes to rfu: {string.Join(" ", args)}");
+
+    // the OBB as rfu reads it
+    string patched = Path.Combine(root, "patched.obb");
+    ObbPatch.Apply(g.Obb!, File.ReadAllBytes(r.ObbPatch!), patched);
+    var after = ObbPatch.Read(patched);
+    var read = ObbPatch.ReadFiles(patched, after, after.Files.Keys);
+    Expect(read.Count == 4, $"every file still there: {string.Join(", ", read.Keys)}");
+    if (read.Count == 4)
+    {
+        Expect(Pvz2Launcher.Fonts.Family(read["PRIMEFONTS\\BRIANNETOD.TTF"]) == "BrianneTod" && read["PRIMEFONTS\\BRIANNETOD.TTF"].AsSpan().IndexOf("NEW!"u8) > 0, "the font replaced, under the game's name");
+        Expect(Pvz2Launcher.Fonts.Family(read["PRIMEFONTS\\HOUSE OF TERROR.TTF"]) == "House Of Terror" && read["PRIMEFONTS\\HOUSE OF TERROR.TTF"].AsSpan().IndexOf("HOC!"u8) > 0, "mod.json's font, by a name with spaces");
+        Expect(ToJson(read["PACKAGES\\FONTS.RTON"]).Contains("\"Size\":30"), "obb/ JSON goes in as the RTON the OBB has");
+        Expect(read["PACKAGES\\OTHER.RTON"].SequenceEqual("other"u8.ToArray()), "the group's other files as they were");
+    }
+    // each group's memory pool holds its header and data
+    for (int i = 0; i < 2; i++)
+    {
+        int ge = (int)(after.GroupOff + i * after.GroupEntry);
+        uint pool = BitConverter.ToUInt32(after.Header, ge + 136), hsize = BitConverter.ToUInt32(after.Header, ge + 144), p0 = BitConverter.ToUInt32(after.Header, ge + 160);
+        Expect(BitConverter.ToUInt32(after.Header, (int)(after.PoolOff + pool * after.PoolEntry) + 128) >= hsize + p0, $"group {i}'s pool is big enough");
+    }
+
+    var again = Mods.Build(g, ["Russian"]);
+    Expect(again.ObbPatch == r.ObbPatch && again.Log.Any(l => l.Contains("OBB patch") && l.Contains("unchanged")), "not made again when nothing changed");
+    Expect(Mods.Build(g, []).ObbPatch == null, "no mods, no patch");
+    File.WriteAllText(g.Obb!, "not an RSB");
+    var broken = Mods.Build(g, ["Russian"]);
+    Expect(broken.ObbPatch == null && broken.Log.Any(l => l.StartsWith("FAIL the OBB patch")), "an OBB that can't be read: no patch, a line in the log");
+    File.WriteAllBytes(g.Obb!, before);
+    var china = MakeChinaGame("FontChina");
+    Expect(!RfuCommand.Build(china, [], r.ObbPatch).Contains("--obb-patch"), "no OBB patch for China");
+}
+
+// A TrueType font with a name table (family name ID 1, Windows Unicode) and a 'glyf' that is only a marker.
+static byte[] MakeFont(string family, string marker)
+{
+    byte[] str = Encoding.BigEndianUnicode.GetBytes(family);
+    var name = new byte[18 + str.Length];
+    void Be16(byte[] b, int at, int v) { b[at] = (byte)(v >> 8); b[at + 1] = (byte)v; }
+    Be16(name, 2, 1); Be16(name, 4, 18);
+    Be16(name, 6, 3); Be16(name, 8, 1); Be16(name, 10, 0x409); Be16(name, 12, 1); Be16(name, 14, str.Length);
+    str.CopyTo(name, 18);
+    var head = new byte[54];
+    Be16(head, 0, 1); head[12] = 0x5F; head[13] = 0x0F; head[14] = 0x3C; head[15] = 0xF5;
+    var tables = new (string Tag, byte[] Data)[] { ("glyf", Encoding.ASCII.GetBytes(marker)), ("head", head), ("name", name) };
+    var font = new List<byte> { 0, 1, 0, 0, 0, (byte)tables.Length, 0, 32, 0, 1, 0, 16 };
+    int at = 12 + 16 * tables.Length;
+    var body = new List<byte>();
+    foreach (var (tag, data) in tables)
+    {
+        font.AddRange(Encoding.ASCII.GetBytes(tag));
+        font.AddRange(new byte[4]);
+        font.AddRange([(byte)((at + body.Count) >> 24), (byte)((at + body.Count) >> 16), (byte)((at + body.Count) >> 8), (byte)(at + body.Count)]);
+        font.AddRange([(byte)(data.Length >> 24), (byte)(data.Length >> 16), (byte)(data.Length >> 8), (byte)data.Length]);
+        body.AddRange(data);
+        while (body.Count % 4 != 0) body.Add(0);
+    }
+    font.AddRange(body);
+    return font.ToArray();
+}
+
+static uint SfntSum(byte[] b)
+{
+    uint sum = 0;
+    for (int i = 0; i < b.Length; i += 4)
+        sum += (uint)((b[i] << 24) | (i + 1 < b.Length ? b[i + 1] << 16 : 0) | (i + 2 < b.Length ? b[i + 2] << 8 : 0) | (i + 3 < b.Length ? b[i + 3] : 0));
+    return sum;
+}
+
+// The RSB/RSG name tables: a depth-first character trie, 4 bytes a character with a pointer to
+// the alternative, a zero character ending a name, then its payload.
+static byte[] TrieOf(IEnumerable<(string Name, byte[] Payload)> names)
+{
+    var output = new List<byte>();
+    void Node(List<(byte[] Tail, byte[] Payload)> items)
+    {
+        var branches = items.GroupBy(i => i.Tail.Length == 0 ? (byte)0 : i.Tail[0]).OrderBy(b => b.Key).ToList();
+        for (int k = 0; k < branches.Count; k++)
+        {
+            int at = output.Count;
+            output.AddRange([branches[k].Key, 0, 0, 0]);
+            if (branches[k].Key == 0) output.AddRange(branches[k].Single().Payload);
+            else Node(branches[k].Select(i => (i.Tail[1..], i.Payload)).ToList());
+            if (k + 1 < branches.Count)
+            {
+                int alt = output.Count / 4;
+                output[at + 1] = (byte)alt; output[at + 2] = (byte)(alt >> 8); output[at + 3] = (byte)(alt >> 16);
+            }
+        }
+    }
+    Node(names.Select(n => (Encoding.ASCII.GetBytes(n.Name), n.Payload)).ToList());
+    return output.ToArray();
+}
+
+// An RSB (version 4) of groups of ordinary files, part 0 zlib-packed or stored, each group with a pool.
+static byte[] MakeRsb((string Name, (string Path, byte[] Data)[] Files, bool Packed)[] groups)
+{
+    const int HeaderSize = 0x1000, GroupEntry = 204, PoolEntry = 152;
+    var rsb = new MemoryStream();
+    var header = new byte[HeaderSize];
+    void W(byte[] b, int at, long v) => BitConverter.GetBytes((uint)v).CopyTo(b, at);
+    W(header, 0, 0x72736231); W(header, 4, 4); W(header, 12, HeaderSize);
+    var fileList = TrieOf(groups.SelectMany((g, i) => g.Files.Select(f => (f.Path, BitConverter.GetBytes(i)))));
+    fileList.CopyTo(header, 0x100);
+    W(header, 16, fileList.Length); W(header, 20, 0x100);
+    int groupOff = 0x100 + ((fileList.Length + 15) & ~15), poolOff = groupOff + groups.Length * GroupEntry;
+    W(header, 40, groups.Length); W(header, 44, groupOff); W(header, 48, GroupEntry);
+    W(header, 72, groups.Length); W(header, 76, poolOff); W(header, 80, PoolEntry);
+    rsb.Write(header);
+    for (int i = 0; i < groups.Length; i++)
+    {
+        var part0 = new MemoryStream();
+        var names = new List<(string, byte[])>();
+        foreach (var (path, data) in groups[i].Files)
+        {
+            var payload = new byte[12];
+            W(payload, 4, part0.Length); W(payload, 8, data.Length);
+            names.Add((path, payload));
+            part0.Write(data);
+            part0.SetLength((part0.Length + 0xFFF) & ~0xFFF); part0.Position = part0.Length;
+        }
+        var map = TrieOf(names);
+        var raw = part0.ToArray();
+        byte[] stored = raw;
+        if (groups[i].Packed)
+        {
+            var z = new MemoryStream();
+            using (var zs = new System.IO.Compression.ZLibStream(z, System.IO.Compression.CompressionLevel.Optimal, true)) zs.Write(raw);
+            stored = z.ToArray();
+        }
+        int hsize = (0x60 + map.Length + 0xFFF) & ~0xFFF;
+        var ph = new byte[hsize];
+        W(ph, 0, 0x72736770); W(ph, 4, 4);
+        W(ph, 0x10, groups[i].Packed ? 2 : 0); W(ph, 0x14, hsize);
+        W(ph, 0x18, hsize); W(ph, 0x1C, stored.Length); W(ph, 0x20, raw.Length);
+        W(ph, 0x28, hsize + stored.Length);
+        W(ph, 0x48, map.Length); W(ph, 0x4C, 0x60);
+        map.CopyTo(ph, 0x60);
+        long at = rsb.Length;
+        rsb.Write(ph); rsb.Write(stored);
+        int ge = groupOff + i * GroupEntry;
+        Encoding.ASCII.GetBytes(groups[i].Name).CopyTo(header, ge);
+        W(header, ge + 128, at); W(header, ge + 132, hsize + stored.Length); W(header, ge + 136, i);
+        Array.Copy(ph, 0x10, header, ge + 140, 0x24);
+        W(header, ge + 160, raw.Length);
+        Encoding.ASCII.GetBytes(groups[i].Name + "_AutoPool").CopyTo(header, poolOff + i * PoolEntry);
+        W(header, poolOff + i * PoolEntry + 128, hsize + raw.Length);
+        rsb.SetLength((rsb.Length + 0xFFF) & ~0xFFF); rsb.Position = rsb.Length;
+    }
+    rsb.Position = 0;
+    rsb.Write(header);
+    return rsb.ToArray();
 }
 
 /// Serves fixed bytes by URL, with Range requests.

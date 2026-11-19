@@ -29,6 +29,7 @@ enum class Game { Pvz2, Pvz2c };
 struct AppOptions {
     Game game = Game::Pvz2;
     std::filesystem::path obb;       // main.<version>.<package>.obb
+    std::filesystem::path obb_patch;  // mods' files put into the OBB as the game reads it (core/file_patch.h)
     std::filesystem::path apk;       // the APK, for games that read their data out of it (PvZ2 China)
     std::filesystem::path data_dir;  // where the game's internal and external storage live
     int version_code = 675;

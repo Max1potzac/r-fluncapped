@@ -1,6 +1,9 @@
 #pragma once
 
+#include "core/file_patch.h"
+
 #include <filesystem>
+#include <memory>
 #include <functional>
 #include <optional>
 #include <string>
@@ -44,6 +47,15 @@ public:
     // "/storage/emulated/0" is mounted): they exist for the guest without a host directory.
     bool is_mount_parent(const std::string& guest_path) const;
 
+    // Reads of host file `host` (wherever the guest opens it) see it patched: the OBB with a
+    // mod's files in it (--obb-patch).
+    void patch(std::filesystem::path host, std::shared_ptr<const FilePatch> p) { patches_.emplace_back(std::move(host), std::move(p)); }
+    std::shared_ptr<const FilePatch> patch_of(const std::filesystem::path& host) const {
+        for (const auto& [h, p] : patches_)
+            if (h == host) return p;
+        return nullptr;
+    }
+
     const std::string& cwd() const { return cwd_; }
     void set_cwd(std::string path) { cwd_ = absolute(path); }
 
@@ -55,6 +67,7 @@ private:
     std::vector<Mount> mounts_;  // longest guest prefix first
     std::vector<Mount> overlays_;  // in the order added: the last one wins
     std::vector<std::pair<std::string, Generator>> virtual_;
+    std::vector<std::pair<std::filesystem::path, std::shared_ptr<const FilePatch>>> patches_;
     std::string cwd_ = "/";
 };
 

@@ -20,6 +20,7 @@ add_library(rfu_core STATIC
     src/core/rtti.cpp
     src/core/trace.cpp
     src/core/vfs.cpp
+    src/core/file_patch.cpp
     src/cpu/cpu.cpp
     src/jni/jni.cpp
     src/shims/registry.cpp

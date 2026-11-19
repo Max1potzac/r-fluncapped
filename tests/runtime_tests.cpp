@@ -3,6 +3,7 @@
 //   rfu_tests <dir containing libtest.so>
 
 #include <cmath>
+#include "core/file_patch.h"
 #include "core/hooks.h"
 #include "core/log.h"
 #include "core/patches.h"
@@ -229,6 +230,56 @@ void test_map_buttons() {
     error.clear();
     rfu::parse_map_buttons("almanac=1x:2", error);
     EXPECT(!error.empty());
+}
+
+void test_file_patch() {
+    // "RFUPATCH", version 1, two writes, over a 10-byte file made 16 long
+    auto le = [](std::string& s, std::uint64_t v, int n) {
+        for (int i = 0; i < n; ++i) s += static_cast<char>((v >> (8 * i)) & 0xFF);
+    };
+    std::string data = "RFUPATCH";
+    le(data, 1, 4);
+    le(data, 2, 4);
+    le(data, 10, 8);
+    le(data, 16, 8);
+    le(data, 12, 8);  // past the end, out of order
+    le(data, 4, 8);
+    data += "WXYZ";
+    le(data, 2, 8);
+    le(data, 3, 8);
+    data += "abc";
+    std::string error;
+    auto p = rfu::parse_file_patch(data, error);
+    EXPECT(p && error.empty() && p->writes.size() == 2 && p->writes[0].offset == 2);
+    if (!p) return;
+    const std::string base = "0123456789";
+    auto read_base = [&](std::uint64_t at, void* out, std::size_t n) {
+        std::memcpy(out, base.data() + at, n);
+        return n;
+    };
+    char buf[32] = {};
+    EXPECT(p->read(0, buf, sizeof buf, read_base) == 16);
+    EXPECT(std::string(buf, 16) == std::string("01abc56789\0\0WXYZ", 16));
+    EXPECT(p->read(3, buf, 2, read_base) == 2 && std::string(buf, 2) == "bc");
+    EXPECT(p->read(9, buf, 4, read_base) == 4 && std::string(buf, 4) == std::string("9\0\0W", 4));
+    EXPECT(p->read(16, buf, 4, read_base) == 0);
+    EXPECT(!rfu::parse_file_patch("RFUPATCX", error) && !error.empty());
+    error.clear();
+    EXPECT(!rfu::parse_file_patch(data.substr(0, data.size() - 1), error) && !error.empty());
+    // overlapping writes are refused
+    std::string bad = "RFUPATCH";
+    le(bad, 1, 4);
+    le(bad, 2, 4);
+    le(bad, 4, 8);
+    le(bad, 4, 8);
+    le(bad, 0, 8);
+    le(bad, 3, 8);
+    bad += "abc";
+    le(bad, 2, 8);
+    le(bad, 1, 8);
+    bad += "x";
+    error.clear();
+    EXPECT(!rfu::parse_file_patch(bad, error) && !error.empty());
 }
 
 void test_patches() {

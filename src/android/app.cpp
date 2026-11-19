@@ -1289,6 +1289,20 @@ void mount_storage(Runtime& rt, const AppOptions& options) {
         // would have put it.
         vfs.mount(paths.obb_file, options.obb);
         vfs.mount("/sdcard/Android/obb/" + package + "/" + fs::path(paths.obb_file).filename().string(), options.obb);
+        if (!options.obb_patch.empty()) {
+            std::string error;
+            std::error_code ec;
+            auto patch = load_file_patch(options.obb_patch, error);
+            auto size = fs::file_size(options.obb, ec);
+            if (!patch) log::warn("OBB patch {}: {}; the OBB is read as it is", path_to_utf8(options.obb_patch), error);
+            else if (ec || patch->base_size != size)
+                log::warn("OBB patch {} was made for another OBB ({} bytes, this one has {}); the OBB is read as it is",
+                          path_to_utf8(options.obb_patch), patch->base_size, size);
+            else {
+                vfs.patch(options.obb, patch);
+                log::info("OBB patch: {} part(s) of the OBB replaced by mods' files", patch->writes.size());
+            }
+        }
     }
 }
 

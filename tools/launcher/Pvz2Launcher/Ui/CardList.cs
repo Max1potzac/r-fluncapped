@@ -237,8 +237,7 @@ sealed class SearchBox : Control
     public SearchBox(string placeholder)
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                 ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
-        BackColor = Color.Transparent;
+                 ControlStyles.ResizeRedraw, true);
         Height = 32;
         _box.PlaceholderText = placeholder;
         _box.Font = Theme.Text(10f);
@@ -261,6 +260,7 @@ sealed class SearchBox : Control
     }
 
     protected override void OnClick(EventArgs e) { _box.Focus(); base.OnClick(e); }
+    protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(this, e.Graphics);
 
     protected override void OnLayout(LayoutEventArgs e)
     {

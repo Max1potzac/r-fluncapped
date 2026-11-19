@@ -276,9 +276,11 @@ public static class Mods
 
     /// The mods that take part in a run: switched on, for this game, the right side of "when", and
     /// with one of their "requiresAny" on too. In load order.
-    public static List<Mod> Active(GameFolder game)
+    public static List<Mod> Active(GameFolder game) => Active(game, List(game));
+
+    /// Active, from a list of the game's mods already read (List).
+    public static List<Mod> Active(GameFolder game, IReadOnlyList<Mod> all)
     {
-        var all = List(game);
         var s = game.Settings;
         var on = s.Mods.Select(k => all.FirstOrDefault(m => string.Equals(m.Key, k, StringComparison.OrdinalIgnoreCase)))
             .OfType<Mod>()

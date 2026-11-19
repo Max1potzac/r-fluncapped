@@ -25,8 +25,7 @@ sealed class GlossButton : Control
         if (color != null) Color = color;
         FontSize = fontSize;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                 ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
-        BackColor = System.Drawing.Color.Transparent;
+                 ControlStyles.ResizeRedraw, true);
         Cursor = Cursors.Hand;
         Height = 38;
         AutoSizeToText();
@@ -45,6 +44,8 @@ sealed class GlossButton : Control
     protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
     protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
 
+    protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(this, e.Graphics);
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
@@ -59,7 +60,7 @@ sealed class GlossButton : Control
 
 /// A panel in a wooden frame, with an optional title plaque. Child controls go inside the frame
 /// (its Padding is set to fit).
-class WoodPanel : Panel
+class WoodPanel : Panel, IBackdropSource
 {
     string? _title;
 
@@ -67,8 +68,7 @@ class WoodPanel : Panel
     {
         _title = title;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                 ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
-        BackColor = Color.Transparent;
+                 ControlStyles.ResizeRedraw, true);
         Padding = title != null ? new Padding(16, 46, 16, 18) : new Padding(16, 14, 16, 18);
     }
 
@@ -80,7 +80,18 @@ class WoodPanel : Panel
     Bitmap? _frame;
     (Size, string, string?)? _frameFor;
 
-    protected override void OnPaint(PaintEventArgs e)
+    protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(this, e.Graphics);
+
+    protected override void OnPaint(PaintEventArgs e) => PaintFrame(e.Graphics);
+
+    /// What shows through the controls inside it: what's behind the panel, then its frame.
+    public void PaintBackdrop(Graphics g)
+    {
+        Backdrop.Paint(this, g);
+        PaintFrame(g);
+    }
+
+    void PaintFrame(Graphics target)
     {
         var key = (Size, Theme.Current.Name, _title);
         if (_frame == null || _frameFor != key)
@@ -93,7 +104,7 @@ class WoodPanel : Panel
             Draw.WoodFrame(g, new RectangleF(0, 0, Width, Height), Theme.Current, _title, f);
             _frameFor = key;
         }
-        e.Graphics.DrawImageUnscaled(_frame, 0, 0);
+        target.DrawImageUnscaled(_frame, 0, 0);
     }
 
     protected override void Dispose(bool disposing)
@@ -113,8 +124,7 @@ sealed class SwitchRow : Control
     {
         Text = text;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                 ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
-        BackColor = Color.Transparent;
+                 ControlStyles.ResizeRedraw, true);
         Height = 32;
         Width = 420;
         Cursor = Cursors.Hand;
@@ -131,6 +141,8 @@ sealed class SwitchRow : Control
     protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+
+    protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(this, e.Graphics);
 
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -156,9 +168,10 @@ sealed class ThemedLabel : Label
         Chunky = chunky;
         Font = chunky ? Theme.Title(size) : Theme.Text(size);
         AutoSize = true;
-        BackColor = Color.Transparent;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         ApplyTheme();
     }
+    protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(this, e.Graphics);
     public void ApplyTheme() => ForeColor = Muted ? Theme.Current.TextMuted : Theme.Current.Text;
 }
 
@@ -170,8 +183,7 @@ sealed class TitleLabel : Control
         Text = text;
         Size_ = size;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                 ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
-        BackColor = Color.Transparent;
+                 ControlStyles.ResizeRedraw, true);
         Height = (int)(size * 2.2f);
     }
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -179,6 +191,8 @@ sealed class TitleLabel : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<Palette, Color>? Fill { get; set; }
     protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
+    protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(this, e.Graphics);
+
     protected override void OnPaint(PaintEventArgs e)
     {
         Draw.Smooth(e.Graphics);

@@ -7,7 +7,7 @@ namespace Pvz2Launcher;
 /// in a banner with its Play button, and tabs for its mods (code injections, content and
 /// localizations, filtered by category and by the games they're for), display, game and the log.
 /// Light (a day on the lawn) or Dark (the night levels), or Windows' own choice.
-sealed class MainForm : Form, ILaunchUi
+sealed class MainForm : BackdropForm, ILaunchUi
 {
     readonly string _launcherDir;
     readonly string _gamesDir;
@@ -46,16 +46,16 @@ sealed class MainForm : Form, ILaunchUi
     // tabs
     readonly GlossButton[] _tabs = [new("Mods", p => p.Green), new("Display", p => p.Green), new("Game", p => p.Green), new("Log", p => p.Green)];
     readonly WoodPanel _body = new();
-    readonly Panel[] _pages = [new TransparentPanel(), new TransparentPanel(), new TransparentPanel(), new TransparentPanel()];
+    readonly Panel[] _pages = [new BackdropPanel(), new BackdropPanel(), new BackdropPanel(), new BackdropPanel()];
 
     // mods page
-    readonly FlowLayoutPanel _chips = new() { BackColor = Color.Transparent, WrapContents = false, AutoSize = false, Height = 36 };
+    readonly BackdropFlow _chips = new() { WrapContents = false, AutoSize = false, Height = 36 };
     readonly SearchBox _search = new("Search mods") { Width = 170 };
     readonly SwitchRow _otherGames = new("All games") { Width = 136 };
     readonly CardList _modList = new(Draw.ModCardHeight + 6);
     readonly ThemedLabel _modDetail = new("", 9f, muted: true) { AutoSize = false };
-    readonly FlowLayoutPanel _modActions = new() { BackColor = Color.Transparent, WrapContents = false, AutoSize = false, Height = 42, FlowDirection = FlowDirection.RightToLeft };
-    readonly FlowLayoutPanel _modButtons = new() { BackColor = Color.Transparent, WrapContents = false, AutoSize = false, Height = 42 };
+    readonly BackdropFlow _modActions = new() { WrapContents = false, AutoSize = false, Height = 42, FlowDirection = FlowDirection.RightToLeft };
+    readonly BackdropFlow _modButtons = new() { WrapContents = false, AutoSize = false, Height = 42 };
     string _category = "All";
     readonly Dictionary<string, Mods.StringCoverage?> _coverage = new(StringComparer.OrdinalIgnoreCase);
     // the game's mods as last read from disk, and the keys of the ones that take part in a run:
@@ -236,10 +236,10 @@ sealed class MainForm : Form, ILaunchUi
 
     static FlowLayoutPanel Stack(Panel page)
     {
-        var stack = new FlowLayoutPanel
+        var stack = new BackdropFlow
         {
             Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true,
-            BackColor = Color.Transparent, Padding = new Padding(8, 4, 8, 4),
+            Padding = new Padding(8, 4, 8, 4),
         };
         page.Controls.Add(stack);
         return stack;
@@ -249,7 +249,7 @@ sealed class MainForm : Form, ILaunchUi
 
     static FlowLayoutPanel Field(string label, Control c)
     {
-        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2) };
+        var row = new BackdropFlow { AutoSize = true, WrapContents = false, Margin = new Padding(0, 2, 0, 2) };
         row.Controls.Add(new ThemedLabel(label, 10f) { AutoSize = false, Width = 110, Height = 28, TextAlign = ContentAlignment.MiddleLeft });
         row.Controls.Add(c);
         return row;
@@ -257,7 +257,7 @@ sealed class MainForm : Form, ILaunchUi
 
     static FlowLayoutPanel Buttons(params (string Text, Action OnClick)[] buttons)
     {
-        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = true, BackColor = Color.Transparent, MaximumSize = new Size(700, 0) };
+        var row = new BackdropFlow { AutoSize = true, WrapContents = true, MaximumSize = new Size(700, 0) };
         foreach (var (text, onClick) in buttons)
         {
             var b = new GlossButton(text, p => p.Blue, 9.5f) { Height = 38, Margin = new Padding(0, 2, 8, 6) };
@@ -321,11 +321,17 @@ sealed class MainForm : Form, ILaunchUi
 
     void ShowPage(int n)
     {
-        for (int i = 0; i < _pages.Length; i++)
+        void Swap()
         {
-            _pages[i].Visible = i == n;
-            _tabs[i].Checked = i == n;
+            for (int i = 0; i < _pages.Length; i++)
+            {
+                _pages[i].Visible = i == n;
+                _tabs[i].Checked = i == n;
+            }
         }
+        // the page appears whole, not control by control
+        if (_body.IsHandleCreated) Batch(_body, Swap);
+        else Swap();
     }
 
     // --- theme ----------------------------------------------------------------------------------
@@ -353,37 +359,6 @@ sealed class MainForm : Form, ILaunchUi
         _search.ApplyTheme();
         LayoutWindow();
         Invalidate(true);
-    }
-
-    // The sky and lawn, drawn once per size and theme.
-    Bitmap? _backdrop;
-    (Size, string)? _backdropFor;
-
-    protected override void OnPaintBackground(PaintEventArgs e)
-    {
-        var key = (ClientSize, Theme.Current.Name);
-        if (_backdrop == null || _backdropFor != key)
-        {
-            _backdrop?.Dispose();
-            _backdrop = new Bitmap(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
-            using var g = Graphics.FromImage(_backdrop);
-            Draw.Smooth(g);
-            Draw.Backdrop(g, ClientRectangle, Theme.Current, 74);
-            _backdropFor = key;
-        }
-        e.Graphics.DrawImageUnscaled(_backdrop, 0, 0);
-    }
-
-    // The whole window painted off-screen at once (WS_EX_COMPOSITED), so switching tabs and the
-    // see-through controls over the wooden frames don't flicker.
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            var cp = base.CreateParams;
-            cp.ExStyle |= 0x02000000;
-            return cp;
-        }
     }
 
     // --- games ----------------------------------------------------------------------------------
@@ -1077,10 +1052,10 @@ sealed class MainForm : Form, ILaunchUi
     {
         public StatusBar()
         {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
-            BackColor = Color.Transparent;
+            SetStyle(Backdrop.Styles, true);
         }
         protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
+        protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(this, e.Graphics);
         protected override void OnPaint(PaintEventArgs e)
         {
             using (var b = new SolidBrush(Color.FromArgb(150, 0, 0, 0))) e.Graphics.FillRectangle(b, ClientRectangle);
@@ -1088,15 +1063,5 @@ sealed class MainForm : Form, ILaunchUi
             TextRenderer.DrawText(e.Graphics, Text, f, new Rectangle(12, 0, Width - 24, Height), Color.White,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
         }
-    }
-}
-
-/// A panel that shows what's behind it (the wooden frame it sits in).
-sealed class TransparentPanel : Panel
-{
-    public TransparentPanel()
-    {
-        SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
-        BackColor = Color.Transparent;
     }
 }

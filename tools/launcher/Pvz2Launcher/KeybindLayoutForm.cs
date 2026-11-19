@@ -12,7 +12,7 @@ namespace Pvz2Launcher;
 ///   drag a marker           move it
 ///   right-click a marker    remove it
 ///   double-click a marker   change its key
-sealed class KeybindLayoutForm : Form
+sealed class KeybindLayoutForm : BackdropForm
 {
     readonly GameFolder _game;
     readonly Mods.Mod? _layoutMod;
@@ -54,7 +54,7 @@ sealed class KeybindLayoutForm : Form
         Size = new Size(1100, 760);
         MinimumSize = new Size(760, 520);
         StartPosition = FormStartPosition.CenterParent;
-        DoubleBuffered = true;
+        LawnHeight = 40;
         BackColor = Theme.Current.SkyBottom;
         Font = Theme.Text(9.5f);
 
@@ -62,7 +62,7 @@ sealed class KeybindLayoutForm : Form
         var frame = new WoodPanel("Place your keys") { Dock = DockStyle.Fill, Padding = new Padding(22, 50, 22, 22) };
         frame.Controls.Add(_canvas);
 
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, BackColor = Color.Transparent, Padding = new Padding(12, 8, 12, 4), WrapContents = false };
+        var bar = new BackdropFlow { Dock = DockStyle.Bottom, Height = 56, Padding = new Padding(12, 8, 12, 4), WrapContents = false };
         GlossButton B(string text, Func<Palette, Gloss> c, Action run)
         {
             var b = new GlossButton(text, c, 9.5f) { Height = 40, Margin = new Padding(0, 0, 8, 0) };
@@ -90,12 +90,6 @@ sealed class KeybindLayoutForm : Form
         {
             if (_changed && !SavedKeybinds && SavedMod == null && !Ask("Close without saving the layout?")) e.Cancel = true;
         };
-    }
-
-    protected override void OnPaintBackground(PaintEventArgs e)
-    {
-        Draw.Smooth(e.Graphics);
-        Draw.Backdrop(e.Graphics, ClientRectangle, Theme.Current, 40);
     }
 
     void UpdateHint() => _hint.Text = _shot == null

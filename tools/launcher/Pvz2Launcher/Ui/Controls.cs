@@ -75,11 +75,31 @@ class WoodPanel : Panel
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string? Title { get => _title; set { _title = value; Invalidate(); } }
 
+    // the frame, drawn once per size, theme and title: every see-through control inside it
+    // repaints this behind itself
+    Bitmap? _frame;
+    (Size, string, string?)? _frameFor;
+
     protected override void OnPaint(PaintEventArgs e)
     {
-        Draw.Smooth(e.Graphics);
-        using var f = Theme.Title(11);
-        Draw.WoodFrame(e.Graphics, new RectangleF(0, 0, Width, Height), Theme.Current, _title, f);
+        var key = (Size, Theme.Current.Name, _title);
+        if (_frame == null || _frameFor != key)
+        {
+            _frame?.Dispose();
+            _frame = new Bitmap(Math.Max(1, Width), Math.Max(1, Height), System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using var g = Graphics.FromImage(_frame);
+            Draw.Smooth(g);
+            using var f = Theme.Title(11);
+            Draw.WoodFrame(g, new RectangleF(0, 0, Width, Height), Theme.Current, _title, f);
+            _frameFor = key;
+        }
+        e.Graphics.DrawImageUnscaled(_frame, 0, 0);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _frame?.Dispose();
+        base.Dispose(disposing);
     }
 }
 

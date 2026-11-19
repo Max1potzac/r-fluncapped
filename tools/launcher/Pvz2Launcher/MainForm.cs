@@ -50,7 +50,7 @@ sealed class MainForm : Form, ILaunchUi
 
     // mods page
     readonly FlowLayoutPanel _chips = new() { BackColor = Color.Transparent, WrapContents = false, AutoSize = false, Height = 36 };
-    readonly TextBox _search = new() { PlaceholderText = "Search mods", Width = 150 };
+    readonly SearchBox _search = new("Search mods") { Width = 170 };
     readonly SwitchRow _otherGames = new("All games") { Width = 136 };
     readonly CardList _modList = new(Draw.ModCardHeight + 6);
     readonly ThemedLabel _modDetail = new("", 9f, muted: true) { AutoSize = false };
@@ -58,6 +58,11 @@ sealed class MainForm : Form, ILaunchUi
     readonly FlowLayoutPanel _modButtons = new() { BackColor = Color.Transparent, WrapContents = false, AutoSize = false, Height = 42 };
     string _category = "All";
     readonly Dictionary<string, Mods.StringCoverage?> _coverage = new(StringComparer.OrdinalIgnoreCase);
+    // the game's mods as last read from disk, and the keys of the ones that take part in a run:
+    // read when something changes, never while drawing
+    List<Mods.Mod> _allMods = [];
+    HashSet<string> _activeKeys = new(StringComparer.OrdinalIgnoreCase);
+    (string Key, bool On)? _detailFor;
 
     // display page
     readonly ComboBox _assets = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
@@ -168,7 +173,7 @@ sealed class MainForm : Form, ILaunchUi
         _fullscreen.CheckedChanged += (_, _) => Change(s => s.Fullscreen = _fullscreen.Checked);
         _vsync.CheckedChanged += (_, _) => Change(s => s.VSync = _vsync.Checked);
         _angle.CheckedChanged += (_, _) => Change(s => s.Angle = _angle.Checked);
-        _offline.CheckedChanged += (_, _) => { Change(s => s.Offline = _offline.Checked); _modList.Invalidate(); };
+        _offline.CheckedChanged += (_, _) => { Change(s => s.Offline = _offline.Checked); if (!_loading) { RecomputeActive(); _modList.Invalidate(); } };
         _obbUpdates.CheckedChanged += (_, _) => Change(s => s.ObbUpdates = _obbUpdates.Checked);
         _askContent.CheckedChanged += (_, _) => Change(s => s.AskForCustomContent = _askContent.Checked);
     }
@@ -305,7 +310,7 @@ sealed class MainForm : Form, ILaunchUi
     void LayoutModsPage(Panel page)
     {
         int w = page.Width, h = page.Height;
-        _search.SetBounds(w - _search.Width - 4, 8, _search.Width, 26);
+        _search.SetBounds(w - _search.Width - 4, 5, _search.Width, 32);
         _otherGames.SetBounds(_search.Left - _otherGames.Width - 6, 5, _otherGames.Width, 32);
         _chips.SetBounds(2, 2, Math.Max(50, _otherGames.Left - 8), 40);
         _modButtons.SetBounds(2, h - 44, 230, 42);
@@ -345,15 +350,40 @@ sealed class MainForm : Form, ILaunchUi
         _log.BackColor = p.Input;
         _log.ForeColor = p.Text;
         _log.Font = new Font(FontFamily.GenericMonospace, 9f);
-        _gameList.BackColor = _modList.BackColor = p.Panel;
+        _search.ApplyTheme();
         LayoutWindow();
         Invalidate(true);
     }
 
+    // The sky and lawn, drawn once per size and theme.
+    Bitmap? _backdrop;
+    (Size, string)? _backdropFor;
+
     protected override void OnPaintBackground(PaintEventArgs e)
     {
-        Draw.Smooth(e.Graphics);
-        Draw.Backdrop(e.Graphics, ClientRectangle, Theme.Current, 74);
+        var key = (ClientSize, Theme.Current.Name);
+        if (_backdrop == null || _backdropFor != key)
+        {
+            _backdrop?.Dispose();
+            _backdrop = new Bitmap(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
+            using var g = Graphics.FromImage(_backdrop);
+            Draw.Smooth(g);
+            Draw.Backdrop(g, ClientRectangle, Theme.Current, 74);
+            _backdropFor = key;
+        }
+        e.Graphics.DrawImageUnscaled(_backdrop, 0, 0);
+    }
+
+    // The whole window painted off-screen at once (WS_EX_COMPOSITED), so switching tabs and the
+    // see-through controls over the wooden frames don't flicker.
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ExStyle |= 0x02000000;
+            return cp;
+        }
     }
 
     // --- games ----------------------------------------------------------------------------------
@@ -367,10 +397,7 @@ sealed class MainForm : Form, ILaunchUi
             await _flow.PrepareAsync(g);
 
         _iconCache.Clear();
-        _gameList.BeginUpdate();
-        _gameList.Items.Clear();
-        foreach (var g in _games) _gameList.Items.Add(g);
-        _gameList.EndUpdate();
+        _gameList.SetItems(_games);
         if (_games.Count == 0)
         {
             Log($"No games yet. Press \"Add game\", or make a folder for each game in {_gamesDir} and put its .apk and .obb there.");
@@ -451,6 +478,7 @@ sealed class MainForm : Form, ILaunchUi
             _askContent.Checked = s.AskForCustomContent;
 
             _coverage.Clear();
+            ReloadMods();
             FillChips();
             FillMods();
             _play.Enabled = game.Problem() == null && !_running.ContainsKey(game.Dir);
@@ -469,7 +497,24 @@ sealed class MainForm : Form, ILaunchUi
 
     // --- mods -----------------------------------------------------------------------------------
 
-    List<Mods.Mod> AllMods() => _game == null ? [] : Mods.List(_game);
+    List<Mods.Mod> AllMods() => _allMods;
+
+    /// Reads the game's mods from disk again (after adding, restoring or saving one).
+    void ReloadMods()
+    {
+        _allMods = _game == null ? [] : Mods.List(_game);
+        _detailFor = null;
+        RecomputeActive();
+    }
+
+    /// Which mods take part in a run, after a switch or the offline setting changed.
+    void RecomputeActive()
+    {
+        _activeKeys = _game == null ? new(StringComparer.OrdinalIgnoreCase)
+            : Mods.Active(_game, _allMods).Select(m => m.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _header.ModsOn = _activeKeys.Count;
+        _header.Invalidate();
+    }
 
     void FillChips()
     {
@@ -504,13 +549,7 @@ sealed class MainForm : Form, ILaunchUi
             .ThenBy(m => m.Category, StringComparer.OrdinalIgnoreCase)
             .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        _modList.BeginUpdate();
-        _modList.Items.Clear();
-        foreach (var m in mods) _modList.Items.Add(m);
-        _modList.EndUpdate();
-        int i = mods.FindIndex(m => m.Key == selected);
-        if (i >= 0) _modList.SelectedIndex = i;
-        ShowModDetail();
+        _modList.SetItems(mods, mods.FindIndex(m => m.Key == selected));
     }
 
     Mods.StringCoverage? CoverageOf(Mods.Mod m)
@@ -531,7 +570,7 @@ sealed class MainForm : Form, ILaunchUi
         if (m.Problem != null) { note = m.Problem; problem = true; }
         else if (!fits) { note = "Not for this game"; problem = true; }
         else if (on && m.When != null && (m.When == "offline") != game.Settings.Offline) note = m.When == "offline" ? "Only offline" : "Only online";
-        else if (on && m.RequiresAny.Count > 0 && !Mods.Active(game).Any(a => a.Key == m.Key))
+        else if (on && m.RequiresAny.Count > 0 && !_activeKeys.Contains(m.Key))
             note = "Needs " + string.Join(" or ", m.RequiresAny.Select(id => AllMods().FirstOrDefault(x => x.Id == id)?.Name ?? id));
         else if (CoverageOf(m) is { } c) note = $"{c.Covered:N0} of {c.Total:N0} strings" + (c.Missing.Count > 0 ? $" · {c.Missing.Count:N0} from the game" : "");
         else if (on && m.HasContent) note = $"load order {game.Settings.Mods.Where(k => AllMods().Any(x => x.Key == k && x.HasContent)).ToList().IndexOf(m.Key) + 1}";
@@ -557,12 +596,17 @@ sealed class MainForm : Form, ILaunchUi
         if (on && m.Hooks.Contains("keybinds-file")) _game.EnsureKeybindsFile();
         _game.SaveSettings();
         Log($"{m.Name}: {(on ? "on" : "off")}");
+        RecomputeActive();
         _modList.Invalidate();
         ShowModDetail();
     }
 
     void ShowModDetail()
     {
+        // the same mod, switched the same way: its buttons stay as they are
+        var key = _game != null && _modList.SelectedItem is Mods.Mod sel ? (sel.Key, Mods.IsOn(_game, sel)) : ((string, bool)?)null;
+        if (key == _detailFor && key != null) return;
+        _detailFor = key;
         _modActions.SuspendLayout();
         var old = _modActions.Controls.Cast<Control>().ToList();
         _modActions.Controls.Clear();
@@ -645,7 +689,7 @@ sealed class MainForm : Form, ILaunchUi
             Log("built-in mods restored");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { ShowProblem($"Couldn't restore them: {e.Message}"); }
-        if (_game != null) { Mods.Sync(_game); _game.SaveSettings(); FillChips(); FillMods(); }
+        if (_game != null) { Mods.Sync(_game); _game.SaveSettings(); ReloadMods(); FillChips(); FillMods(); }
     }
 
     // --- actions --------------------------------------------------------------------------------
@@ -805,6 +849,7 @@ sealed class MainForm : Form, ILaunchUi
         if (Mods.Find(_game, name) is { } mod) Mods.Set(_game, mod, true);
         _game.SaveSettings();
         Log($"added the mod \"{name}\" to {_game.ModsDir}");
+        ReloadMods();
         FillChips();
         FillMods();
     }
@@ -825,6 +870,7 @@ sealed class MainForm : Form, ILaunchUi
         {
             Log($"keybind layout saved as a mod: {dir}");
             if (Mods.Find(_game, Path.GetFileName(dir)) is { } m && !Mods.IsOn(_game, m)) { Mods.Set(_game, m, true); _game.SaveSettings(); }
+            ReloadMods();
             FillChips();
             FillMods();
         }
@@ -837,6 +883,7 @@ sealed class MainForm : Form, ILaunchUi
                 _game.SaveSettings();
                 Log("Keybinds switched on, so the layout is used");
             }
+            RecomputeActive();
             _modList.Invalidate();
         }
     }
@@ -981,6 +1028,7 @@ sealed class MainForm : Form, ILaunchUi
         public GameFolder? Game { get; set; }
         public Image? Icon_ { get; set; }
         public Color FamilyColor { get; set; }
+        public int ModsOn { get; set; }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -1019,7 +1067,7 @@ sealed class MainForm : Form, ILaunchUi
             x += Draw.Badge(g, new PointF(x, Height - 44), Mods.FamilyLabel(Game.Family), FamilyColor, bf) + 6;
             bool ready = Game.Problem() == null;
             x += Draw.Badge(g, new PointF(x, Height - 44), ready ? "Ready to play" : "Needs files", ready ? p.Blue.Bottom : p.Problem, bf) + 6;
-            int on = Mods.Active(Game).Count;
+            int on = ModsOn;
             Draw.Badge(g, new PointF(x, Height - 44), $"{on} mod{(on == 1 ? "" : "s")} on", p.TextMuted, bf, filled: false);
         }
     }
@@ -1051,65 +1099,4 @@ sealed class TransparentPanel : Panel
         SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         BackColor = Color.Transparent;
     }
-}
-
-/// A list of cards (the games, the mods), each drawn by the window; tracks the one under the mouse.
-sealed class CardList : ListBox
-{
-    int _hover = -1;
-    public Action<Graphics, object, RectangleF, bool, bool>? DrawCard { get; set; }
-    /// A click on a card: the item, the card's bounds and where it was clicked.
-    public Action<object, RectangleF, Point>? ClickCard { get; set; }
-
-    public CardList(int itemHeight)
-    {
-        DrawMode = DrawMode.OwnerDrawFixed;
-        ItemHeight = itemHeight;
-        IntegralHeight = false;
-        BorderStyle = BorderStyle.None;
-        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw, true);
-    }
-
-    static RectangleF CardBounds(Rectangle item) => new(item.X + 4, item.Y + 3, item.Width - 10, item.Height - 7);
-
-    protected override void OnDrawItem(DrawItemEventArgs e)
-    {
-        var g = e.Graphics;
-        using (var bg = new SolidBrush(BackColor)) g.FillRectangle(bg, e.Bounds);
-        if (e.Index < 0 || e.Index >= Items.Count) return;
-        Draw.Smooth(g);
-        DrawCard?.Invoke(g, Items[e.Index], CardBounds(e.Bounds), (e.State & DrawItemState.Selected) != 0, e.Index == _hover);
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        // owner-drawn with double buffering: draw the items ourselves
-        using (var bg = new SolidBrush(BackColor)) e.Graphics.FillRectangle(bg, ClientRectangle);
-        for (int i = TopIndex; i < Items.Count; i++)
-        {
-            var r = GetItemRectangle(i);
-            if (r.Top > ClientSize.Height) break;
-            OnDrawItem(new DrawItemEventArgs(e.Graphics, Font, r, i, SelectedIndex == i ? DrawItemState.Selected : DrawItemState.Default));
-        }
-    }
-
-    protected override void OnMouseMove(MouseEventArgs e)
-    {
-        int i = IndexFromPoint(e.Location);
-        if (i != _hover) { _hover = i; Invalidate(); }
-        base.OnMouseMove(e);
-    }
-
-    protected override void OnMouseLeave(EventArgs e) { _hover = -1; Invalidate(); base.OnMouseLeave(e); }
-
-    protected override void OnMouseDown(MouseEventArgs e)
-    {
-        base.OnMouseDown(e);
-        int i = IndexFromPoint(e.Location);
-        if (e.Button == MouseButtons.Left && i >= 0 && i < Items.Count)
-            ClickCard?.Invoke(Items[i], CardBounds(GetItemRectangle(i)), e.Location);
-    }
-
-    protected override void OnSelectedIndexChanged(EventArgs e) { Invalidate(); base.OnSelectedIndexChanged(e); }
-    protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); Invalidate(); }
 }

@@ -61,3 +61,22 @@ jobs:
           path: |
             tools/pvz2conv/publish/pvz2conv.exe
             tools/pvz2conv/README.txt
+
+  launcher:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Test
+        run: dotnet run --project tools/launcher/Pvz2Launcher.Tests
+      - name: Publish
+        run: dotnet publish tools/launcher/Pvz2Launcher -c Release -o tools/launcher/publish
+      - name: Upload PvZ2Launcher.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvz2launcher-windows-x64
+          path: |
+            tools/launcher/publish/PvZ2Launcher.exe
+            tools/launcher/README.txt

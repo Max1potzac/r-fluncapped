@@ -1,0 +1,395 @@
+using System.Drawing.Drawing2D;
+using Pvz2Launcher.Ui;
+
+namespace Pvz2Launcher;
+
+/// The visual keybind editor, Bluestacks style: a screenshot of the game with a marker for each
+/// key, dragged to where its button is on screen. Saved as "<key> tap x% y%" lines, into the
+/// game's keybinds.txt or as a layout mod for this game (and version), which suits a fan mod whose
+/// buttons sit elsewhere.
+///
+///   click an empty spot     a new marker there (it asks for the key: press it)
+///   drag a marker           move it
+///   right-click a marker    remove it
+///   double-click a marker   change its key
+sealed class KeybindLayoutForm : Form
+{
+    readonly GameFolder _game;
+    readonly Mods.Mod? _layoutMod;
+    readonly string _sharedModsDir;
+    readonly List<KeybindLayout.Marker> _markers;
+    readonly Canvas _canvas;
+    readonly ThemedLabel _hint = new("", 9.5f, muted: true) { AutoSize = false };
+    Image? _shot;
+    string? _shotPath;
+    int _drag = -1;
+    bool _changed;
+
+    /// Set when the layout was saved into the game's keybinds.txt.
+    public bool SavedKeybinds { get; private set; }
+    /// The layout mod's folder, when it was saved as one.
+    public string? SavedMod { get; private set; }
+
+    public KeybindLayoutForm(GameFolder game, Mods.Mod? layoutMod, string sharedModsDir)
+    {
+        _game = game;
+        _layoutMod = layoutMod;
+        _sharedModsDir = sharedModsDir;
+        if (layoutMod != null)
+        {
+            var (markers, shot) = KeybindLayout.ReadMod(layoutMod.Dir);
+            _markers = markers;
+            _shotPath = shot;
+        }
+        else
+        {
+            game.EnsureKeybindsFile();
+            _markers = KeybindLayout.Read(game.KeybindsPath);
+            string remembered = Path.Combine(game.WorkDir, "layout-screenshot.png");
+            if (File.Exists(remembered)) _shotPath = remembered;
+        }
+        if (_shotPath != null) LoadShot(_shotPath, remember: false);
+
+        Text = layoutMod != null ? $"Keybind layout - {layoutMod.Name}" : $"Keybind layout - {game.DisplayName}";
+        Size = new Size(1100, 760);
+        MinimumSize = new Size(760, 520);
+        StartPosition = FormStartPosition.CenterParent;
+        DoubleBuffered = true;
+        BackColor = Theme.Current.SkyBottom;
+        Font = Theme.Text(9.5f);
+
+        _canvas = new Canvas(this) { Dock = DockStyle.Fill };
+        var frame = new WoodPanel("Place your keys") { Dock = DockStyle.Fill, Padding = new Padding(22, 50, 22, 22) };
+        frame.Controls.Add(_canvas);
+
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, BackColor = Color.Transparent, Padding = new Padding(12, 8, 12, 4), WrapContents = false };
+        GlossButton B(string text, Func<Palette, Gloss> c, Action run)
+        {
+            var b = new GlossButton(text, c, 9.5f) { Height = 40, Margin = new Padding(0, 0, 8, 0) };
+            b.Click += (_, _) => run();
+            bar.Controls.Add(b);
+            return b;
+        }
+        B("Load screenshot...", p => p.Blue, PickShot);
+        if (layoutMod == null)
+        {
+            B("Save to keybinds.txt", p => p.Green, SaveKeybinds);
+            B("Save as layout mod...", p => p.Yellow, SaveAsMod);
+        }
+        else B("Save layout", p => p.Green, SaveAsMod);
+        B("Clear", p => p.Red, () => { if (_markers.Count > 0 && Ask("Remove every marker?")) { _markers.Clear(); Touch(); } });
+        _hint.Width = 420;
+        _hint.Height = 40;
+        bar.Controls.Add(_hint);
+
+        Controls.Add(frame);
+        Controls.Add(bar);
+        Themed.Apply(this);
+        UpdateHint();
+        FormClosing += (_, e) =>
+        {
+            if (_changed && !SavedKeybinds && SavedMod == null && !Ask("Close without saving the layout?")) e.Cancel = true;
+        };
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        Draw.Smooth(e.Graphics);
+        Draw.Backdrop(e.Graphics, ClientRectangle, Theme.Current, 40);
+    }
+
+    void UpdateHint() => _hint.Text = _shot == null
+        ? "Load a screenshot of the game (any size: positions are kept in percent). Then click where a key should press."
+        : $"{_markers.Count} key(s). Click to add one, drag to move, right-click to remove, double-click to change its key.";
+
+    void Touch()
+    {
+        _changed = true;
+        UpdateHint();
+        _canvas.Invalidate();
+    }
+
+    bool Ask(string q) => MessageBox.Show(this, q, Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+
+    void PickShot()
+    {
+        using var d = new OpenFileDialog { Title = "A screenshot of the game", Filter = "Images (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp|All files|*.*" };
+        if (d.ShowDialog(this) != DialogResult.OK) return;
+        LoadShot(d.FileName, remember: _layoutMod == null);
+        UpdateHint();
+        _canvas.Invalidate();
+    }
+
+    void LoadShot(string path, bool remember)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            using var img = Image.FromStream(fs);
+            _shot?.Dispose();
+            _shot = new Bitmap(img);
+            _shotPath = path;
+            if (remember)
+            {
+                // kept with the game, so the editor opens on it next time
+                Directory.CreateDirectory(_game.WorkDir);
+                string keep = Path.Combine(_game.WorkDir, "layout-screenshot.png");
+                if (!string.Equals(Path.GetFullPath(path), Path.GetFullPath(keep), StringComparison.OrdinalIgnoreCase))
+                    _shot.Save(keep, System.Drawing.Imaging.ImageFormat.Png);
+                _shotPath = keep;
+            }
+        }
+        catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, $"Couldn't open that picture: {e.Message}", Text);
+        }
+    }
+
+    void SaveKeybinds()
+    {
+        KeybindLayout.Write(_game.KeybindsPath, _markers);
+        SavedKeybinds = true;
+        _changed = false;
+        Close();
+    }
+
+    void SaveAsMod()
+    {
+        string name = _layoutMod?.Name ?? $"{_game.DisplayName} layout";
+        if (_layoutMod == null)
+        {
+            var asked = Prompt.Text(this, "Save as layout mod", "A name for the layout. It goes into the shared mods folder, for this game only.", name);
+            if (asked == null) return;
+            name = asked;
+        }
+        string? version = _game.Info?.VersionName is { Length: > 0 } v ? string.Join('.', v.Split('.').Take(2)) : null;
+        string dir = _layoutMod != null ? Path.GetDirectoryName(_layoutMod.Dir)! : _sharedModsDir;
+        SavedMod = KeybindLayout.SaveAsMod(dir, name, _game.Info?.Package, version, _markers, _shotPath);
+        _changed = false;
+        Close();
+    }
+
+    /// The key for a marker: the next key pressed (Escape to back out).
+    string? AskKey(string? current)
+    {
+        using var f = new KeyPrompt(current);
+        return f.ShowDialog(this) == DialogResult.OK ? f.Key : null;
+    }
+
+    /// Where the screenshot sits in the canvas, keeping its shape.
+    RectangleF ShotRect(Size canvas)
+    {
+        float w = _shot?.Width ?? 16, h = _shot?.Height ?? 9;
+        float s = Math.Min(canvas.Width / w, canvas.Height / h);
+        return new RectangleF((canvas.Width - w * s) / 2, (canvas.Height - h * s) / 2, w * s, h * s);
+    }
+
+    int MarkerAt(Point at, Size canvas)
+    {
+        var r = ShotRect(canvas);
+        for (int i = _markers.Count - 1; i >= 0; i--)
+        {
+            var c = new PointF(r.X + _markers[i].X * r.Width, r.Y + _markers[i].Y * r.Height);
+            if (Math.Abs(at.X - c.X) <= 22 && Math.Abs(at.Y - c.Y) <= 18) return i;
+        }
+        return -1;
+    }
+
+    sealed class Canvas : Control
+    {
+        readonly KeybindLayoutForm _f;
+        public Canvas(KeybindLayoutForm f)
+        {
+            _f = f;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            Cursor = Cursors.Cross;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            Draw.Smooth(g);
+            var p = Theme.Current;
+            using (var bg = new SolidBrush(p.Panel)) g.FillRectangle(bg, ClientRectangle);
+            var r = _f.ShotRect(ClientSize);
+            if (_f._shot != null) g.DrawImage(_f._shot, r);
+            else
+            {
+                using var hb = new HatchBrush(HatchStyle.LargeCheckerBoard, p.Card, p.CardHover);
+                g.FillRectangle(hb, r);
+                using var tf = Theme.Title(14);
+                Draw.OutlinedText(g, "Load a screenshot of the game", tf, r, Color.White, p.TextOutline, 2.5f);
+            }
+            using (var edge = new Pen(p.WoodEdge, 2)) g.DrawRectangle(edge, r.X, r.Y, r.Width, r.Height);
+
+            using var kf = Theme.Title(10);
+            for (int i = 0; i < _f._markers.Count; i++)
+            {
+                var m = _f._markers[i];
+                var c = new PointF(r.X + m.X * r.Width, r.Y + m.Y * r.Height);
+                // a keycap: a glossy rounded square with the key's name, a dot where it touches
+                float w = Math.Max(36, g.MeasureString(m.Key, kf).Width + 16);
+                var cap = new RectangleF(c.X - w / 2, c.Y - 34, w, 30);
+                Draw.Button(g, cap, i == _f._drag ? p.Yellow : p.Blue, m.Key, kf);
+                using (var line = new Pen(Color.FromArgb(200, Color.White), 2)) g.DrawLine(line, c.X, cap.Bottom - 2, c.X, c.Y - 4);
+                using (var dot = new SolidBrush(Color.FromArgb(230, 255, 255, 255))) g.FillEllipse(dot, c.X - 6, c.Y - 6, 12, 12);
+                using (var rim = new Pen(p.Blue.Edge, 2)) g.DrawEllipse(rim, c.X - 6, c.Y - 6, 12, 12);
+            }
+        }
+
+        PointF Fraction(Point at)
+        {
+            var r = _f.ShotRect(ClientSize);
+            return new PointF(Math.Clamp((at.X - r.X) / r.Width, 0, 1), Math.Clamp((at.Y - r.Y) / r.Height, 0, 1));
+        }
+
+        int Hit(Point at)
+        {
+            // the marker's dot, or its keycap above it
+            int i = _f.MarkerAt(at, ClientSize);
+            return i >= 0 ? i : _f.MarkerAt(new Point(at.X, at.Y + 20), ClientSize);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (_f._shot == null) { _f.PickShot(); return; }
+            int i = Hit(e.Location);
+            if (e.Button == MouseButtons.Right)
+            {
+                if (i >= 0) { _f._markers.RemoveAt(i); _f.Touch(); }
+                return;
+            }
+            if (e.Button != MouseButtons.Left) return;
+            if (e.Clicks == 2 && i >= 0)
+            {
+                if (_f.AskKey(_f._markers[i].Key) is { } key) { _f._markers[i] = _f._markers[i] with { Key = key }; _f.Touch(); }
+                return;
+            }
+            if (i >= 0) { _f._drag = i; Capture = true; Invalidate(); return; }
+            var at = Fraction(e.Location);
+            if (_f.AskKey(null) is { } k)
+            {
+                _f._markers.RemoveAll(m => string.Equals(m.Key, k, StringComparison.OrdinalIgnoreCase));
+                _f._markers.Add(new KeybindLayout.Marker(k, at.X, at.Y));
+                _f.Touch();
+            }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (_f._drag < 0) { Cursor = Hit(e.Location) >= 0 ? Cursors.SizeAll : Cursors.Cross; return; }
+            var at = Fraction(e.Location);
+            _f._markers[_f._drag] = _f._markers[_f._drag] with { X = at.X, Y = at.Y };
+            _f._changed = true;
+            Invalidate();
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (_f._drag < 0) return;
+            _f._drag = -1;
+            Capture = false;
+            _f.Touch();
+        }
+    }
+
+    /// "Press a key": the next key pressed, in SDL's spelling (the one keybinds.txt uses).
+    sealed class KeyPrompt : Form
+    {
+        public string? Key { get; private set; }
+        public KeyPrompt(string? current)
+        {
+            Text = "Press a key";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ClientSize = new Size(380, 120);
+            KeyPreview = true;
+            BackColor = Theme.Current.Panel;
+            var l = new ThemedLabel(current == null ? "Press the key for this spot (Escape to cancel)." : $"Press the new key for {current} (Escape to cancel).", 10f)
+            { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter };
+            Controls.Add(l);
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            var k = keyData & Keys.KeyCode;
+            if (k == Keys.Escape) { DialogResult = DialogResult.Cancel; return true; }
+            if (SdlName(k) is { } name) { Key = name; DialogResult = DialogResult.OK; return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (SdlName(e.KeyCode) is { } name) { Key = name; DialogResult = DialogResult.OK; }
+            base.OnKeyDown(e);
+        }
+    }
+
+    /// SDL's name for a Windows key (what rfu's keybinds files use), or null for a key SDL names
+    /// differently that isn't worth guessing.
+    internal static string? SdlName(Keys k) => k switch
+    {
+        >= Keys.A and <= Keys.Z => ((char)('A' + (k - Keys.A))).ToString(),
+        >= Keys.D0 and <= Keys.D9 => ((char)('0' + (k - Keys.D0))).ToString(),
+        >= Keys.NumPad0 and <= Keys.NumPad9 => $"Keypad_{k - Keys.NumPad0}",
+        >= Keys.F1 and <= Keys.F24 => $"F{k - Keys.F1 + 1}",
+        Keys.Space => "Space",
+        Keys.Enter => "Return",
+        Keys.Tab => "Tab",
+        Keys.Back => "Backspace",
+        Keys.Left => "Left",
+        Keys.Right => "Right",
+        Keys.Up => "Up",
+        Keys.Down => "Down",
+        Keys.LShiftKey or Keys.ShiftKey => "Left_Shift",
+        Keys.RShiftKey => "Right_Shift",
+        Keys.LControlKey or Keys.ControlKey => "Left_Ctrl",
+        Keys.RControlKey => "Right_Ctrl",
+        Keys.Insert => "Insert",
+        Keys.Delete => "Delete",
+        Keys.Home => "Home",
+        Keys.End => "End",
+        Keys.PageUp => "PageUp",
+        Keys.PageDown => "PageDown",
+        Keys.Oemcomma => ",",
+        Keys.OemPeriod => ".",
+        Keys.OemMinus => "-",
+        Keys.Oemplus => "=",
+        Keys.OemSemicolon => ";",
+        Keys.OemQuotes => "'",
+        Keys.OemOpenBrackets => "[",
+        Keys.OemCloseBrackets => "]",
+        Keys.OemQuestion => "/",
+        Keys.OemPipe => "\\",
+        Keys.Oemtilde => "`",
+        _ => null,
+    };
+}
+
+/// A one-line question.
+static class Prompt
+{
+    public static string? Text(IWin32Window owner, string title, string question, string value)
+    {
+        using var f = new Form
+        {
+            Text = title, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+            StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(440, 150), BackColor = Theme.Current.Panel,
+        };
+        var label = new ThemedLabel(question, 10f) { AutoSize = false, Bounds = new Rectangle(14, 12, 412, 40) };
+        var box = new TextBox { Text = value, Bounds = new Rectangle(14, 56, 412, 26) };
+        var ok = new GlossButton("Save", p => p.Green, 9.5f) { Bounds = new Rectangle(226, 96, 96, 40) };
+        var cancel = new GlossButton("Cancel", p => p.Wood, 9.5f) { Bounds = new Rectangle(330, 96, 96, 40) };
+        ok.Click += (_, _) => { f.DialogResult = DialogResult.OK; };
+        cancel.Click += (_, _) => { f.DialogResult = DialogResult.Cancel; };
+        f.Controls.AddRange([label, box, ok, cancel]);
+        f.AcceptButton = null;
+        box.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) f.DialogResult = DialogResult.OK; };
+        Themed.Apply(f);
+        return f.ShowDialog(owner) == DialogResult.OK && box.Text.Trim() is { Length: > 0 } t ? t : null;
+    }
+}

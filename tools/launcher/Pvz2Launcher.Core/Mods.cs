@@ -169,7 +169,6 @@ public static class Mods
         bool loose = !laidOut && stringsPath == null && Directory.Exists(dir) &&
                      Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
                          .Any(f => !NotContent.Contains(Path.GetFileName(f)) && !f.EndsWith(".patch", StringComparison.OrdinalIgnoreCase));
-        bool hasContent = laidOut || loose || stringsPath != null;
 
         var kind = Get("kind").ToLowerInvariant() switch
         {
@@ -178,6 +177,8 @@ public static class Mods
             "content" => ModKind.Content,
             _ => stringsPath != null ? ModKind.Localization : (rfu.Count > 0 || patches.Count > 0) && !laidOut ? ModKind.Injection : ModKind.Content,
         };
+        // an injection's own files (a keybinds file, a screenshot) aren't content to lay over the game's
+        bool hasContent = laidOut || stringsPath != null || (loose && kind != ModKind.Injection);
         string category = Get("category") is { Length: > 0 } c ? c : kind switch
         {
             ModKind.Localization => "Language",

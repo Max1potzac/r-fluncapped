@@ -30,6 +30,7 @@ var tests = new (string Name, Action Run)[]
     ("mod library", ModLibraryTest),
     ("legacy settings", LegacySettingsTest),
     ("localization", LocalizationTest),
+    ("keybind layout", KeybindLayoutTest),
     ("controller setup", PadSetupTest),
 };
 foreach (var (name, run) in tests)
@@ -561,6 +562,37 @@ void LocalizationTest()
     string? missing = Mods.WriteMissing(g, pirate);
     Expect(missing != null && File.ReadAllText(missing).Contains("\"LTE_NEW_EVENT\": \"A brand new event\""), "missing strings written for translating");
     Expect(Mods.List(g).Single(m => m.Id == "pirate-english").HasContent, "missing-strings.json doesn't make it loose content");
+}
+
+// The visual keybind editor's file side: percent taps in keybinds.txt, and layouts as mods.
+void KeybindLayoutTest()
+{
+    var g = MakeGame("LayoutGame");
+    g.EnsureKeybindsFile();
+    File.AppendAllText(g.KeybindsPath, "Space tap 640 360\nQ tap 10% 20%\n");
+    var markers = KeybindLayout.Read(g.KeybindsPath);
+    Expect(markers.Count == 1 && markers[0].Key == "Q" && Math.Abs(markers[0].X - 0.1f) < 1e-4 && Math.Abs(markers[0].Y - 0.2f) < 1e-4, "percent taps read, pixel taps left alone");
+    KeybindLayout.Write(g.KeybindsPath, [new("Q", 0.5f, 0.25f), new("E", 0.125f, 0.9f)]);
+    string text = File.ReadAllText(g.KeybindsPath);
+    Expect(text.Contains("Q tap 50% 25%") && text.Contains("E tap 12.5% 90%") && !text.Contains("Q tap 10% 20%"), $"markers written: {text}");
+    Expect(text.Contains("Space tap 640 360") && text.Contains("1 seed 1") && text.Contains("D shovel"), "other keybinds kept");
+    KeybindLayout.Write(g.KeybindsPath, [new("Q", 0.5f, 0.25f)]);
+    Expect(File.ReadAllText(g.KeybindsPath).Split("visual layout (made").Length == 2 && !File.ReadAllText(g.KeybindsPath).Contains("E tap"), "written again, not twice");
+
+    string shot = Path.Combine(root, "shot.png");
+    File.WriteAllBytes(shot, [0x89, 0x50, 0x4E, 0x47]);
+    string dir = KeybindLayout.SaveAsMod(Path.Combine(root, "mods"), "RFL 1.5 layout", "com.ea.game.pvz2_rfl", "1.4", [new("W", 0.3f, 0.6f)], shot);
+    var mod = Mods.List(g).Single(m => m.Key == "RFL 1.5 layout");
+    Expect(mod.Kind == Mods.ModKind.Injection && mod.Category == "Controls" && Mods.AppliesTo(mod, g) && !mod.HasContent, "a layout mod for this game");
+    Expect(File.Exists(Path.Combine(dir, "screenshot.png")) && File.Exists(Path.Combine(dir, "layout.json")), "screenshot and layout.json kept with it");
+    var (back, backShot) = KeybindLayout.ReadMod(dir);
+    Expect(back.Count == 1 && back[0].Key == "W" && back[0].State == "any" && backShot != null, "layout read back, with its state");
+    Mods.Set(g, mod, true);
+    var args = RfuCommand.Build(g, []);
+    Expect(args.Contains(Path.Combine(dir, "keybinds.txt")), $"its keybinds go to rfu: {string.Join(" ", args)}");
+    var china = MakeChinaGame("LayoutChina");
+    Expect(!Mods.AppliesTo(mod, china), "not for another game");
+    Directory.Delete(dir, true);
 }
 
 Mods.Mod Mod(string id, GameFolder? game = null)

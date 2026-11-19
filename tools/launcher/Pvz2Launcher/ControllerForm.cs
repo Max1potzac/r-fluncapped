@@ -103,6 +103,10 @@ sealed class ControllerForm : Form
             }
         };
         ShowClashes();
+        // the launcher's theme
+        BackColor = Ui.Theme.Current.Panel;
+        ForeColor = Ui.Theme.Current.Text;
+        Ui.Themed.Apply(this);
 
         _sdl = Sdl.Load(rfuDir);
         if (!_sdl)

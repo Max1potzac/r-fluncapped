@@ -133,7 +133,7 @@ CONTENT (cdn\ and files\ in a mod)
     obb\...          files in place of the OBB's own, at their paths there
                      (obb\PACKAGES\FONTS.json for PACKAGES\FONTS.RTON; .json is
                      converted as above). Only files the OBB already has, and
-                     not textures.
+                     not textures (new art goes in groups\, below).
     fonts\...        fonts in place of the game's own (see LOCALIZATIONS)
 
   obb\ and fonts\ don't change the OBB either: the launcher writes the
@@ -150,11 +150,43 @@ CONTENT (cdn\ and files\ in a mod)
                    already has one by that name, the mod can't be switched on
     anything else  is added at the end
     "#replace": true at the top of the file replaces the game's sheet whole
+    "List#add": [...]   adds to the list List rather than replacing it (what
+                   it has already is left out); LawnStrings' LocStringValues
+                   by key, so a key it has gets the new text
   Mods load in order, so where two change the same field the later wins.
   Two mods adding the same new name (the same plant ID, say) can't be on
   together: switching the second on asks which one to keep, and Play stops
   with the list if both are on.
-  Textures and PAM animations in the OBB aren't covered yet.
+
+  New art (a new plant's animation and its atlases):
+    groups\<name>\...  a new resource group of the OBB, its files at their
+                     OBB paths (groups\PlantPinecone_768\ATLASES\
+                     PLANTPINECONE_768_00.PNG). PNGs become textures
+                     (RGBA8888); everything else (PAM ...) goes in as it is.
+    obb\PROPERTIES\RESOURCES.json   the groups' entries, merged into the
+                     game's resource manifest: a group the game has takes the
+                     mod's fields and resources (by id), a new one is added.
+                     Slots are the launcher's to give: an id the game has
+                     keeps its slot, a new one gets one after the last.
+                     "subgroups#add": [...] adds groups to a composite the
+                     game has.
+  Some pictures are drawn from the game's own atlas whatever the manifest
+  names as their parent: a seed packet from UI_SeedPackets' atlas. Give such
+  a picture as an image of the game's group (UI_SeedPackets_768 and _1536),
+  its parent the game's atlas, and "#png": "<file in the mod>" in place of
+  ax, ay, aw and ah:
+    {"id": "UI_SeedPackets_768", "resources": [{"id": "IMAGE_UI_PACKETS_PINECONE",
+     "path": ["images", "768", "initial", "UI", "packets", "pinecone"],
+     "type": "Image", "parent": "ATLASIMAGE_ATLAS_UI_SEEDPACKETS_768_00",
+     "#png": "packets/pinecone_768.png", "x": 18, "y": 4}]}
+  The launcher puts the PNG into a clear place of the atlas that no picture
+  has, and gives the image that place. One that doesn't fit is left out
+  (the log says so).
+
+  A new plant's behaviour that no game class has can come from rfu (mod.json's
+  "rfu", see docs\runtime.md, Plant behaviours). The Pinecone sample mod (shared
+  on its own, not here, as its art is PvZ2 China's) is a whole new plant made
+  this way: its art, sheets, packet, store entry and behaviour.
 
 LOCALIZATIONS
   A localization is a mod with "language" (en-US...) and a strings file of

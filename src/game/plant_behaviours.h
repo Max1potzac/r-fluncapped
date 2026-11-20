@@ -1,7 +1,7 @@
 #pragma once
 
 // Plant behaviours the game's own classes don't have, for new plants that mods add from
-// property sheets alone (tools/launcher/mods/Pinecone). Each names projectiles by their alias
+// property sheets alone (the Pinecone sample mod). Each names projectiles by their alias
 // in PROJECTILETYPES, so a mod turns one on for its own plant through mod.json's "rfu" list.
 //
 //   --kill-shot <normal>=<special>

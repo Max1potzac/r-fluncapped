@@ -34,6 +34,7 @@ var tests = new (string Name, Action Run)[]
     ("controller setup", PadSetupTest),
     ("fonts and OBB patch", ObbPatchTest),
     ("property sheet merge", SheetMergeTest),
+    ("resource groups and atlas pictures", ResourceGroupsTest),
 };
 foreach (var (name, run) in tests)
 {
@@ -832,6 +833,106 @@ void SheetMergeTest()
     Mods.Set(g, b, false);
 }
 
+// A mod's new resource groups go into the OBB (and into a composite it has), its manifest merges
+// into the game's, and a picture it gives with "#png" goes into a free place of the game's atlas.
+void ResourceGroupsTest()
+{
+    // FindRoom: clear pixels no picture has
+    var clear = new byte[8 * 4 * 4];
+    for (int y = 0; y < 4; y++) for (int x = 0; x < 3; x++) clear[(y * 8 + x) * 4 + 3] = 255;
+    Expect(AtlasPictures.FindRoom(clear, 8, 4, [], 2, 2) == (3, 0), "the first clear place, row by row");
+    Expect(AtlasPictures.FindRoom(clear, 8, 4, [(3, 0, 2, 4)], 2, 2) == (5, 0), "a picture's place isn't free, clear or not");
+    Expect(AtlasPictures.FindRoom(clear, 8, 4, [], 6, 1) == null, "none big enough");
+
+    // the manifest: slots for new resources (an id's slot wherever it is), subgroups#add
+    var manifest = (System.Text.Json.Nodes.JsonObject)SheetMerge.Parse("""
+        {"slot_count":2,"groups":[{"id":"UI","type":"composite","subgroups":[{"id":"UI_768","res":"768"}]},
+         {"id":"UI_768","type":"simple","res":"768","resources":[{"slot":0,"id":"ATLAS","atlas":true},{"slot":1,"id":"OLD","parent":"ATLAS"}]}]}
+        """u8.ToArray())!;
+    var mine = (System.Text.Json.Nodes.JsonObject)SheetMerge.Parse("""
+        {"groups":[{"id":"New_1536","type":"simple","res":"1536","resources":[{"id":"PIC","slot":99},{"id":"OLD"}]},
+         {"id":"New_768","type":"simple","res":"768","resources":[{"id":"PIC"}]},
+         {"id":"UI","subgroups#add":[{"id":"New_768","res":"768"},{"id":"UI_768","res":"768"}]},
+         {"id":"UI_768","resources":[{"id":"MORE","parent":"ATLAS"}]}]}
+        """u8.ToArray())!;
+    var (counts, composites) = SheetMerge.MergeManifest(manifest, mine);
+    var all = ((System.Text.Json.Nodes.JsonArray)manifest["groups"]!).OfType<System.Text.Json.Nodes.JsonObject>().ToList();
+    int Slot(string group, string id) => (int)all.Single(g => g["id"]!.ToString() == group)["resources"]!.AsArray().Single(r => r!["id"]!.ToString() == id)!["slot"]!;
+    Expect(counts == new SheetMerge.Counts(2, 2, 0), $"groups added and changed: {counts}");
+    Expect(Slot("New_1536", "PIC") == 2 && Slot("New_768", "PIC") == 2 && Slot("New_1536", "OLD") == 1 && Slot("UI_768", "MORE") == 3 && (int)manifest["slot_count"]! == 4,
+        $"slots: {manifest.ToJsonString()}");
+    var subgroups = all.Single(g => g["id"]!.ToString() == "UI")["subgroups"]!.AsArray();
+    Expect(subgroups.Count == 2 && composites.Count == 1 && composites[0]["subgroups"]!.AsArray().Single()!["id"]!.ToString() == "New_768",
+        $"subgroups#add: the group it hasn't, and the composite to grow: {subgroups.ToJsonString()}");
+
+    // the same through a build, on an OBB with a packet atlas and a composite
+    var g = MakeGame("GroupsGame");
+    var atlas = new byte[16 * 8 * 4];
+    for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) atlas[(y * 16 + x) * 4 + 3] = 255;  // the left half used
+    byte[] gameManifest = Pvz2Conv.RtonWriter.FromJson("""
+        {"slot_count":2,"groups":[{"id":"UI_SeedPackets","type":"composite","subgroups":[{"id":"UI_SeedPackets_768","res":"768"}]},
+         {"id":"UI_SeedPackets_768","type":"simple","parent":"UI_SeedPackets","res":"768","resources":[
+          {"slot":0,"id":"ATLASIMAGE_ATLAS_UI_SEEDPACKETS_768_00","path":["atlases","UI_SeedPackets_768_00"],"type":"Image","atlas":true,"width":16,"height":8},
+          {"slot":1,"id":"IMAGE_UI_PACKETS_OLD","path":["images","768","old"],"type":"Image","parent":"ATLASIMAGE_ATLAS_UI_SEEDPACKETS_768_00","ax":8,"ay":0,"aw":3,"ah":8}]}]}
+        """u8);
+    File.WriteAllBytes(g.Obb!, MakeRsbV4(
+        [("__MANIFESTGROUP__", [("PROPERTIES\\RESOURCES.RTON", gameManifest)], []),
+         ("UI_SeedPackets_768", [], [("ATLASES\\UI_SEEDPACKETS_768_00.PTX", 16, 8, atlas)])],
+        [("UI_SeedPackets", [(1, 768)])]));
+    string dir = Path.Combine(g.ModsDir, "Packet");
+    Directory.CreateDirectory(Path.Combine(dir, "obb", "PROPERTIES"));
+    Directory.CreateDirectory(Path.Combine(dir, "packets"));
+    Directory.CreateDirectory(Path.Combine(dir, "groups", "NewPlant_768", "ATLASES"));
+    File.WriteAllText(Path.Combine(dir, "mod.json"), """{"name":"Packet","kind":"content"}""");
+    var red = new byte[3 * 2 * 4];
+    for (int i = 0; i < red.Length; i += 4) { red[i] = 255; red[i + 3] = 255; }
+    File.WriteAllBytes(Path.Combine(dir, "packets", "new.png"), Pvz2Conv.Png.Encode(red, 3, 2));
+    File.WriteAllBytes(Path.Combine(dir, "packets", "big.png"), Pvz2Conv.Png.Encode(new byte[20 * 20 * 4], 20, 20));
+    File.WriteAllBytes(Path.Combine(dir, "groups", "NewPlant_768", "ATLASES", "NEWPLANT_768_00.PNG"), Pvz2Conv.Png.Encode(red, 3, 2));
+    File.WriteAllText(Path.Combine(dir, "obb", "PROPERTIES", "RESOURCES.json"), """
+        {"groups":[
+         {"id":"UI_SeedPackets_768","resources":[
+          {"id":"IMAGE_UI_PACKETS_NEW","path":["images","768","new"],"type":"Image","parent":"ATLASIMAGE_ATLAS_UI_SEEDPACKETS_768_00","#png":"packets/new.png","x":18,"y":4},
+          {"id":"IMAGE_UI_PACKETS_BIG","path":["images","768","big"],"type":"Image","parent":"ATLASIMAGE_ATLAS_UI_SEEDPACKETS_768_00","#png":"packets/big.png"}]},
+         {"id":"NewPlant_768","type":"simple","res":"768","resources":[
+          {"id":"ATLASIMAGE_ATLAS_NEWPLANT_768_00","path":["atlases","NewPlant_768_00"],"type":"Image","atlas":true,"width":3,"height":2}]},
+         {"id":"UI_SeedPackets","subgroups#add":[{"id":"NewPlant_768","res":"768"}]}]}
+        """);
+    var r = Mods.Build(g, ["Packet"]);
+    string log = string.Join(" | ", r.Log);
+    Expect(r.ObbPatch != null, $"a patch made: {log}");
+    Expect(r.Log.Any(l => l.StartsWith("IMAGE_UI_PACKETS_BIG:") && l.Contains("no free 20x20 place") && l.EndsWith("left out")), $"a picture too big for the atlas: {log}");
+    if (r.ObbPatch == null) return;
+    string patched = Path.Combine(root, "groups.obb");
+    ObbPatch.Apply(g.Obb!, File.ReadAllBytes(r.ObbPatch), patched);
+    var index = ObbPatch.Read(patched);
+    var res = (System.Text.Json.Nodes.JsonObject)SheetMerge.Parse(ObbPatch.ReadFiles(patched, index, ["PROPERTIES\\RESOURCES.RTON"]).Values.Single())!;
+    var images = res["groups"]!.AsArray().SelectMany(x => x!["resources"]?.AsArray() ?? []).OfType<System.Text.Json.Nodes.JsonObject>().ToList();
+    var pic = images.SingleOrDefault(x => x["id"]!.ToString() == "IMAGE_UI_PACKETS_NEW");
+    // the left half is used, and the old picture has 8..10 (its clear pixels too): with a clear
+    // pixel around it, the new one goes at 12, 1
+    Expect(pic != null && (int)pic["ax"]! == 12 && (int)pic["ay"]! == 1 && (int)pic["aw"]! == 3 && (int)pic["ah"]! == 2 && pic["#png"] == null && (int)pic["x"]! == 18,
+        $"the picture's place: {pic?.ToJsonString()}");
+    Expect(!images.Any(x => x["id"]!.ToString() == "IMAGE_UI_PACKETS_BIG"), "the one that didn't fit taken out of the manifest");
+    var texture = ObbPatch.ReadTexture(patched, index, "ATLASES/UI_SEEDPACKETS_768_00.PTX", out string why);
+    Expect(texture != null && texture.Width == 16 && texture.Height == 8, $"the atlas read back: {why}");
+    if (texture != null)
+    {
+        byte[] Px(int x, int y) => texture.Rgba[((y * 16 + x) * 4)..((y * 16 + x) * 4 + 4)];
+        Expect(Px(12, 1).SequenceEqual(new byte[] { 255, 0, 0, 255 }) && Px(14, 2).SequenceEqual(new byte[] { 255, 0, 0, 255 }) && Px(11, 1)[3] == 0 && Px(15, 1)[3] == 0 && Px(0, 0)[3] == 255,
+            "the picture's pixels in the atlas, the rest as it was");
+    }
+    var newPlant = ObbPatch.ReadTexture(patched, index, "ATLASES/NEWPLANT_768_00.PTX", out why);
+    Expect(newPlant != null && newPlant.Rgba.SequenceEqual(red), $"the new group's texture: {why}");
+    Expect(r.Log.Any(l => l.Contains("OBB composite group UI_SeedPackets: NewPlant_768 added to it")), $"the composite grown: {log}");
+
+    var again = Mods.Build(g, ["Packet"]);
+    Expect(again.Log.Any(l => l.Contains("OBB patch") && l.Contains("unchanged")), "not made again when nothing changed");
+    File.SetLastWriteTimeUtc(Path.Combine(dir, "packets", "new.png"), DateTime.UtcNow.AddMinutes(1));
+    again = Mods.Build(g, ["Packet"]);
+    Expect(!again.Log.Any(l => l.Contains("OBB patch") && l.Contains("unchanged")), "made again when a picture changed");
+}
+
 // A TrueType font with a name table (family name ID 1, Windows Unicode) and a 'glyf' that is only a marker.
 static byte[] MakeFont(string family, string marker)
 {
@@ -946,6 +1047,99 @@ static byte[] MakeRsb((string Name, (string Path, byte[] Data)[] Files, bool Pac
         W(header, ge + 160, raw.Length);
         Encoding.ASCII.GetBytes(groups[i].Name + "_AutoPool").CopyTo(header, poolOff + i * PoolEntry);
         W(header, poolOff + i * PoolEntry + 128, hsize + raw.Length);
+        rsb.SetLength((rsb.Length + 0xFFF) & ~0xFFF); rsb.Position = rsb.Length;
+    }
+    rsb.Position = 0;
+    rsb.Write(header);
+    return rsb.ToArray();
+}
+
+// An RSB (version 4) as the game's packer lays it out, the launcher's tables all there: groups
+// of ordinary files (part 0, stored) and RGBA8888 textures (part 1, zlib-packed), and composites
+// of them (group index, resolution).
+static byte[] MakeRsbV4((string Name, (string Path, byte[] Data)[] Files, (string Path, int W, int H, byte[] Rgba)[] Textures)[] groups,
+    (string Name, (int Group, int Res)[] Groups)[] composites)
+{
+    const int GroupEntry = 204, PoolEntry = 152, PtxEntry = 16, CompositeEntry = 128 + 64 * 16 + 4;
+    void W(byte[] b, int at, long v) => BitConverter.GetBytes((uint)v).CopyTo(b, at);
+    var fileList = TrieOf(groups.SelectMany((g, i) => g.Files.Select(f => f.Path).Concat(g.Textures.Select(t => t.Path)).Select(p => (p, BitConverter.GetBytes(i)))));
+    var groupMap = TrieOf(groups.Select((g, i) => (g.Name.ToUpperInvariant(), BitConverter.GetBytes(i))));
+    var compositeMap = TrieOf(composites.Select((c, i) => (c.Name.ToUpperInvariant(), BitConverter.GetBytes(i))));
+    int ptxCount = groups.Sum(g => g.Textures.Length);
+    int fileOff = 0x100, groupMapOff = fileOff + fileList.Length, compositeMapOff = groupMapOff + groupMap.Length,
+        compositeOff = compositeMapOff + compositeMap.Length, groupOff = compositeOff + composites.Length * CompositeEntry,
+        poolOff = groupOff + groups.Length * GroupEntry, ptxOff = poolOff + groups.Length * PoolEntry,
+        headerSize = (ptxOff + ptxCount * PtxEntry + 0xFFF) & ~0xFFF;
+    var header = new byte[headerSize];
+    W(header, 0, 0x72736231); W(header, 4, 4); W(header, 12, headerSize); W(header, 0x6C, headerSize);
+    fileList.CopyTo(header, fileOff); W(header, 0x10, fileList.Length); W(header, 0x14, fileOff);
+    groupMap.CopyTo(header, groupMapOff); W(header, 0x20, groupMap.Length); W(header, 0x24, groupMapOff);
+    W(header, 0x28, groups.Length); W(header, 0x2C, groupOff); W(header, 0x30, GroupEntry);
+    W(header, 0x34, composites.Length); W(header, 0x38, compositeOff); W(header, 0x3C, CompositeEntry);
+    compositeMap.CopyTo(header, compositeMapOff); W(header, 0x40, compositeMap.Length); W(header, 0x44, compositeMapOff);
+    W(header, 0x48, groups.Length); W(header, 0x4C, poolOff); W(header, 0x50, PoolEntry);
+    W(header, 0x54, ptxCount); W(header, 0x58, ptxOff); W(header, 0x5C, PtxEntry);
+    for (int c = 0; c < composites.Length; c++)
+    {
+        int co = compositeOff + c * CompositeEntry;
+        Encoding.ASCII.GetBytes(composites[c].Name).CopyTo(header, co);
+        for (int k = 0; k < composites[c].Groups.Length; k++) { W(header, co + 128 + 16 * k, composites[c].Groups[k].Group); W(header, co + 132 + 16 * k, composites[c].Groups[k].Res); }
+        W(header, co + 128 + 64 * 16, composites[c].Groups.Length);
+    }
+    var rsb = new MemoryStream();
+    rsb.Write(header);
+    int ptx = 0;
+    for (int i = 0; i < groups.Length; i++)
+    {
+        var part0 = new MemoryStream();
+        var part1 = new MemoryStream();
+        var names = new List<(string, byte[])>();
+        foreach (var (path, data) in groups[i].Files)
+        {
+            var payload = new byte[12];
+            W(payload, 4, part0.Length); W(payload, 8, data.Length);
+            names.Add((path, payload));
+            part0.Write(data);
+            part0.SetLength((part0.Length + 0xFFF) & ~0xFFF); part0.Position = part0.Length;
+        }
+        for (int t = 0; t < groups[i].Textures.Length; t++)
+        {
+            var (path, w, h, rgba) = groups[i].Textures[t];
+            var payload = new byte[32];
+            W(payload, 0, 1); W(payload, 4, part1.Length); W(payload, 8, rgba.Length); W(payload, 12, t); W(payload, 24, w); W(payload, 28, h);
+            names.Add((path, payload));
+            part1.Write(rgba);
+            part1.SetLength((part1.Length + 0xFFF) & ~0xFFF); part1.Position = part1.Length;
+            int po = ptxOff + (ptx + t) * PtxEntry;
+            W(header, po, w); W(header, po + 4, h); W(header, po + 8, w * 4); W(header, po + 12, 0);
+        }
+        var map = TrieOf(names);
+        byte[] raw0 = part0.ToArray(), raw1 = part1.ToArray(), packed1 = raw1;
+        if (raw1.Length > 0)
+        {
+            var z = new MemoryStream();
+            using (var zs = new System.IO.Compression.ZLibStream(z, System.IO.Compression.CompressionLevel.Optimal, true)) zs.Write(raw1);
+            packed1 = z.ToArray();
+        }
+        int hsize = (0x60 + map.Length + 0xFFF) & ~0xFFF;
+        var ph = new byte[hsize];
+        W(ph, 0, 0x72736770); W(ph, 4, 4);
+        W(ph, 0x10, raw1.Length > 0 ? 1 : 0); W(ph, 0x14, hsize);
+        W(ph, 0x18, hsize); W(ph, 0x1C, raw0.Length); W(ph, 0x20, raw0.Length);
+        W(ph, 0x28, hsize + raw0.Length); W(ph, 0x2C, packed1.Length); W(ph, 0x30, raw1.Length);
+        W(ph, 0x48, map.Length); W(ph, 0x4C, 0x60);
+        map.CopyTo(ph, 0x60);
+        long at = rsb.Length;
+        rsb.Write(ph); rsb.Write(raw0); rsb.Write(packed1);
+        int ge = groupOff + i * GroupEntry;
+        Encoding.ASCII.GetBytes(groups[i].Name).CopyTo(header, ge);
+        W(header, ge + 128, at); W(header, ge + 132, hsize + raw0.Length + packed1.Length); W(header, ge + 136, i);
+        Array.Copy(ph, 0x10, header, ge + 140, 0x24);
+        W(header, ge + 160, raw0.Length);
+        W(header, ge + 196, groups[i].Textures.Length); W(header, ge + 200, ptx);
+        Encoding.ASCII.GetBytes(groups[i].Name + "_AutoPool").CopyTo(header, poolOff + i * PoolEntry);
+        W(header, poolOff + i * PoolEntry + 128, hsize + raw0.Length); W(header, poolOff + i * PoolEntry + 132, raw1.Length); W(header, poolOff + i * PoolEntry + 136, 1);
+        ptx += groups[i].Textures.Length;
         rsb.SetLength((rsb.Length + 0xFFF) & ~0xFFF); rsb.Position = rsb.Length;
     }
     rsb.Position = 0;

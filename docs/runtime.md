@@ -106,6 +106,19 @@ hook on the plant's per-frame call runs the special update for the plants listed
 game skipped it, with the target check (`Plant::FindTarget`) answering no meanwhile, so it only
 moves animations along and never fires.
 
+`src/game/plant_behaviours.cpp` (`--kill-shot`, `--homing-retarget`): behaviours for new plants
+that mods make from property sheets alone (a mod turns them on through mod.json's `"rfu"`), each
+naming projectiles by their alias in PROJECTILETYPES. RFLib replaces the game's `Plant::DoAction`
+whole (rflib_hooks.json), so the kill shot hooks `Board::AddProjectile` instead: when the
+plant that fires its normal projectile is armed (and not in plant food), the props handle in `x1`
+points at the special projectile's sheet in its place. `Projectile::Hit` runs after the damage is
+done, so a normal projectile whose zombie is left dead (or at 0 hp) arms its plant, and a special
+one that hits anything (a zombie, its shield, a grid item) disarms it. `--homing-retarget` hooks
+`HomingThistleLeaf`'s update: one with no target, or a target that can't be hit any more, goes for
+the zombie nearest the house that the leaves already chasing it (each counting its damage) won't
+finish; at debug level each retarget is logged. The addresses are checked against the code
+expected there, as for the other fixes.
+
 `src/game/game_keys.cpp` (keybinds `seed <n>`, `shovel`, `plantfood`, `fastforward`, `pause`): the
 seed bank (`SeedBankNew`), its packets and the buttons (`ShovelUI`, `PlantfoodUI`,
 `FastForwardButton`, `PauseButton`) belong to the game's newer UI, not to Sexy's widgets; their

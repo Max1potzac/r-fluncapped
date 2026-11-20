@@ -138,6 +138,22 @@ CONTENT (cdn\ and files\ in a mod)
 
   obb\ and fonts\ don't change the OBB either: the launcher writes the
   changed parts to .launcher\obb-patch.bin and rfu reads the OBB through it.
+
+  Property sheets (PLANTTYPES, PLANTPROPERTIES, ZOMBIETYPES, FONTS ... any
+  {"objects": [...]} file) are merged, not replaced: a mod's file holds only
+  what it adds or changes, and several mods can change the same sheet.
+    an object with the aliases (or TypeName) of one the game has
+                   changes it: only the fields the mod gives, objects inside
+                   merged the same way, lists and values replaced
+    "#remove": true   takes the game's object out
+    "#new": true      marks an object the mod adds (a new plant): if the game
+                   already has one by that name, the mod can't be switched on
+    anything else  is added at the end
+    "#replace": true at the top of the file replaces the game's sheet whole
+  Mods load in order, so where two change the same field the later wins.
+  Two mods adding the same new name (the same plant ID, say) can't be on
+  together: switching the second on asks which one to keep, and Play stops
+  with the list if both are on.
   Textures and PAM animations in the OBB aren't covered yet.
 
 LOCALIZATIONS

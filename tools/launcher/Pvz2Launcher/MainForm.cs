@@ -58,6 +58,8 @@ sealed class MainForm : BackdropForm, ILaunchUi
     readonly BackdropFlow _modButtons = new() { WrapContents = false, AutoSize = false, Height = 42 };
     string _category = "All";
     readonly Dictionary<string, Mods.StringCoverage?> _coverage = new(StringComparer.OrdinalIgnoreCase);
+    // a mod's new plant (or zombie ...) that the game already has, by mod: it can't be switched on
+    readonly Dictionary<string, ModConflicts.Conflict?> _taken = new(StringComparer.OrdinalIgnoreCase);
     // the game's mods as last read from disk, and the keys of the ones that take part in a run:
     // read when something changes, never while drawing
     List<Mods.Mod> _allMods = [];
@@ -453,6 +455,7 @@ sealed class MainForm : BackdropForm, ILaunchUi
             _askContent.Checked = s.AskForCustomContent;
 
             _coverage.Clear();
+            _taken.Clear();
             ReloadMods();
             FillChips();
             FillMods();
@@ -544,6 +547,7 @@ sealed class MainForm : BackdropForm, ILaunchUi
         bool problem = false;
         if (m.Problem != null) { note = m.Problem; problem = true; }
         else if (!fits) { note = "Not for this game"; problem = true; }
+        else if (TakenBy(m) is { } taken) { note = $"Unavailable: its {taken.Label} is the game's already"; problem = true; }
         else if (on && m.When != null && (m.When == "offline") != game.Settings.Offline) note = m.When == "offline" ? "Only offline" : "Only online";
         else if (on && m.RequiresAny.Count > 0 && !_activeKeys.Contains(m.Key))
             note = "Needs " + string.Join(" or ", m.RequiresAny.Select(id => AllMods().FirstOrDefault(x => x.Id == id)?.Name ?? id));
@@ -561,12 +565,53 @@ sealed class MainForm : BackdropForm, ILaunchUi
             m.Category, kind, m.GamesLabel, on, fits && m.Problem == null, note, problem), selected, hover);
     }
 
+    ModConflicts.Conflict? TakenBy(Mods.Mod m)
+    {
+        if (_game == null || ModConflicts.Entries(m).All(e => !e.New)) return null;
+        if (!_taken.TryGetValue(m.Key, out var c))
+            _taken[m.Key] = c = ModConflicts.Find(_game, [m]).FirstOrDefault(x => x.Other == null);
+        return c;
+    }
+
     void ToggleMod(Mods.Mod m)
     {
         if (_game == null) return;
         if (!Mods.AppliesTo(m, _game)) { Log($"{m.Name} is made for {m.GamesLabel}, not this game"); return; }
         if (m.Problem != null) { ShowProblem($"{m.Name} can't be used: {m.Problem}"); return; }
         bool on = !Mods.IsOn(_game, m);
+        if (on && m.HasContent)
+        {
+            var conflicts = ModConflicts.WithActive(_game, m);
+            if (conflicts.FirstOrDefault(c => c.Other == null && c.Mod.Key == m.Key) is { } taken)
+            {
+                ShowProblem($"{m.Name} can't be used: it adds {taken.Label}, and the game already has one by that name. " +
+                            "The mod needs another ID.");
+                return;
+            }
+            var others = conflicts.Where(c => c.Other != null).Select(c => c.Mod.Key == m.Key ? c.Other! : c.Mod)
+                .DistinctBy(o => o.Key).ToList();
+            if (others.Count > 0)
+            {
+                var keepNew = new TaskDialogButton($"Keep {m.Name} on");
+                var keepOld = new TaskDialogButton(others.Count == 1 ? $"Keep {others[0].Name} on" : "Keep the ones on now");
+                var page = new TaskDialogPage
+                {
+                    Caption = _game.DisplayName,
+                    Heading = "Two mods use the same ID",
+                    Text = string.Join("\n", conflicts.Where(c => c.Other != null).Select(c => c.Describe() + ".")) +
+                           "\n\nOnly one of them can be on. Which one do you want to keep on?",
+                    Icon = TaskDialogIcon.Warning,
+                    Buttons = { keepNew, keepOld },
+                    DefaultButton = keepOld,
+                };
+                if (TaskDialog.ShowDialog(this, page) != keepNew) return;
+                foreach (var o in others)
+                {
+                    Mods.Set(_game, o, false);
+                    Log($"{o.Name}: off (it adds the same as {m.Name})");
+                }
+            }
+        }
         Mods.Set(_game, m, on);
         if (on && m.Hooks.Contains("keybinds-file")) _game.EnsureKeybindsFile();
         _game.SaveSettings();

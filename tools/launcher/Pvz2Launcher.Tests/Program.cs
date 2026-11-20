@@ -33,6 +33,7 @@ var tests = new (string Name, Action Run)[]
     ("keybind layout", KeybindLayoutTest),
     ("controller setup", PadSetupTest),
     ("fonts and OBB patch", ObbPatchTest),
+    ("property sheet merge", SheetMergeTest),
 };
 foreach (var (name, run) in tests)
 {
@@ -747,6 +748,88 @@ void ObbPatchTest()
     File.WriteAllBytes(g.Obb!, before);
     var china = MakeChinaGame("FontChina");
     Expect(!RfuCommand.Build(china, [], r.ObbPatch).Contains("--obb-patch"), "no OBB patch for China");
+}
+
+// obb/ property sheets merge into the game's (and each other's), and mods adding the same new
+// plant, or one the game has, are caught.
+void SheetMergeTest()
+{
+    var dup = SheetMerge.Parse("""{"a":1,"b":2,"a":3}"""u8.ToArray()) as System.Text.Json.Nodes.JsonObject;
+    Expect(dup?["a"]?.ToString() == "3" && dup.Count == 2, "a key twice: the later one wins");
+
+    var g = MakeGame("SheetGame");
+    byte[] Rton(string json) => Pvz2Conv.RtonWriter.FromJson(Encoding.UTF8.GetBytes(json));
+    File.WriteAllBytes(g.Obb!, MakeRsb([("Packages", [
+        ("PACKAGES\\PLANTTYPES.RTON", Rton("""
+            {"version":1,"objects":[{"##### Day #####":0},
+             {"objclass":"PlantType","aliases":["sunflower"],"objdata":{"TypeName":"sunflower","Cost":50}},
+             {"objclass":"PlantType","aliases":["peashooter"],"objdata":{"TypeName":"peashooter","Cost":100,"Props":{"Damage":20,"Speed":1}}}]}
+            """)),
+        ("PACKAGES\\FONTS.RTON", Rton("""{"version":1,"objects":[{"objclass":"PrimeText_PotentialTypeface","objdata":{"TypeName":"BODY","Font":"BrianneTod","Size":20}}]}""")),
+        ("PACKAGES\\LIVECONFIG.RTON", Rton("""{"version":1,"objects":[{"objclass":"PVZLiveConfig","objdata":{"A":1,"B":2}}]}""")),
+    ], false)]));
+
+    Mods.Mod MakeSheetMod(string name, params (string File, string Json)[] files)
+    {
+        string dir = Path.Combine(g.ModsDir, name);
+        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        foreach (var (file, json) in files)
+        {
+            string path = Path.Combine(dir, "obb", "PACKAGES", file);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, json);
+        }
+        return Mods.List(g).Single(m => m.Key == name);
+    }
+    var a = MakeSheetMod("New Plant",
+        ("PLANTTYPES.json", """{"version":1,"objects":[{"#new":true,"objclass":"PlantType","aliases":["newplant"],"objdata":{"TypeName":"newplant","Cost":75}},{"aliases":["peashooter"],"objdata":{"Cost":125}}]}"""));
+    var b = MakeSheetMod("Balance",
+        ("PLANTTYPES.json", """{"version":1,"objects":[{"objdata":{"TypeName":"peashooter","Props":{"Damage":30}}},{"aliases":["sunflower"],"#remove":true}]}"""),
+        ("FONTS.json", """{"version":1,"objects":[{"objdata":{"TypeName":"BODY","Size":26}},{"objclass":"PrimeText_PotentialTypeface","objdata":{"TypeName":"BODY_RU","Font":"Cyr","Size":20}}]}"""),
+        ("LIVECONFIG.rton.json", """{"version":1,"objects":[{"objclass":"PVZLiveConfig","objdata":{"B":5}}]}"""));
+    Expect(a.HasContent && ModConflicts.Find(g, [a, b]).Count == 0, "a new plant and changes to the game's: no conflict");
+
+    var r = Mods.Build(g, ["New Plant", "Balance"]);
+    Expect(r.ObbPatch != null && r.Log.Any(l => l.Contains("PLANTTYPES.RTON: 2 mod file(s) merged") && l.Contains("1 added, 2 changed, 1 removed")), $"merged: {string.Join(" | ", r.Log)}");
+    string patched = Path.Combine(root, "sheets.obb");
+    if (r.ObbPatch != null) ObbPatch.Apply(g.Obb!, File.ReadAllBytes(r.ObbPatch), patched);
+    var index = ObbPatch.Read(patched);
+    var read = ObbPatch.ReadFiles(patched, index, index.Files.Keys);
+    string plants = ToJson(read["PACKAGES\\PLANTTYPES.RTON"]);
+    Expect(plants.Contains("\"newplant\"") && !plants.Contains("#new") && !plants.Contains("sunflower") && plants.Contains("##### Day #####"),
+        $"the new plant added, sunflower taken out, the comment kept: {plants}");
+    Expect(plants.Contains("\"Cost\":125") && plants.Contains("\"Damage\":30") && plants.Contains("\"Speed\":1"), "both mods' changes to the peashooter, field by field");
+    string fonts = ToJson(read["PACKAGES\\FONTS.RTON"]);
+    Expect(fonts.Contains("\"Size\":26") && fonts.Contains("\"Font\":\"BrianneTod\"") && fonts.Contains("BODY_RU"), $"objects without aliases go by TypeName: {fonts}");
+    string live = ToJson(read["PACKAGES\\LIVECONFIG.RTON"]);
+    Expect(live.Contains("\"A\":1") && live.Contains("\"B\":5"), $"a sheet's one object of its class: {live}");
+
+    // a sheet that replaces the game's whole
+    var whole = MakeSheetMod("Whole", ("FONTS.json", """{"#replace":true,"version":1,"objects":[{"objclass":"PrimeText_PotentialTypeface","objdata":{"TypeName":"ONLY","Font":"X","Size":1}}]}"""));
+    r = Mods.Build(g, ["Balance", "Whole"]);
+    if (r.ObbPatch != null) ObbPatch.Apply(g.Obb!, File.ReadAllBytes(r.ObbPatch), patched);
+    fonts = ToJson(ObbPatch.ReadFiles(patched, ObbPatch.Read(patched), ["PACKAGES\\FONTS.RTON"]).Values.Single());
+    Expect(fonts.Contains("ONLY") && !fonts.Contains("BODY") && !fonts.Contains("#replace"), $"#replace: {fonts}");
+    Directory.Delete(whole.Dir, true);
+
+    // conflicts: an ID the game has, and two mods adding the same new one
+    var taken = MakeSheetMod("Sunflower Two", ("PLANTTYPES.json", """{"version":1,"objects":[{"#new":true,"objclass":"PlantType","aliases":["sunflower"],"objdata":{"TypeName":"sunflower"}}]}"""));
+    var c = ModConflicts.Find(g, [taken]);
+    Expect(c.Count == 1 && c[0].Other == null && c[0].Label == "plant ID \"sunflower\"" && c[0].Describe().Contains("the game already has"), $"taken: {string.Join(", ", c.Select(x => x.Describe()))}");
+    var twin = MakeSheetMod("Same Plant", ("PLANTTYPES.json", """{"version":1,"objects":[{"objclass":"PlantType","aliases":["newplant"],"objdata":{"TypeName":"newplant","Cost":10}}]}"""));
+    c = ModConflicts.Find(g, [a, b, twin]);
+    Expect(c.Count == 1 && c[0].Mod == twin && c[0].Other == a && c[0].Describe() == "Same Plant and New Plant both add plant ID \"newplant\"", $"clash: {string.Join(", ", c.Select(x => x.Describe()))}");
+    Mods.Set(g, a, true);
+    Mods.Set(g, b, true);
+    var with = ModConflicts.WithActive(g, twin);
+    Expect(with.Count == 1 && with[0].Other?.Key == a.Key, "switching it on clashes with the one on");
+    Expect(ModConflicts.WithActive(g, taken).Single().Other == null, "switching on a taken one");
+    r = Mods.Build(g, ["New Plant", "Same Plant", "Sunflower Two"]);
+    Expect(r.Log.Contains("mod Same Plant left out: Same Plant and New Plant both add plant ID \"newplant\"") && r.Log.Any(l => l.StartsWith("mod Sunflower Two left out")),
+        $"left out of the build: {string.Join(" | ", r.Log)}");
+    Expect(File.Exists(Path.Combine(g.WorkDir, "obb-ids.json")), "the game's IDs kept for next time");
+    Mods.Set(g, a, false);
+    Mods.Set(g, b, false);
 }
 
 // A TrueType font with a name table (family name ID 1, Windows Unicode) and a 'glyf' that is only a marker.

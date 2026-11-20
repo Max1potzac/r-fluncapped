@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Pvz2Launcher;
 
@@ -34,7 +35,9 @@ namespace Pvz2Launcher;
 ///                   localization's fonts with the letters the game's lack. Each takes the name of
 ///                   the font it replaces, so the game's typefaces (FONTS.RTON) use it.
 ///   obb/...         files in place of the OBB's own, at their paths there (PACKAGES/FONTS.rton,
-///                   or .json converted): ordinary files the OBB has, not textures (ObbPatch)
+///                   or .json converted): ordinary files the OBB has, not textures (ObbPatch).
+///                   Property sheets merge into the game's (SheetMerge); a new plant or zombie
+///                   that the game or another mod has already is a conflict (ModConflicts)
 ///
 /// rfu lays content over the game's files read-only (--overlay), so nothing of the game's is
 /// changed and switching a mod off is just not passing it. A folder with no mod.json and neither
@@ -385,6 +388,12 @@ public static class Mods
             else if (mod.HasContent && mod.Problem != null) log.Add($"mod {mod.Name}: {mod.Problem}; left out");
             else if (mod.HasContent) picked.Add(mod);
         }
+        // a mod whose new plant (or zombie ...) the game has, or the later of two adding the same one
+        for (var conflicts = ModConflicts.Find(game, picked); conflicts.Count > 0; conflicts = ModConflicts.Find(game, picked))
+        {
+            picked.Remove(conflicts[0].Mod);
+            log.Add($"mod {conflicts[0].Mod.Name} left out: {conflicts[0].Describe()}");
+        }
         var mods = picked.Where(m => m.Strings == null).Select(m => m.Dir).ToList();
         var localizations = picked.Where(m => m.Strings != null).ToList();
         string? obbPatch = BuildObbPatch(game, picked, log);
@@ -494,61 +503,119 @@ public static class Mods
 
     /// The mods' fonts and obb/ files put into the game's OBB as a patch for rfu, in
     /// .launcher/obb-patch.bin, or null when there are none (or it can't be made). Made again only
-    /// when the OBB or a file changed.
+    /// when the OBB or a file changed. Property sheets are merged (SheetMerge): the game's, then each
+    /// mod's in load order.
     static string? BuildObbPatch(GameFolder game, IReadOnlyList<Mod> mods, List<string> log)
     {
-        // OBB path -> (the mod's file, whether it's a font), the last mod in load order winning
-        var plan = new Dictionary<string, (string File, bool Font)>(StringComparer.Ordinal);
+        // fonts: the game's font -> the mod's file, the last mod in load order winning
+        var fonts = new Dictionary<string, string>(StringComparer.Ordinal);
+        // obb/ files: (their OBB path, the mod's file), in load order
+        var obbFiles = new List<(string Key, string File)>();
         foreach (var mod in mods)
         {
-            foreach (var (gameFont, file) in mod.Fonts) plan[ObbPatch.Key("PRIMEFONTS/" + gameFont)] = (file, true);
+            foreach (var (gameFont, file) in mod.Fonts) fonts[ObbPatch.Key("PRIMEFONTS/" + gameFont)] = file;
             string obbDir = Path.Combine(mod.Dir, "obb");
             if (Directory.Exists(obbDir))
-                foreach (var file in Directory.EnumerateFiles(obbDir, "*", SearchOption.AllDirectories))
-                    plan[ObbPatch.Key(Path.GetRelativePath(obbDir, file))] = (file, false);
+                foreach (var file in Directory.EnumerateFiles(obbDir, "*", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase))
+                    obbFiles.Add((ObbPatch.Key(Path.GetRelativePath(obbDir, file)), file));
         }
         string patchPath = Path.Combine(game.WorkDir, "obb-patch.bin"), stampPath = Path.Combine(game.WorkDir, "obb-patch.stamp");
-        if (plan.Count == 0) return null;
+        int count = fonts.Count + obbFiles.Count;
+        if (count == 0) return null;
         if (game.Obb == null || !File.Exists(game.Obb))
         {
             log.Add("fonts and obb/ files go into the OBB, and this game has none (PvZ2 China's data is in its APK); left out");
             return null;
         }
-        var stamp = new StringBuilder($"obb-patch v1\n{game.Obb}|{new FileInfo(game.Obb).Length}|{File.GetLastWriteTimeUtc(game.Obb).Ticks}\n");
-        foreach (var (key, (file, font)) in plan.OrderBy(p => p.Key, StringComparer.Ordinal))
+        var stamp = new StringBuilder($"obb-patch v2\n{game.Obb}|{new FileInfo(game.Obb).Length}|{File.GetLastWriteTimeUtc(game.Obb).Ticks}\n");
+        foreach (var (key, file, font) in fonts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (p.Key, p.Value, true)).Concat(obbFiles.Select(f => (f.Key, f.File, false))))
             stamp.Append($"{key}|{file}|{font}|{(File.Exists(file) ? $"{new FileInfo(file).Length}|{File.GetLastWriteTimeUtc(file).Ticks}" : "-")}\n");
         if (File.Exists(patchPath) && File.Exists(stampPath) && File.ReadAllText(stampPath) == stamp.ToString())
         {
-            log.Add($"OBB patch: {plan.Count} file(s), unchanged since the last build");
+            log.Add($"OBB patch: {count} file(s), unchanged since the last build");
             return patchPath;
         }
         try
         {
             var index = ObbPatch.Read(game.Obb);
-            // an obb/ file as JSON goes in as the RTON the OBB has
             var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-            var fontKeys = plan.Where(p => p.Value.Font).Select(p => p.Key).ToList();
-            var originals = ObbPatch.ReadFiles(game.Obb, index, fontKeys);
-            foreach (var (key, (file, font)) in plan)
+
+            // fonts, with the names of the game's font each replaces
+            var originals = ObbPatch.ReadFiles(game.Obb, index, fonts.Keys);
+            foreach (var (key, file) in fonts)
             {
                 if (!File.Exists(file)) { log.Add($"{file} is missing; left out"); continue; }
-                if (font)
+                if (!originals.TryGetValue(key, out var original))
                 {
-                    if (!originals.TryGetValue(key, out var original))
-                    {
-                        var known = index.Files.Keys.Where(k => k.StartsWith("PRIMEFONTS\\", StringComparison.Ordinal)).Select(k => Path.GetFileName(k.Replace('\\', '/')));
-                        log.Add($"{Path.GetFileName(file)}: the game has no font {key[11..]} (its fonts: {string.Join(", ", known)}); left out");
-                        continue;
-                    }
-                    try { files[key] = Fonts.WithNames(File.ReadAllBytes(file), original); }
-                    catch (FormatException e) { log.Add($"{Path.GetFileName(file)}: {e.Message}; left out"); }
+                    var known = index.Files.Keys.Where(k => k.StartsWith("PRIMEFONTS\\", StringComparison.Ordinal)).Select(k => Path.GetFileName(k.Replace('\\', '/')));
+                    log.Add($"{Path.GetFileName(file)}: the game has no font {key[11..]} (its fonts: {string.Join(", ", known)}); left out");
                     continue;
                 }
-                string target = key;
-                if (key.EndsWith(".RTON.JSON", StringComparison.Ordinal)) target = key[..^5];
-                else if (key.EndsWith(".JSON", StringComparison.Ordinal) && index.Files.ContainsKey(key[..^5] + ".RTON")) target = key[..^5] + ".RTON";
-                files[target] = target != key ? Pvz2Conv.RtonWriter.FromJson(File.ReadAllBytes(file)) : File.ReadAllBytes(file);
+                try { files[key] = Fonts.WithNames(File.ReadAllBytes(file), original); }
+                catch (FormatException e) { log.Add($"{Path.GetFileName(file)}: {e.Message}; left out"); }
             }
+
+            // obb/ files, by where they go: x.rton.json -> x.rton, x.json -> x.rton where the OBB's is RTON
+            string Target(string key)
+            {
+                if (key.EndsWith(".RTON.JSON", StringComparison.Ordinal)) return key[..^5];
+                if (key.EndsWith(".JSON", StringComparison.Ordinal) && index.Files.ContainsKey(key[..^5] + ".RTON")) return key[..^5] + ".RTON";
+                return key;
+            }
+            var byTarget = obbFiles.GroupBy(f => Target(f.Key)).ToList();
+            var gameSheets = ObbPatch.ReadFiles(game.Obb, index,
+                byTarget.Select(g => g.Key).Where(t => t.EndsWith(".RTON", StringComparison.Ordinal) || t.EndsWith(".JSON", StringComparison.Ordinal)));
+            foreach (var group in byTarget)
+            {
+                string target = group.Key;
+                bool rton = target.EndsWith(".RTON", StringComparison.Ordinal);
+                JsonObject? sheet = null;  // the merged sheet so far, or null when the last file isn't one
+                byte[]? whole = null;      // the last file that isn't a sheet, as it goes in
+                int merged = 0, added = 0, changed = 0, removed = 0;
+                foreach (var (key, file) in group)
+                {
+                    if (!File.Exists(file)) { log.Add($"{file} is missing; left out"); continue; }
+                    byte[] data = File.ReadAllBytes(file);
+                    JsonObject? mine = null;
+                    if (rton || target.EndsWith(".JSON", StringComparison.Ordinal))
+                    {
+                        try { mine = SheetMerge.Parse(data) as JsonObject; }
+                        catch (Exception e) when (e is JsonException or FormatException) { if (key != target) throw new FormatException($"{file}: {e.Message}"); }
+                    }
+                    if (mine == null || !SheetMerge.IsSheet(mine))
+                    {
+                        sheet = null;
+                        whole = key != target && rton ? Pvz2Conv.RtonWriter.FromJson(data) : data;
+                        continue;
+                    }
+                    if (SheetMerge.TakeReplace(mine)) { sheet = mine; whole = null; continue; }
+                    if (sheet == null)
+                    {
+                        // the start: the game's own sheet, unless an earlier mod's file replaced it whole
+                        JsonObject? start = null;
+                        if (whole == null && gameSheets.TryGetValue(target, out var own))
+                            try { start = SheetMerge.Parse(own) as JsonObject; } catch (Exception e) when (e is JsonException or FormatException) { }
+                        if (start == null || !SheetMerge.IsSheet(start))
+                        {
+                            sheet = mine;
+                            whole = null;
+                            continue;
+                        }
+                        sheet = start;
+                        whole = null;
+                    }
+                    var c = SheetMerge.Merge(sheet, mine);
+                    merged++;
+                    added += c.Added; changed += c.Changed; removed += c.Removed;
+                }
+                if (sheet != null)
+                {
+                    files[target] = rton ? SheetMerge.ToRton(sheet) : Encoding.UTF8.GetBytes(sheet.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                    if (merged > 0) log.Add($"{target}: {merged} mod file(s) merged into the game's ({added} added, {changed} changed, {removed} removed)");
+                }
+                else if (whole != null) files[target] = whole;
+            }
+
             var patch = ObbPatch.Build(game.Obb, index, files, log);
             Directory.CreateDirectory(game.WorkDir);
             if (patch.Length == 0)

@@ -96,6 +96,13 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         string? obbPatch = null;
         if (Mods.AnyContentOn(game))
         {
+            var conflicts = await Task.Run(() => ModConflicts.Find(game, Mods.Active(game).Where(m => m.HasContent).ToList()));
+            if (conflicts.Count > 0)
+            {
+                ui.ShowProblem("Some mods that are on can't be used together:\n" + string.Join("\n", conflicts.Select(c => c.Describe() + ".")) +
+                               "\n\nSwitch " + (conflicts.Any(c => c.Other != null) ? "one of each pair" : "it") + " off in Mods, then play.");
+                return null;
+            }
             var built = await Task.Run(() => Mods.Build(game, Mods.Active(game).Where(m => m.HasContent).Select(m => m.Key).ToList()));
             built.Log.ForEach(ui.Log);
             overlays = built.Overlays;

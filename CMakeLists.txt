@@ -38,6 +38,7 @@ add_library(rfu_core STATIC
     src/game/anim_fix.cpp
     src/game/game_keys.cpp
     src/game/hover.cpp
+    src/game/plant_behaviours.cpp
     # SDL-free parts of src/platform, here so the tests reach them
     src/platform/key_hints.cpp
     src/platform/cursor_sprites.cpp

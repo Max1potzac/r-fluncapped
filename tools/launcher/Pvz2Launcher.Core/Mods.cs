@@ -509,8 +509,11 @@ public static class Mods
     {
         // fonts: the game's font -> the mod's file, the last mod in load order winning
         var fonts = new Dictionary<string, string>(StringComparer.Ordinal);
-        // obb/ files: (their OBB path, the mod's file), in load order
+        // obb/ files: (their OBB path, the mod's file), in load order, and each one's mod folder
         var obbFiles = new List<(string Key, string File)>();
+        var modDirs = new Dictionary<string, string>(StringComparer.Ordinal);
+        // pictures for the game's atlases ("#png" in a mod's manifest), anywhere in a mod but obb/ and groups/
+        var pictureFiles = new List<string>();
         // groups/<name>/: new resource groups, by name (the last mod in load order winning)
         var newGroups = new Dictionary<string, (Mod Mod, List<(string Key, string File)> Files)>(StringComparer.OrdinalIgnoreCase);
         foreach (var mod in mods)
@@ -519,7 +522,14 @@ public static class Mods
             string obbDir = Path.Combine(mod.Dir, "obb");
             if (Directory.Exists(obbDir))
                 foreach (var file in Directory.EnumerateFiles(obbDir, "*", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase))
+                {
                     obbFiles.Add((ObbPatch.Key(Path.GetRelativePath(obbDir, file)), file));
+                    modDirs[file] = mod.Dir;
+                }
+            if (Directory.Exists(mod.Dir))
+                pictureFiles.AddRange(Directory.EnumerateFiles(mod.Dir, "*.png", new EnumerationOptions { RecurseSubdirectories = true, MatchCasing = MatchCasing.CaseInsensitive })
+                    .Where(f => Path.GetRelativePath(mod.Dir, f).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0].ToLowerInvariant() is not ("obb" or "groups"))
+                    .Order(StringComparer.OrdinalIgnoreCase));
             foreach (var (name, files) in GroupFolders(mod))
             {
                 if (newGroups.TryGetValue(name, out var had)) log.Add($"group {name}: {mod.Name}'s, not {had.Mod.Name}'s");
@@ -534,12 +544,14 @@ public static class Mods
             log.Add("fonts and obb/ files go into the OBB, and this game has none (PvZ2 China's data is in its APK); left out");
             return null;
         }
-        var stamp = new StringBuilder($"obb-patch v2\n{game.Obb}|{new FileInfo(game.Obb).Length}|{File.GetLastWriteTimeUtc(game.Obb).Ticks}\n");
+        var stamp = new StringBuilder($"obb-patch v3\n{game.Obb}|{new FileInfo(game.Obb).Length}|{File.GetLastWriteTimeUtc(game.Obb).Ticks}\n");
         foreach (var (key, file, font) in fonts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (p.Key, p.Value, true)).Concat(obbFiles.Select(f => (f.Key, f.File, false))))
             stamp.Append($"{key}|{file}|{font}|{(File.Exists(file) ? $"{new FileInfo(file).Length}|{File.GetLastWriteTimeUtc(file).Ticks}" : "-")}\n");
         foreach (var (name, (_, groupFiles)) in newGroups.OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
             foreach (var (key, file) in groupFiles)
                 stamp.Append($"group {name}|{key}|{file}|{new FileInfo(file).Length}|{File.GetLastWriteTimeUtc(file).Ticks}\n");
+        foreach (var file in pictureFiles)
+            stamp.Append($"picture {file}|{new FileInfo(file).Length}|{File.GetLastWriteTimeUtc(file).Ticks}\n");
         if (File.Exists(patchPath) && File.Exists(stampPath) && File.ReadAllText(stampPath) == stamp.ToString())
         {
             log.Add($"OBB patch: {count} file(s), unchanged since the last build");
@@ -549,6 +561,7 @@ public static class Mods
         {
             var index = ObbPatch.Read(game.Obb);
             var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            var pictures = new AtlasPictures(game.Obb, index);
 
             // fonts, with the names of the game's font each replaces
             var originals = ObbPatch.ReadFiles(game.Obb, index, fonts.Keys);
@@ -599,6 +612,7 @@ public static class Mods
                         // the resource manifest: the game's (or the merged one so far), the mod's groups added
                         manifest ??= whole == null && gameSheets.TryGetValue(target, out var own) ? SheetMerge.Parse(own) as JsonObject : null;
                         if (manifest == null || !SheetMerge.IsManifest(manifest)) { manifest = mine; whole = null; continue; }
+                        if (modDirs.TryGetValue(file, out var modDir)) pictures.Place(manifest, mine, modDir, log);
                         var (mc, comps) = SheetMerge.MergeManifest(manifest, mine);
                         composites.AddRange(comps);
                         whole = null;
@@ -659,15 +673,18 @@ public static class Mods
                 }
                 groups.Add(new ObbPatch.NewGroup(name, plain, textures));
             }
-            // composite groups the mods' manifests add, with the RSB's resolutions (1536, else any)
+            // composite groups the mods' manifests add (or add groups to), with the RSB's resolutions
+            // (1536, 768, else any)
             var newComposites = composites
                 .Where(c => c["subgroups"] is JsonArray)
                 .Select(c => new ObbPatch.NewComposite(c["id"]!.ToString(), ((JsonArray)c["subgroups"]!).OfType<JsonObject>()
                     .Where(sg => sg["id"] != null)
-                    .Select(sg => (sg["id"]!.ToString(), sg["res"]?.ToString() == "1536" ? 1536 : 0)).ToList()))
+                    .Select(sg => (sg["id"]!.ToString(), int.TryParse(sg["res"]?.ToString(), out int res) && res is 1536 or 768 ? res : 0)).ToList()))
                 .ToList();
 
-            var patch = ObbPatch.Build(game.Obb, index, files, log, groups, newComposites);
+            var atlases = pictures.Changed();
+            foreach (var path in atlases.Keys) log.Add($"{path}: mods' pictures put into it");
+            var patch = ObbPatch.Build(game.Obb, index, files, log, groups, newComposites, atlases);
             Directory.CreateDirectory(game.WorkDir);
             if (patch.Length == 0)
             {

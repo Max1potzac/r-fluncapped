@@ -80,16 +80,42 @@ public static class ObbPatch
     /// A resource group a mod adds: its ordinary files (part 0) and its textures (part 1).
     public sealed record NewGroup(string Name, IReadOnlyList<(string Path, byte[] Data)> Files, IReadOnlyList<NewTexture> Textures);
 
-    /// A composite group a mod adds: its groups, each for a resolution (0: any).
+    /// A composite group a mod adds, or one the OBB has that a mod adds groups to: its groups,
+    /// each for a resolution (0: any).
     public sealed record NewComposite(string Name, IReadOnlyList<(string Group, int Resolution)> Groups);
 
-    /// The patch that puts `files` (by OBB path) into the OBB, as rfu reads it, and adds `groups`
+    /// One of the OBB's textures, RGBA8888 (format 0), as ReadTexture gives it.
+    public sealed record Texture(byte[] Rgba, int Width, int Height);
+
+    /// The OBB's texture at `path` ("ATLASES\UI_SEEDPACKETS_768_00.PTX"), or null (with `why`)
+    /// when it has none there or it isn't RGBA8888, the one kind a mod's pictures can go into.
+    public static Texture? ReadTexture(string obb, Index index, string path, out string why)
+    {
+        string key = Key(path);
+        why = "";
+        if (!index.Files.TryGetValue(key, out int g) || g < 0 || g >= index.GroupCount) { why = "the OBB has no such texture"; return null; }
+        using var fs = File.OpenRead(obb);
+        var packet = Packet.Load(fs, index, g);
+        if (packet.Entries.FirstOrDefault(e => e.Name == key && e.Texture) is not { } e) { why = "the OBB has it, but not as a texture"; return null; }
+        int width = (int)U32(packet.Header, e.Pos + 24), height = (int)U32(packet.Header, e.Pos + 28);
+        int o = (int)(index.GroupOff + g * index.GroupEntry);
+        uint ptx = U32(index.Header, o + 200) + U32(packet.Header, e.Pos + 12), ptxEntry = U32(index.Header, 0x5C);
+        uint format = ptxEntry >= 16 && ptx < U32(index.Header, 0x54) ? U32(index.Header, (int)(U32(index.Header, 0x58) + ptx * ptxEntry + 12)) : uint.MaxValue;
+        if (format != 0 || e.Size != (long)width * height * 4) { why = $"its format is {format}, not RGBA8888 (0)"; return null; }
+        var part1 = packet.Part1();
+        if (e.Offset + (long)e.Size > part1.Length) { why = "it runs past its group's data"; return null; }
+        return new Texture(part1.AsSpan((int)e.Offset, (int)e.Size).ToArray(), width, height);
+    }
+
+    /// The patch that puts `files` (by OBB path) into the OBB, as rfu reads it, puts `textures`
+    /// (RGBA8888, by OBB path, each the size the OBB's is) in place of the OBB's, and adds `groups`
     /// and `composites`. Files the OBB doesn't have, and groups it has already, are left out, with
     /// a line in `log`.
     public static byte[] Build(string obb, Index index, IReadOnlyDictionary<string, byte[]> files, List<string> log,
-        IReadOnlyList<NewGroup>? groups = null, IReadOnlyList<NewComposite>? composites = null)
+        IReadOnlyList<NewGroup>? groups = null, IReadOnlyList<NewComposite>? composites = null, IReadOnlyDictionary<string, byte[]>? textures = null)
     {
         var byGroup = new SortedDictionary<int, Dictionary<string, byte[]>>();
+        var picturesByGroup = new Dictionary<int, Dictionary<string, byte[]>>();
         foreach (var (path, data) in files)
         {
             string key = Key(path);
@@ -99,6 +125,18 @@ public static class ObbPatch
                 continue;
             }
             if (!byGroup.TryGetValue(g, out var list)) byGroup[g] = list = new(StringComparer.Ordinal);
+            list[key] = data;
+        }
+        foreach (var (path, data) in textures ?? new Dictionary<string, byte[]>())
+        {
+            string key = Key(path);
+            if (!index.Files.TryGetValue(key, out int g) || g < 0 || g >= index.GroupCount)
+            {
+                log.Add($"{path}: the OBB has no such texture; left out");
+                continue;
+            }
+            if (!byGroup.ContainsKey(g)) byGroup[g] = new(StringComparer.Ordinal);
+            if (!picturesByGroup.TryGetValue(g, out var list)) picturesByGroup[g] = list = new(StringComparer.Ordinal);
             list[key] = data;
         }
 
@@ -116,8 +154,15 @@ public static class ObbPatch
                 log.Add($"{k}: not an ordinary file of its group (a texture?); left out");
                 replace.Remove(k);
             }
-            if (replace.Count == 0) continue;
-            var (bytes, part0Size) = packet.Rebuild(replace);
+            var pictures = picturesByGroup.GetValueOrDefault(g) ?? new(StringComparer.Ordinal);
+            foreach (var k in pictures.Keys.ToList())
+                if (!packet.Entries.Any(e => e.Name == k && e.Texture && e.Size == pictures[k].Length))
+                {
+                    log.Add($"{k}: not a texture of its group the size given; left out");
+                    pictures.Remove(k);
+                }
+            if (replace.Count == 0 && pictures.Count == 0) continue;
+            var (bytes, part0Size) = packet.Rebuild(replace, pictures);
             Place(ref end, bytes, packets);
 
             // the group's entry: where its packet is now, and a copy of the packet's header fields
@@ -135,7 +180,8 @@ public static class ObbPatch
                 uint need = U32(bytes, 0x14) + part0Size;
                 if (need > U32(header, po + 128)) { W32(header, po + 128, need); touched.Add((po + 128, 4)); }
             }
-            log.Add($"OBB group {packet.Name}: {replace.Count} file(s) replaced");
+            log.Add(pictures.Count == 0 ? $"OBB group {packet.Name}: {replace.Count} file(s) replaced"
+                : $"OBB group {packet.Name}: {replace.Count} file(s) replaced, pictures put into {pictures.Count} texture(s)");
         }
 
         var writes = new List<(long Offset, byte[] Bytes)>();
@@ -237,9 +283,28 @@ public static class ObbPatch
         foreach (var c in composites)
         {
             if (c.Name.Length is 0 or > 127 || c.Name.Any(ch => ch > 0x7e || ch < 0x20)) { log.Add($"composite group {c.Name}: not a name the RSB can hold; left out"); continue; }
-            if (compositeNames.Contains(c.Name)) { log.Add($"composite group {c.Name}: the OBB has one by that name already; left out"); continue; }
+            if (c.Groups.FirstOrDefault(x => !groupIndex.ContainsKey(x.Group)) is { Group: { } missing }) { log.Add($"composite group {c.Name}: no group {missing}; left out"); continue; }
+            if (compositeNames.Contains(c.Name))
+            {
+                // one the OBB has: the groups it hasn't yet put into its free places
+                var row = t.Composites[t.CompositeMap.First(m => string.Equals(m.Name, c.Name, StringComparison.OrdinalIgnoreCase)).Index];
+                int count = (int)U32(row, 128 + 64 * 16);
+                var have = Enumerable.Range(0, count).Select(i => U32(row, 128 + 16 * i)).ToHashSet();
+                var more = c.Groups.Where(x => !have.Contains((uint)groupIndex[x.Group])).ToList();
+                if (more.Count == 0) continue;
+                if (count + more.Count > 64) { log.Add($"composite group {c.Name}: no room for {more.Count} more group(s); left out"); continue; }
+                foreach (var x in more)
+                {
+                    W32(row, 128 + 16 * count, (uint)groupIndex[x.Group]);
+                    W32(row, 132 + 16 * count, (uint)x.Resolution);
+                    count++;
+                }
+                W32(row, 128 + 64 * 16, (uint)count);
+                log.Add($"OBB composite group {c.Name}: {string.Join(", ", more.Select(x => x.Group))} added to it");
+                added++;
+                continue;
+            }
             if (c.Groups.Count > 64) { log.Add($"composite group {c.Name}: more than 64 groups; left out"); continue; }
-            if (c.Groups.FirstOrDefault(x => !groupIndex.ContainsKey(x.Group)) is { Group: { } unknown }) { log.Add($"composite group {c.Name}: no group {unknown}; left out"); continue; }
             var entry = new byte[t.CompositeEntry];
             Encoding.ASCII.GetBytes(c.Name).CopyTo(entry, 0);
             for (int i = 0; i < c.Groups.Count; i++)
@@ -420,7 +485,11 @@ public static class ObbPatch
         public required byte[] Header;    // the packet's header, name table included
         public required byte[] Part0;     // decompressed
         public required byte[] Part1Raw;  // as stored
+        public required uint Flags, Part1Size;
         public required List<Entry> Entries;
+
+        /// Part 1 (the textures) unpacked.
+        public byte[] Part1() => Part1Raw.Length == 0 ? [] : (Flags & 1) != 0 || Part1Raw.Length != Part1Size ? Inflate(Part1Raw, (int)Part1Size, Name) : Part1Raw[..(int)Part1Size];
 
         public static Packet Load(FileStream fs, Index index, int g)
         {
@@ -437,7 +506,7 @@ public static class ObbPatch
             if (U32(packet, 0) != RsgMagic) throw new FormatException($"group {name} has no packet (pgsr) where the RSB says");
             uint flags = U32(packet, 0x10), headerSize = U32(packet, 0x14);
             uint p0Off = U32(packet, 0x18), p0Packed = U32(packet, 0x1C), p0Size = U32(packet, 0x20);
-            uint p1Off = U32(packet, 0x28), p1Packed = U32(packet, 0x2C);
+            uint p1Off = U32(packet, 0x28), p1Packed = U32(packet, 0x2C), p1Size = U32(packet, 0x30);
             uint mapLen = U32(packet, 0x48), mapOff = U32(packet, 0x4C);
             if (headerSize > len || p0Off + (long)p0Packed > len || (p1Packed > 0 && p1Off + (long)p1Packed > len))
                 throw new FormatException($"group {name}'s packet is cut short");
@@ -451,12 +520,13 @@ public static class ObbPatch
             var part1 = p1Packed > 0 ? packet.AsSpan((int)p1Off, (int)p1Packed).ToArray() : [];
             foreach (var e in entries.Where(e => !e.Texture))
                 if (e.Offset + (long)e.Size > part0.Length) throw new FormatException($"{e.Name} runs past its group's data");
-            return new Packet { Name = name, Header = header, Part0 = part0, Part1Raw = part1, Entries = entries };
+            return new Packet { Name = name, Header = header, Part0 = part0, Part1Raw = part1, Flags = flags, Part1Size = p1Size, Entries = entries };
         }
 
         /// The packet again with some files replaced: part 0 stored, its files in the order they
-        /// were, each at a 4 KB boundary. Returns it and part 0's size.
-        public (byte[] Bytes, uint Part0Size) Rebuild(IReadOnlyDictionary<string, byte[]> replace)
+        /// were, each at a 4 KB boundary. Textures (`pictures`, each the size it was) replaced too
+        /// leave part 1 stored as well. Returns it and part 0's size.
+        public (byte[] Bytes, uint Part0Size) Rebuild(IReadOnlyDictionary<string, byte[]> replace, IReadOnlyDictionary<string, byte[]>? pictures = null)
         {
             var header = (byte[])Header.Clone();
             var part0 = new MemoryStream();
@@ -476,10 +546,20 @@ public static class ObbPatch
             W32(header, 0x1C, p0Size);
             W32(header, 0x20, p0Size);
             W32(header, 0x28, headerSize + p0Size);
-            var bytes = new byte[headerSize + p0Size + Part1Raw.Length];
+            var part1 = Part1Raw;
+            if (pictures is { Count: > 0 })
+            {
+                part1 = Part1();
+                foreach (var e in Entries.Where(e => e.Texture && pictures.ContainsKey(e.Name)))
+                    pictures[e.Name].CopyTo(part1, (int)e.Offset);
+                W32(header, 0x10, U32(header, 0x10) & ~1u);  // part 1 stored
+                W32(header, 0x2C, (uint)part1.Length);
+                W32(header, 0x30, (uint)part1.Length);
+            }
+            var bytes = new byte[headerSize + p0Size + part1.Length];
             header.CopyTo(bytes, 0);
             part0.ToArray().CopyTo(bytes, (int)headerSize);
-            Part1Raw.CopyTo(bytes, (int)(headerSize + p0Size));
+            part1.CopyTo(bytes, (int)(headerSize + p0Size));
             return (bytes, p0Size);
         }
 

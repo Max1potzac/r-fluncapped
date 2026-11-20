@@ -120,7 +120,8 @@ public static class SheetMerge
     /// takes the mod's fields, its resources merged by id (changed or added); a new one is added
     /// ("#remove": true takes one out). Each resource gets the slot the manifest has for its id, or
     /// a new one after the last (any slot the mod gives is left aside), and slot_count grows to
-    /// match. Returns the counts of groups, and the ids of the composite groups the mod adds.
+    /// match. "subgroups#add": [...] adds groups to a composite the manifest has. Returns the counts
+    /// of groups, and the composite groups the mod adds or adds groups to (with just those groups).
     public static (Counts Counts, List<JsonObject> NewComposites) MergeManifest(JsonObject manifest, JsonObject mod)
     {
         var groups = (JsonArray)manifest["groups"]!;
@@ -160,6 +161,18 @@ public static class SheetMerge
             }
             foreach (var (name, value) in copy.ToList())
             {
+                if (name.EndsWith(AddSuffix, StringComparison.Ordinal) && value is JsonArray items)
+                {
+                    // "subgroups#add": [...] adds to a composite's groups (those it hasn't by id)
+                    string list = name[..^AddSuffix.Length];
+                    if (match[list] is not JsonArray into) match[list] = into = new JsonArray();
+                    var known = into.OfType<JsonObject>().Select(Id).ToHashSet();
+                    var fresh = items.OfType<JsonObject>().Where(o => Id(o) is { } id && known.Add(id)).ToList();
+                    foreach (var o in fresh) into.Add(o.DeepClone());
+                    if (list == "subgroups" && fresh.Count > 0)
+                        composites.Add(new JsonObject { ["id"] = gid, ["subgroups"] = new JsonArray(fresh.Select(o => (JsonNode?)o.DeepClone()).ToArray()) });
+                    continue;
+                }
                 if (name == "resources" && match["resources"] is JsonArray have && value is JsonArray more)
                 {
                     foreach (var r in more.OfType<JsonObject>())

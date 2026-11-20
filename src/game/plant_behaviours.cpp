@@ -267,6 +267,8 @@ private:
         }
         call(kLeafSetTarget, {leaf, pick});
         chasing_[leaf] = {pick, damage, now};
+        log::debug("homing retarget: {:#x} goes for zombie {:#x} (x {:.0f}, {:.0f} hp){}", leaf, pick, mem.read<float>(pick + kPosX), hitpoints(pick),
+                   current ? ", its target gone" : "");
     }
 
     Runtime& rt_;

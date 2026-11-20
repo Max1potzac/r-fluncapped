@@ -12,13 +12,14 @@ namespace Pvz2Launcher;
 /// its fields go over the sheet's, objects inside merged the same way, anything else (numbers,
 /// strings, lists) replaced, and its aliases added. A new one is added at the end. A mod's object
 /// with "#remove": true takes the matching one out. An object with neither aliases nor TypeName
-/// merges into the sheet's only object of its objclass (LIVECONFIG's one PVZLiveConfig), else is
-/// added; comment-only objects are left out. A mod sheet with "#replace": true at its top
+/// merges into the sheet's only object of its objclass (LIVECONFIG's one PVZLiveConfig, LawnStrings'
+/// LawnStringsData), else is added; comment-only objects are left out. A mod sheet with "#replace": true at its top
 /// replaces the game's (and earlier mods') whole. "#new": true marks an object the mod adds, so
-/// that one the game already has by that name is a conflict (ModConflicts), not a change.
+/// that one the game already has by that name is a conflict (ModConflicts), not a change. A field
+/// "X#add": [...] adds to the list X rather than replacing it (what X has already is left out).
 public static class SheetMerge
 {
-    public const string ReplaceKey = "#replace", RemoveKey = "#remove", NewKey = "#new";
+    public const string ReplaceKey = "#replace", RemoveKey = "#remove", NewKey = "#new", AddSuffix = "#add";
     static readonly JsonDocumentOptions Options = new() { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip };
 
     public sealed record Counts(int Added, int Changed, int Removed);
@@ -85,7 +86,7 @@ public static class SheetMerge
             else if (obj["objclass"] is JsonValue c && c.GetValueKind() == JsonValueKind.String)
             {
                 // a sheet's one object of its class (LIVECONFIG, PLANTMASTERY ...)
-                var same = objects.OfType<JsonObject>().Where(o => Ids(o).Count == 0 && o["objclass"]?.ToString() == c.ToString()).ToList();
+                var same = objects.OfType<JsonObject>().Where(o => o["objclass"]?.ToString() == c.ToString()).ToList();
                 if (same.Count == 1) match = same[0];
             }
             else continue;  // a comment between objects
@@ -97,8 +98,8 @@ public static class SheetMerge
             }
             if (match == null)
             {
-                var copy = (JsonObject)obj.DeepClone();
-                copy.Remove(NewKey);
+                var copy = new JsonObject();
+                Over(copy, obj);  // without the merge's own keys
                 objects.Add(copy);
                 added++;
             }
@@ -109,6 +110,74 @@ public static class SheetMerge
             }
         }
         return new Counts(added, changed, removed);
+    }
+
+    /// Whether a file is the resource manifest's kind ({"slot_count": n, "groups": [...]}): each
+    /// group a list of resources, each resource with a slot.
+    public static bool IsManifest(JsonNode? node) => node is JsonObject o && o["groups"] is JsonArray && o["objects"] == null;
+
+    /// Puts `mod`'s resource groups into `manifest`, which is changed. A group known by its id
+    /// takes the mod's fields, its resources merged by id (changed or added); a new one is added
+    /// ("#remove": true takes one out). Each resource gets the slot the manifest has for its id, or
+    /// a new one after the last (any slot the mod gives is left aside), and slot_count grows to
+    /// match. Returns the counts of groups, and the ids of the composite groups the mod adds.
+    public static (Counts Counts, List<JsonObject> NewComposites) MergeManifest(JsonObject manifest, JsonObject mod)
+    {
+        var groups = (JsonArray)manifest["groups"]!;
+        var slots = new Dictionary<string, int>(StringComparer.Ordinal);
+        int next = manifest["slot_count"] is JsonValue sc && sc.TryGetValue(out int n) ? n : 0;
+        foreach (var r in groups.OfType<JsonObject>().SelectMany(Resources))
+            if (Id(r) is { } id && r["slot"] is JsonValue v && v.TryGetValue(out int slot))
+            {
+                slots.TryAdd(id, slot);
+                next = Math.Max(next, slot + 1);
+            }
+        int added = 0, changed = 0, removed = 0;
+        var composites = new List<JsonObject>();
+        foreach (var node in ((JsonArray)mod["groups"]!).ToList())
+        {
+            if (node is not JsonObject g || Id(g) is not { } gid) continue;
+            var match = groups.OfType<JsonObject>().FirstOrDefault(o => Id(o) == gid);
+            if (Flag(g, RemoveKey))
+            {
+                if (match != null) { groups.Remove(match); removed++; }
+                continue;
+            }
+            var copy = (JsonObject)g.DeepClone();
+            copy.Remove(NewKey);
+            foreach (var r in Resources(copy))
+                if (Id(r) is { } id)
+                {
+                    if (!slots.TryGetValue(id, out int slot)) slots[id] = slot = next++;
+                    r["slot"] = slot;
+                }
+            if (match == null)
+            {
+                groups.Add(copy);
+                added++;
+                if (copy["type"]?.ToString() == "composite") composites.Add(copy);
+                continue;
+            }
+            foreach (var (name, value) in copy.ToList())
+            {
+                if (name == "resources" && match["resources"] is JsonArray have && value is JsonArray more)
+                {
+                    foreach (var r in more.OfType<JsonObject>())
+                    {
+                        var old = have.OfType<JsonObject>().FirstOrDefault(o => Id(o) == Id(r));
+                        if (old != null) have[have.IndexOf(old)] = r.DeepClone();
+                        else have.Add(r.DeepClone());
+                    }
+                }
+                else match[name] = value?.DeepClone();
+            }
+            changed++;
+        }
+        manifest["slot_count"] = next;
+        return (new Counts(added, changed, removed), composites);
+
+        static IEnumerable<JsonObject> Resources(JsonObject group) => group["resources"] is JsonArray a ? a.OfType<JsonObject>() : [];
+        static string? Id(JsonObject o) => o["id"] is JsonValue v && v.GetValueKind() == JsonValueKind.String ? v.ToString() : null;
     }
 
     public static bool Flag(JsonObject obj, string key) => obj[key] is JsonValue v && v.GetValueKind() == JsonValueKind.True;
@@ -131,6 +200,30 @@ public static class SheetMerge
         foreach (var (name, value) in source.ToList())
         {
             if (name is RemoveKey or NewKey) continue;
+            if (name.EndsWith(AddSuffix, StringComparison.Ordinal) && value is JsonArray items)
+            {
+                // "List#add": [...] puts items at the end of List, those it hasn't already
+                string list = name[..^AddSuffix.Length];
+                if (target[list] is not JsonArray into) target[list] = into = new JsonArray();
+                if (list == "LocStringValues")
+                {
+                    // LawnStrings' [key, text, key, text ...]: a key it has gets the new text
+                    for (int i = 0; i + 1 < items.Count; i += 2)
+                    {
+                        string? key = items[i]?.ToString();
+                        int at = -1;
+                        for (int j = 0; j + 1 < into.Count && at < 0; j += 2)
+                            if (into[j]?.ToString() == key) at = j;
+                        if (at >= 0) into[at + 1] = items[i + 1]?.DeepClone();
+                        else { into.Add(items[i]?.DeepClone()); into.Add(items[i + 1]?.DeepClone()); }
+                    }
+                    continue;
+                }
+                var known = into.Select(a => a?.ToJsonString()).ToHashSet();
+                foreach (var a in items)
+                    if (known.Add(a?.ToJsonString())) into.Add(a?.DeepClone());
+                continue;
+            }
             if (name == "aliases" && target["aliases"] is JsonArray have && value is JsonArray more)
             {
                 var known = have.Select(a => a?.ToJsonString()).ToHashSet();
@@ -138,7 +231,11 @@ public static class SheetMerge
                     if (known.Add(a?.ToJsonString())) have.Add(a?.DeepClone());
                 continue;
             }
-            if (target[name] is JsonObject inner && value is JsonObject over) Over(inner, over);
+            if (value is JsonObject over)
+            {
+                if (target[name] is not JsonObject inner) target[name] = inner = new JsonObject();
+                Over(inner, over);
+            }
             else target[name] = value?.DeepClone();
         }
     }

@@ -74,9 +74,20 @@ public static class ObbPatch
         return found;
     }
 
-    /// The patch that puts `files` (by OBB path) into the OBB, as rfu reads it. Files the OBB
-    /// doesn't have are left out, with a line in `log`.
-    public static byte[] Build(string obb, Index index, IReadOnlyDictionary<string, byte[]> files, List<string> log)
+    /// A texture a mod adds, as the game reads it: `Format` 0 is RGBA8888, 147 ETC1 + A8.
+    public sealed record NewTexture(string Path, byte[] Data, int Width, int Height, int Format);
+
+    /// A resource group a mod adds: its ordinary files (part 0) and its textures (part 1).
+    public sealed record NewGroup(string Name, IReadOnlyList<(string Path, byte[] Data)> Files, IReadOnlyList<NewTexture> Textures);
+
+    /// A composite group a mod adds: its groups, each for a resolution (0: any).
+    public sealed record NewComposite(string Name, IReadOnlyList<(string Group, int Resolution)> Groups);
+
+    /// The patch that puts `files` (by OBB path) into the OBB, as rfu reads it, and adds `groups`
+    /// and `composites`. Files the OBB doesn't have, and groups it has already, are left out, with
+    /// a line in `log`.
+    public static byte[] Build(string obb, Index index, IReadOnlyDictionary<string, byte[]> files, List<string> log,
+        IReadOnlyList<NewGroup>? groups = null, IReadOnlyList<NewComposite>? composites = null)
     {
         var byGroup = new SortedDictionary<int, Dictionary<string, byte[]>>();
         foreach (var (path, data) in files)
@@ -91,7 +102,9 @@ public static class ObbPatch
             list[key] = data;
         }
 
-        var writes = new List<(long Offset, byte[] Bytes)>();
+        var header = (byte[])index.Header.Clone();
+        var touched = new List<(int Offset, int Length)>();  // what changed in the header
+        var packets = new List<(long Offset, byte[] Bytes)>();
         long end = (index.Size + Align - 1) / Align * Align;
         using var fs = File.OpenRead(obb);
         foreach (var (g, replace) in byGroup)
@@ -105,29 +118,33 @@ public static class ObbPatch
             }
             if (replace.Count == 0) continue;
             var (bytes, part0Size) = packet.Rebuild(replace);
-            writes.Add((end, bytes));
+            Place(ref end, bytes, packets);
 
             // the group's entry: where its packet is now, and a copy of the packet's header fields
             int o = (int)(index.GroupOff + g * index.GroupEntry);
-            var entry = index.Header.AsSpan(o, 204 <= index.GroupEntry ? 204 : (int)index.GroupEntry).ToArray();
-            W32(entry, 128, (uint)end);
-            W32(entry, 132, (uint)bytes.Length);
-            for (int i = 0; i < 9; i++) W32(entry, 140 + 4 * i, U32(bytes, 0x10 + 4 * i));
-            W32(entry, 160, part0Size);  // the RSB keeps part 0's size here too
-            writes.Add((o + 128, entry[128..]));
+            W32(header, o + 128, (uint)packets[^1].Offset);
+            W32(header, o + 132, (uint)bytes.Length);
+            for (int i = 0; i < 9; i++) W32(header, o + 140 + 4 * i, U32(bytes, 0x10 + 4 * i));
+            W32(header, o + 160, part0Size);  // the RSB keeps part 0's size here too
+            touched.Add((o + 128, 48));
             // its memory pool: room for the header and part 0
-            uint pool = U32(entry, 136);
+            uint pool = U32(header, o + 136);
             if (pool < index.PoolCount)
             {
                 int po = (int)(index.PoolOff + pool * index.PoolEntry);
                 uint need = U32(bytes, 0x14) + part0Size;
-                if (need > U32(index.Header, po + 128)) writes.Add((po + 128, BitConverter.GetBytes(need)));
+                if (need > U32(header, po + 128)) { W32(header, po + 128, need); touched.Add((po + 128, 4)); }
             }
             log.Add($"OBB group {packet.Name}: {replace.Count} file(s) replaced");
-            end = (end + bytes.Length + Align - 1) / Align * Align;
-            if (end > uint.MaxValue) throw new FormatException("the patched OBB would pass 4 GB");
         }
-        if (writes.Count == 0) return [];
+
+        var writes = new List<(long Offset, byte[] Bytes)>();
+        if ((groups?.Count ?? 0) + (composites?.Count ?? 0) > 0 && Grow(fs, index, header, groups ?? [], composites ?? [], packets, ref end, log) is { } grown)
+            writes.Add((0, grown));
+        else
+            writes.AddRange(touched.Select(t => ((long)t.Offset, header.AsSpan(t.Offset, t.Length).ToArray())));
+        if (packets.Count == 0) return [];
+        writes.AddRange(packets);
         writes.Sort((a, b) => a.Offset.CompareTo(b.Offset));
         long size = Math.Max(index.Size, writes.Max(w => w.Offset + w.Bytes.Length));
 
@@ -146,6 +163,233 @@ public static class ObbPatch
         }
         w.Flush();
         return ms.ToArray();
+    }
+
+    // a packet after the end of the OBB, at a 4 KB boundary
+    static void Place(ref long end, byte[] bytes, List<(long Offset, byte[] Bytes)> packets)
+    {
+        if (end + bytes.Length > uint.MaxValue) throw new FormatException("the patched OBB would pass 4 GB");
+        packets.Add((end, bytes));
+        end = (end + bytes.Length + Align - 1) / Align * Align;
+    }
+
+    /// The RSB's header with `groups` and `composites` added, or null when none could be. Its
+    /// tables are written again one after another; the header grows, so the packets it now
+    /// covers move after the end of the OBB.
+    static byte[]? Grow(FileStream fs, Index index, byte[] header, IReadOnlyList<NewGroup> groups, IReadOnlyList<NewComposite> composites,
+        List<(long Offset, byte[] Bytes)> packets, ref long end, List<string> log)
+    {
+        var t = Tables.Read(header);
+        if (t == null)
+        {
+            log.Add("the OBB's RSB isn't laid out as this launcher knows (version 4), so mods can't add resource groups to it; left out");
+            return null;
+        }
+        var groupIndex = t.GroupMap.ToDictionary(g => g.Name, g => g.Index, StringComparer.OrdinalIgnoreCase);
+        var compositeNames = t.CompositeMap.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fileNames = t.Files.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
+        int added = 0;
+        foreach (var g in groups)
+        {
+            if (g.Name.Length is 0 or > 127 || g.Name.Any(c => c > 0x7e || c < 0x20)) { log.Add($"group {g.Name}: not a name the RSB can hold; left out"); continue; }
+            if (groupIndex.ContainsKey(g.Name)) { log.Add($"group {g.Name}: the OBB has a group by that name already; left out"); continue; }
+            var paths = g.Files.Select(f => Key(f.Path)).Concat(g.Textures.Select(x => Key(x.Path))).ToList();
+            if (paths.FirstOrDefault(fileNames.Contains) is { } taken) { log.Add($"group {g.Name}: the OBB has {taken} already; group left out"); continue; }
+            if (paths.Distinct().Count() != paths.Count) { log.Add($"group {g.Name}: a file is in it twice; left out"); continue; }
+            int gi = t.Groups.Count, pi = t.Pools.Count, ti = t.Ptx.Count;
+            var bytes = NewPacket(g);
+            Place(ref end, bytes, packets);
+            uint p0Size = U32(bytes, 0x20), p1Size = U32(bytes, 0x30);
+
+            var entry = new byte[t.GroupEntry];
+            Encoding.ASCII.GetBytes(g.Name).CopyTo(entry, 0);
+            W32(entry, 128, (uint)packets[^1].Offset);
+            W32(entry, 132, (uint)bytes.Length);
+            W32(entry, 136, (uint)pi);
+            for (int i = 0; i < 9; i++) W32(entry, 140 + 4 * i, U32(bytes, 0x10 + 4 * i));
+            W32(entry, 160, p0Size);
+            W32(entry, 196, (uint)g.Textures.Count);
+            W32(entry, 200, (uint)ti);
+            t.Groups.Add(entry);
+
+            var pool = new byte[t.PoolEntry];
+            Encoding.ASCII.GetBytes(g.Name + "_AutoPool").CopyTo(pool, 0);
+            W32(pool, 128, U32(bytes, 0x14) + p0Size);
+            W32(pool, 132, p1Size);
+            W32(pool, 136, 1);
+            t.Pools.Add(pool);
+
+            foreach (var x in g.Textures)
+            {
+                var ptx = new byte[t.PtxEntry];
+                W32(ptx, 0, (uint)x.Width);
+                W32(ptx, 4, (uint)x.Height);
+                W32(ptx, 8, (uint)x.Width * 4);
+                W32(ptx, 12, (uint)x.Format);
+                t.Ptx.Add(ptx);
+            }
+            foreach (var p in paths) { t.Files.Add((p, gi)); fileNames.Add(p); }
+            t.GroupMap.Add((g.Name.ToUpperInvariant(), gi));
+            groupIndex[g.Name] = gi;
+            log.Add($"OBB group {g.Name} added: {g.Files.Count} file(s), {g.Textures.Count} texture(s)");
+            added++;
+        }
+        foreach (var c in composites)
+        {
+            if (c.Name.Length is 0 or > 127 || c.Name.Any(ch => ch > 0x7e || ch < 0x20)) { log.Add($"composite group {c.Name}: not a name the RSB can hold; left out"); continue; }
+            if (compositeNames.Contains(c.Name)) { log.Add($"composite group {c.Name}: the OBB has one by that name already; left out"); continue; }
+            if (c.Groups.Count > 64) { log.Add($"composite group {c.Name}: more than 64 groups; left out"); continue; }
+            if (c.Groups.FirstOrDefault(x => !groupIndex.ContainsKey(x.Group)) is { Group: { } unknown }) { log.Add($"composite group {c.Name}: no group {unknown}; left out"); continue; }
+            var entry = new byte[t.CompositeEntry];
+            Encoding.ASCII.GetBytes(c.Name).CopyTo(entry, 0);
+            for (int i = 0; i < c.Groups.Count; i++)
+            {
+                W32(entry, 128 + 16 * i, (uint)groupIndex[c.Groups[i].Group]);
+                W32(entry, 132 + 16 * i, (uint)c.Groups[i].Resolution);
+            }
+            W32(entry, 128 + 64 * 16, (uint)c.Groups.Count);
+            t.CompositeMap.Add((c.Name.ToUpperInvariant(), t.Composites.Count));
+            t.Composites.Add(entry);
+            compositeNames.Add(c.Name);
+            log.Add($"OBB composite group {c.Name} added: {string.Join(", ", c.Groups.Select(x => x.Group))}");
+            added++;
+        }
+        if (added == 0) return null;
+
+        var grown = t.Write(header);
+        uint size = U32(grown, 12);
+        // packets the header now covers go after the end of the OBB
+        for (int g = 0; g < index.GroupCount; g++)
+        {
+            var entry = t.Groups[g];
+            uint off = U32(entry, 128), len = U32(entry, 132);
+            if (off >= size) continue;
+            var bytes = new byte[len];
+            fs.Position = off;
+            fs.ReadExactly(bytes);
+            Place(ref end, bytes, packets);
+            W32(entry, 128, (uint)packets[^1].Offset);
+        }
+        return t.Write(header);
+    }
+
+    // a group's packet: the name table, part 0 stored, then the textures stored
+    static byte[] NewPacket(NewGroup g)
+    {
+        var part0 = new MemoryStream();
+        var part1 = new MemoryStream();
+        var names = new List<(string, byte[])>();
+        foreach (var (path, data) in g.Files)
+        {
+            part0.SetLength((part0.Length + Align - 1) / Align * Align);
+            part0.Position = part0.Length;
+            names.Add((Key(path), Payload(0, (uint)part0.Position, (uint)data.Length)));
+            part0.Write(data);
+        }
+        for (int i = 0; i < g.Textures.Count; i++)
+        {
+            var x = g.Textures[i];
+            part1.SetLength((part1.Length + Align - 1) / Align * Align);
+            part1.Position = part1.Length;
+            names.Add((Key(x.Path), Payload(1, (uint)part1.Position, (uint)x.Data.Length, (uint)i, 0, 0, (uint)x.Width, (uint)x.Height)));
+            part1.Write(x.Data);
+        }
+        part0.SetLength((part0.Length + Align - 1) / Align * Align);
+        part1.SetLength((part1.Length + Align - 1) / Align * Align);
+        var trie = Trie.Write(names);
+        uint headerSize = (uint)((0x5C + trie.Length + Align - 1) / Align * Align), p0 = (uint)part0.Length, p1 = (uint)part1.Length;
+        var bytes = new byte[headerSize + p0 + p1];
+        W32(bytes, 0, RsgMagic);
+        W32(bytes, 4, 4);
+        W32(bytes, 0x14, headerSize);
+        W32(bytes, 0x18, headerSize);
+        W32(bytes, 0x1C, p0);
+        W32(bytes, 0x20, p0);
+        W32(bytes, 0x28, headerSize + p0);
+        W32(bytes, 0x2C, p1);
+        W32(bytes, 0x30, p1);
+        W32(bytes, 0x48, (uint)trie.Length);
+        W32(bytes, 0x4C, 0x5C);
+        trie.CopyTo(bytes, 0x5C);
+        part0.ToArray().CopyTo(bytes, (int)headerSize);
+        part1.ToArray().CopyTo(bytes, (int)(headerSize + p0));
+        return bytes;
+    }
+
+    static byte[] Payload(params uint[] values)
+    {
+        var b = new byte[values.Length * 4];
+        for (int i = 0; i < values.Length; i++) W32(b, 4 * i, values[i]);
+        return b;
+    }
+
+    /// The RSB header's tables, version 4 as the game's packer lays it out: the file list, the
+    /// group map, composites, the composite map, groups, pools and textures, one after another.
+    sealed class Tables
+    {
+        public required List<(string Name, int Group)> Files;
+        public required List<(string Name, int Index)> GroupMap, CompositeMap;
+        public required List<byte[]> Composites, Groups, Pools, Ptx;
+        public required int CompositeEntry, GroupEntry, PoolEntry, PtxEntry;
+
+        public static Tables? Read(byte[] h)
+        {
+            if (U32(h, 4) != 4 || U32(h, 0x60) != 0 || U32(h, 0x64) != 0 || U32(h, 0x68) != 0) return null;
+            int ce = (int)U32(h, 0x3C), ge = (int)U32(h, 0x30), pe = (int)U32(h, 0x50), te = (int)U32(h, 0x5C);
+            if (ce != 128 + 64 * 16 + 4 || ge != 204 || pe != 152 || te != 16) return null;
+            var warnings = new List<string>();
+            List<(string, int)> Map(int sizeAt, int offAt, string what)
+            {
+                var list = new List<(string, int)>();
+                Trie.Read(h, (int)U32(h, offAt), (int)U32(h, sizeAt), _ => 4, (n, pos) => list.Add((n, (int)U32(h, pos))), warnings, what);
+                return list;
+            }
+            List<byte[]> Rows(int countAt, int offAt, int entry) =>
+                Enumerable.Range(0, (int)U32(h, countAt)).Select(i => h.AsSpan((int)U32(h, offAt) + i * entry, entry).ToArray()).ToList();
+            var t = new Tables
+            {
+                Files = Map(0x10, 0x14, "file list"), GroupMap = Map(0x20, 0x24, "group map"), CompositeMap = Map(0x40, 0x44, "composite map"),
+                Composites = Rows(0x34, 0x38, ce), Groups = Rows(0x28, 0x2C, ge), Pools = Rows(0x48, 0x4C, pe), Ptx = Rows(0x54, 0x58, te),
+                CompositeEntry = ce, GroupEntry = ge, PoolEntry = pe, PtxEntry = te,
+            };
+            return warnings.Count == 0 ? t : null;
+        }
+
+        /// The header again: `h`'s first 0x70 bytes with the tables' places, then the tables, to
+        /// a 4 KB boundary.
+        public byte[] Write(byte[] h)
+        {
+            var output = new MemoryStream();
+            output.Write(h, 0, 0x70);
+            var head = new byte[0x70];
+            h.AsSpan(0, 0x70).CopyTo(head);
+            void Table(byte[] data, int offAt, int sizeAt)
+            {
+                W32(head, offAt, (uint)output.Length);
+                W32(head, sizeAt, (uint)data.Length);
+                output.Write(data);
+            }
+            void Rows(List<byte[]> rows, int offAt, int countAt)
+            {
+                W32(head, offAt, (uint)output.Length);
+                W32(head, countAt, (uint)rows.Count);
+                foreach (var r in rows) output.Write(r);
+            }
+            Table(Trie.Write(Files.Select(f => (f.Name, Payload((uint)f.Group)))), 0x14, 0x10);
+            Table(Trie.Write(GroupMap.Select(g => (g.Name, Payload((uint)g.Index)))), 0x24, 0x20);
+            Rows(Composites, 0x38, 0x34);
+            Table(Trie.Write(CompositeMap.Select(c => (c.Name, Payload((uint)c.Index)))), 0x44, 0x40);
+            Rows(Groups, 0x2C, 0x28);
+            Rows(Pools, 0x4C, 0x48);
+            Rows(Ptx, 0x58, 0x54);
+            uint size = (uint)((output.Length + Align - 1) / Align * Align);
+            W32(head, 0x0C, size);
+            W32(head, 0x6C, size);
+            output.SetLength(size);
+            var bytes = output.ToArray();
+            head.CopyTo(bytes, 0);
+            return bytes;
+        }
     }
 
     /// Applies a patch to a copy of the OBB (for checking one).

@@ -32,6 +32,7 @@
     <Compile Include="../../pvz2conv/RtonWriter.cs" Link="pvz2conv/RtonWriter.cs" />
     <Compile Include="../../pvz2conv/RtonCrypt.cs" Link="pvz2conv/RtonCrypt.cs" />
     <Compile Include="../../pvz2conv/Trie.cs" Link="pvz2conv/Trie.cs" />
+    <Compile Include="../../pvz2conv/Png.cs" Link="pvz2conv/Png.cs" />
   </ItemGroup>
 
 </Project>

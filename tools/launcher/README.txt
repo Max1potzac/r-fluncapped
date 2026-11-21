@@ -162,7 +162,12 @@ CONTENT (cdn\ and files\ in a mod)
   A mod's obb\PACKAGES\LAWNSTRINGS-<language>.json (a new plant's name and
   almanac text) also goes over the CDN's LawnStrings-<language>: once the
   game has downloaded its CDN content it reads its strings from there and not
-  from the OBB, so strings only in the OBB would show as <Missing ...>.
+  from the OBB, so strings only in the OBB would show as <Missing ...>. The
+  game reads that content out of the archive it downloads (CDN.<version>\
+  tar.full), not the files it unpacks next to it, so the launcher also puts
+  the merged strings (and any other cdn\ file of a mod that the archive has)
+  into a copy of that archive, which the game reads in its place. A download
+  of new content shows from the launch after it.
   Mods load in order, so where two change the same field the later wins.
   Two mods adding the same new name (the same plant ID, say) can't be on
   together: switching the second on asks which one to keep, and Play stops

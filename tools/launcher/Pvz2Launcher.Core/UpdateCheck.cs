@@ -169,6 +169,52 @@ static class Tar
         }
     }
 
+    /// Copies a tar archive with the data of some regular files swapped for other data (by entry
+    /// name; null keeps an entry's own), every header otherwise as it was. Returns the names swapped.
+    public static List<string> Rewrite(Stream input, Stream output, Func<string, byte[]?> replacement)
+    {
+        var swapped = new List<string>();
+        var header = new byte[512];
+        string? longName = null;
+        while (ReadExactly(input, header))
+        {
+            if (header.All(b => b == 0))
+            {
+                output.Write(header);
+                input.CopyTo(output);  // the end blocks and any padding after them
+                break;
+            }
+            string name = CString(header, 0, 100);
+            string prefix = CString(header, 345, 155);
+            if (prefix.Length > 0 && header[257] == 'u') name = prefix + "/" + name;
+            long size = Octal(header, 124, 12);
+            char type = (char)header[156];
+            if (size > int.MaxValue) throw new InvalidDataException($"tar entry {name} is too big");
+            var data = new byte[size];
+            if (!ReadExactly(input, data)) throw new InvalidDataException("tar archive cut short");
+            long pad = (512 - size % 512) % 512;
+            if (pad > 0 && !ReadExactly(input, new byte[pad])) throw new InvalidDataException("tar archive cut short");
+            if (type == 'L') longName = Encoding.UTF8.GetString(data).TrimEnd('\0');
+            else
+            {
+                if (longName != null) { name = longName; longName = null; }
+                if (type is '0' or '\0' && replacement(name) is { } swap)
+                {
+                    data = swap;
+                    Encoding.ASCII.GetBytes(Convert.ToString(data.Length, 8).PadLeft(11, '0') + "\0").CopyTo(header, 124);
+                    for (int i = 148; i < 156; i++) header[i] = (byte)' ';
+                    int sum = header.Sum(b => b);
+                    Encoding.ASCII.GetBytes(Convert.ToString(sum, 8).PadLeft(6, '0') + "\0 ").CopyTo(header, 148);
+                    swapped.Add(name);
+                }
+            }
+            output.Write(header);
+            output.Write(data);
+            output.Write(new byte[(512 - data.Length % 512) % 512]);
+        }
+        return swapped;
+    }
+
     static bool ReadExactly(Stream s, byte[] buf)
     {
         int got = 0;

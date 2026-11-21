@@ -255,9 +255,17 @@ void ObbStringsTest()
     var g = MakeGame("ObbStringsGame");
     string cdn = Path.Combine(g.DataDir, "external", "files", "No_Backup", "CDN.1.4.2");
     Directory.CreateDirectory(cdn);
-    File.WriteAllBytes(Path.Combine(cdn, "LawnStrings-en-US.rton"), Pvz2Conv.RtonWriter.FromJson("""
+    byte[] gameStrings = Pvz2Conv.RtonWriter.FromJson("""
         {"version":1,"objects":[{"aliases":["LawnStringsData"],"objclass":"LawnStringsData","objdata":{"LocStringValues":["PLAY","Play"]}}]}
-        """u8));
+        """u8);
+    File.WriteAllBytes(Path.Combine(cdn, "LawnStrings-en-US.rton"), gameStrings);
+    // the archive the game unpacked them from, which it reads them out of
+    using (var fs = File.Create(Path.Combine(cdn, "tar.full")))
+    {
+        WriteTarEntry(fs, "./LawnStrings-en-US.rton", gameStrings);
+        WriteTarEntry(fs, "levels/egypt1.json", "{}"u8.ToArray());
+        fs.Write(new byte[1024]);
+    }
     string dir = Path.Combine(g.ModsDir, "Plant Strings", "obb", "PACKAGES");
     Directory.CreateDirectory(dir);
     File.WriteAllText(Path.Combine(dir, "LAWNSTRINGS-EN-US.json"), """
@@ -272,6 +280,29 @@ void ObbStringsTest()
         $"over the CDN's strings: {string.Join(" | ", r.Log)}");
     Expect(!Directory.EnumerateFiles(Path.Combine(g.WorkDir, "overlay", "cdn")).Any(f => f.Contains("de-DE", StringComparison.OrdinalIgnoreCase)),
         "a language the CDN doesn't have is left to the OBB");
+    string archive = Path.Combine(g.WorkDir, "overlay", "cdn", "tar.full");
+    var entries = File.Exists(archive) ? ReadTar(File.ReadAllBytes(archive)) : [];
+    Expect(entries.Count == 2 && entries[0].Name == "./LawnStrings-en-US.rton" && ToJson(entries[0].Data).Contains("New Plant") &&
+           entries[1].Name == "levels/egypt1.json" && entries[1].Data.SequenceEqual("{}"u8.ToArray()) && new FileInfo(archive).Length % 512 == 0,
+        $"the merged strings go into the game's archive too: {string.Join(" | ", r.Log)}");
+}
+
+// A tar's regular files, checking each header's checksum.
+static List<(string Name, byte[] Data)> ReadTar(byte[] tar)
+{
+    var list = new List<(string, byte[])>();
+    for (int at = 0; at + 512 <= tar.Length && tar[at] != 0;)
+    {
+        var h = tar.AsSpan(at, 512).ToArray();
+        string name = Encoding.ASCII.GetString(h, 0, 100).TrimEnd('\0');
+        int size = Convert.ToInt32(Encoding.ASCII.GetString(h, 124, 11), 8);
+        int sum = Convert.ToInt32(Encoding.ASCII.GetString(h, 148, 6), 8);
+        for (int i = 148; i < 156; i++) h[i] = (byte)' ';
+        if (h.Sum(b => b) != sum) throw new InvalidDataException($"bad checksum for {name}");
+        if (h[156] is (byte)'0' or 0) list.Add((name, tar.AsSpan(at + 512, size).ToArray()));
+        at += 512 + (size + 511) / 512 * 512;
+    }
+    return list;
 }
 
 void UpdateCheckTest()
@@ -404,6 +435,8 @@ static void WriteTarEntry(Stream s, string name, byte[] data)
         Encoding.ASCII.GetBytes(Convert.ToString(size, 8).PadLeft(11, '0')).CopyTo(h, 124);
         h[156] = (byte)type;
         Encoding.ASCII.GetBytes("ustar ").CopyTo(h, 257);
+        for (int i = 148; i < 156; i++) h[i] = (byte)' ';
+        Encoding.ASCII.GetBytes(Convert.ToString(h.Sum(b => b), 8).PadLeft(6, '0') + "\0 ").CopyTo(h, 148);
         s.Write(h);
     }
     void Body(byte[] b)

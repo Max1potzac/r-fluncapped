@@ -113,7 +113,11 @@ whole (rflib_hooks.json), so the kill shot hooks `Board::AddProjectile` instead:
 plant that fires its normal projectile is armed (and not in plant food), the props handle in `x1`
 points at the special projectile's sheet in its place. `Projectile::Hit` runs after the damage is
 done, so a normal projectile whose zombie is left dead (or at 0 hp) arms its plant, and a special
-one that hits anything (a zombie, its shield, a grid item) disarms it. `--homing-retarget` hooks
+one that hits anything (a zombie, its shield, a grid item) disarms it. A kill shot with an
+animation (`PineconeDefault=PineconeKnockback:attack2`) also hooks the call in `PlantAnimRig` that
+starts the attack animation (`0x5c6030`, the label a short `std::string` "attack" on its stack in
+`x1`): when the rig is an armed plant's (its weak pointer at `+0x118`), the label is written over
+with the kill shot's, so that animation's `use_action` fires the special shot. `--homing-retarget` hooks
 `HomingThistleLeaf`'s update: one with no target, or a target that can't be hit any more, goes for
 the zombie nearest the house that the leaves already chasing it (each counting its damage) won't
 finish; at debug level each retarget is logged. `--plant-id` gives a new plant the number the

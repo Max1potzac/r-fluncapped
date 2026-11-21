@@ -123,26 +123,46 @@ public sealed class Game : IDisposable
         }
     }
 
-    /// The game's text in a language ("en-US"): its LawnStrings, key -> text.
+    /// The game's text in a language ("en-US"): its LawnStrings, key -> text. Newer games keep it in
+    /// a sheet (PACKAGES\LAWNSTRINGS-EN-US.RTON), older ones in LOCALES\EN-US\PROPERTIES\LAWNSTRINGS.TXT.
     public IReadOnlyDictionary<string, string> Strings(string language = "en-US")
     {
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (Sheet($"LAWNSTRINGS-{language}") is not { } sheet || sheet["objects"] is not JsonArray objects) return result;
-        foreach (var o in objects.OfType<JsonObject>())
+        lock (_strings)
         {
-            var values = o["objdata"]?["LocStringValues"];
-            if (values is JsonArray pairs)
-                for (int i = 0; i + 1 < pairs.Count; i += 2)
+            if (_strings.TryGetValue(language, out var cached)) return cached;
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (Sheet(StringsSheet(language)) is { } sheet && sheet["objects"] is JsonArray objects)
+            {
+                foreach (var o in objects.OfType<JsonObject>())
                 {
-                    if (pairs[i]?.GetValueKind() == System.Text.Json.JsonValueKind.String && pairs[i + 1]?.GetValueKind() == System.Text.Json.JsonValueKind.String)
-                        result[pairs[i]!.GetValue<string>()] = pairs[i + 1]!.GetValue<string>();
+                    var values = o["objdata"]?["LocStringValues"];
+                    if (values is JsonArray pairs)
+                        for (int i = 0; i + 1 < pairs.Count; i += 2)
+                        {
+                            if (pairs[i]?.GetValueKind() == System.Text.Json.JsonValueKind.String && pairs[i + 1]?.GetValueKind() == System.Text.Json.JsonValueKind.String)
+                                result[pairs[i]!.GetValue<string>()] = pairs[i + 1]!.GetValue<string>();
+                        }
+                    else if (values is JsonObject map)
+                        foreach (var (k, v) in map)
+                            if (v?.GetValueKind() == System.Text.Json.JsonValueKind.String) result[k] = v.GetValue<string>();
                 }
-            else if (values is JsonObject map)
-                foreach (var (k, v) in map)
-                    if (v?.GetValueKind() == System.Text.Json.JsonValueKind.String) result[k] = v.GetValue<string>();
+            }
+            else if (Obb?.Read(StringsTxt(language)) is { } txt)
+                foreach (var (k, v) in StringsText.Parse(txt)) result[k] = v;
+            return _strings[language] = result;
         }
-        return result;
     }
+
+    readonly Dictionary<string, Dictionary<string, string>> _strings = new(StringComparer.OrdinalIgnoreCase);
+
+    /// The sheet a language's strings are in, when the game keeps them in one ("LAWNSTRINGS-EN-US").
+    public static string StringsSheet(string language) => "LAWNSTRINGS-" + language.ToUpperInvariant();
+
+    /// The older games' strings file in the OBB.
+    public static string StringsTxt(string language) => $@"LOCALES\{language.ToUpperInvariant()}\PROPERTIES\LAWNSTRINGS.TXT";
+
+    /// Whether the game's strings are a sheet (newer games) rather than a .txt (older ones).
+    public bool StringsInSheet(string language = "en-US") => Sheet(StringsSheet(language)) != null;
 
     public void Dispose() => Obb?.Dispose();
 }

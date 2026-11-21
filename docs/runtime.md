@@ -134,6 +134,18 @@ a name at `0x11761f0`, number to name at `0x1175f5c`, the name a `std::string` t
 the find inside PlantType to number, at `0x1182d08`) answer for the plants given. The addresses are checked
 against the code expected there, as for the other fixes.
 
+`src/game/preview_flags.cpp` (`--preview-flags`): a purely visual mod's (mod.json's `"rfu"`). The
+zombies waiting on the street before a level starts are placed by the intro's `PlaceStreetZombies`
+(`0x6f1474`, from IntroBoardDispatch's handler at `0x6d46e4`), on a grid of spots 9 across and 10
+down (at `sp + 0x90`: 5 for a spot the scenery blocks, 3 for a zombie, 1 beside one), each with
+`0x6f2918` (street, zombie type handle, column, row). A hook at its end (`0x6f1eb8`) adds the
+level's flag zombie through that same call, once per flag, three columns left of the leftmost
+zombie and five to a column. The count is the wave manager's own (`0x8d6494`: every
+FlagWaveInterval waves, the last wave, and any listed flag waves), none when its properties'
+SuppressFlagZombie (`+0x65`) is set; the type is the stage's FlagZombieTypeName (`+0xe0` in the
+StageModuleProperties the StageModule's handle at `+0x10` names). They're street zombies like the
+rest, so they leave when the level starts.
+
 `src/game/game_keys.cpp` (keybinds `seed <n>`, `shovel`, `plantfood`, `fastforward`, `pause`): the
 seed bank (`SeedBankNew`), its packets and the buttons (`ShovelUI`, `PlantfoodUI`,
 `FastForwardButton`, `PauseButton`) belong to the game's newer UI, not to Sexy's widgets; their

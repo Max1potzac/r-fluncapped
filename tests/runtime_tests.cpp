@@ -10,6 +10,7 @@
 #include "core/vfs.h"
 #include "game/game_keys.h"
 #include "game/plant_behaviours.h"
+#include "game/preview_flags.h"
 #include "platform/key_hints.h"
 #include "platform/keybinds.h"
 #include "platform/png.h"
@@ -263,6 +264,19 @@ void test_plant_options() {
         EXPECT(!rfu::parse_plant_id(bad, p, error));
 }
 
+void test_preview_flag_rows() {
+    // one in the middle; more spread over the 10 rows, top to bottom, none off the street
+    EXPECT(rfu::preview_flag_row(0, 1) == 5);
+    EXPECT(rfu::preview_flag_row(0, 2) == 2 && rfu::preview_flag_row(1, 2) == 7);
+    EXPECT(rfu::preview_flag_row(0, 3) == 1 && rfu::preview_flag_row(1, 3) == 5 && rfu::preview_flag_row(2, 3) == 8);
+    for (int n = 1; n <= 5; ++n)
+        for (int i = 0; i < n; ++i) {
+            int row = rfu::preview_flag_row(i, n);
+            EXPECT(row >= 0 && row <= 9);
+            if (i > 0) EXPECT(row > rfu::preview_flag_row(i - 1, n));
+        }
+}
+
 void test_file_patch() {
     // "RFUPATCH", version 1, two writes, over a 10-byte file made 16 long
     auto le = [](std::string& s, std::uint64_t v, int n) {
@@ -434,7 +448,7 @@ void test_guest_offline(const std::filesystem::path& dir) {
 int main(int argc, char** argv) {
     rfu::log::set_level(rfu::log::Level::Warn);
     std::vector<std::pair<const char*, std::function<void()>>> tests{
-        {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"key hints", test_key_hints}, {"pad binds", test_pad_binds}, {"map buttons", test_map_buttons}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}, {"plant options", test_plant_options}};
+        {"quad", test_quad}, {"utf8", test_utf8}, {"vfs", test_vfs}, {"vfs overlay", test_vfs_overlay}, {"keybinds", test_keybinds}, {"key hints", test_key_hints}, {"pad binds", test_pad_binds}, {"map buttons", test_map_buttons}, {"patches", test_patches}, {"png", test_png}, {"heap", test_heap}, {"plant options", test_plant_options}, {"preview flag rows", test_preview_flag_rows}};
     if (argc > 1) {
         tests.emplace_back("guest", [&] { test_guest(argv[1]); });
         tests.emplace_back("hooks", [&] { test_hooks(argv[1]); });

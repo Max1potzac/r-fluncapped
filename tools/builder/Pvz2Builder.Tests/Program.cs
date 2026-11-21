@@ -7,6 +7,8 @@ using Pvz2Launcher;
 //   profile <obb or game folder>          what the game has
 //   render <obb> <POPANIM_ID> <out.png>   a PopAnim's preview
 //   sprites <obb> <POPANIM_ID>            a PopAnim's sprites
+//   files <obb> <regex> [file]            the OBB's files, and one RTON file as JSON
+//   classes <obb> <regex>                 the classes the game's sheets use, with their fields
 //   pamjson <obb> <POPANIM_ID> <out.json> a PopAnim as JSON
 //   image <obb> <IMAGE_ID or ATLAS.PTX> <out.png>   one picture cut out of its atlas, or a whole atlas
 //   image <obb> list <GROUP>              a resource group's PopAnims and pictures
@@ -37,6 +39,24 @@ if (args.Length >= 4 && args[0] == "image")
     if (pic == null) { Console.WriteLine("no such picture"); return 1; }
     File.WriteAllBytes(args[3], pic.ToPng());
     Console.WriteLine($"{pic.Width}x{pic.Height}");
+    return 0;
+}
+if (args.Length >= 3 && args[0] == "files")
+{
+    using var game = Game.Open(args[1]);
+    var re = new System.Text.RegularExpressions.Regex(args[2], System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    foreach (var f in game.Obb!.Files.Where(f => re.IsMatch(f)).OrderBy(f => f)) Console.WriteLine(f);
+    if (args.Length > 3 && game.Obb.Read(args[3]) is { } data)
+        Console.WriteLine(Pvz2Launcher.SheetMerge.Parse(data)?.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    return 0;
+}
+if (args.Length >= 3 && args[0] == "classes")
+{
+    using var game = Game.Open(args[1]);
+    var schema = Schema.Infer(game);
+    var re = new System.Text.RegularExpressions.Regex(args[2], System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    foreach (var c in schema.Classes.Values.Where(c => re.IsMatch(c.Name)).OrderBy(c => c.Name))
+        Console.WriteLine($"{c.Name} ({c.Objects}): {string.Join(", ", c.Fields.Select(f => $"{f.Key}:{f.Value.Main}"))}");
     return 0;
 }
 if (args.Length >= 4 && args[0] == "pamjson")

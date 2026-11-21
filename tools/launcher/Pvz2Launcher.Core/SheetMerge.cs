@@ -17,9 +17,11 @@ namespace Pvz2Launcher;
 /// replaces the game's (and earlier mods') whole. "#new": true marks an object the mod adds, so
 /// that one the game already has by that name is a conflict (ModConflicts), not a change. A field
 /// "X#add": [...] adds to the list X rather than replacing it (what X has already is left out).
+/// "X#merge": [...] merges objects into the list X's: each names the fields it's known by with
+/// "#key" ("Type", or a list), and goes over X's object with those values as above, or is added.
 public static class SheetMerge
 {
-    public const string ReplaceKey = "#replace", RemoveKey = "#remove", NewKey = "#new", AddSuffix = "#add";
+    public const string ReplaceKey = "#replace", RemoveKey = "#remove", NewKey = "#new", AddSuffix = "#add", MergeSuffix = "#merge", KeyKey = "#key";
     static readonly JsonDocumentOptions Options = new() { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip };
 
     public sealed record Counts(int Added, int Changed, int Removed);
@@ -212,7 +214,27 @@ public static class SheetMerge
     {
         foreach (var (name, value) in source.ToList())
         {
-            if (name is RemoveKey or NewKey) continue;
+            if (name is RemoveKey or NewKey or KeyKey) continue;
+            if (name.EndsWith(MergeSuffix, StringComparison.Ordinal) && value is JsonArray merges)
+            {
+                // "List#merge": [{"#key": "Type", "Type": "plant", ...}] goes over List's object of that Type
+                string list = name[..^MergeSuffix.Length];
+                if (target[list] is not JsonArray into) target[list] = into = new JsonArray();
+                foreach (var m in merges.OfType<JsonObject>())
+                {
+                    var keys = m[KeyKey] switch
+                    {
+                        JsonValue k when k.GetValueKind() == JsonValueKind.String => [k.ToString()],
+                        JsonArray ks => ks.Select(k => k?.ToString() ?? "").ToList(),
+                        _ => new List<string>(),
+                    };
+                    var match = keys.Count == 0 ? null : into.OfType<JsonObject>().FirstOrDefault(o =>
+                        keys.All(k => m[k] != null && o[k]?.ToJsonString() == m[k]!.ToJsonString()));
+                    if (match == null) into.Add(match = new JsonObject());
+                    Over(match, m);
+                }
+                continue;
+            }
             if (name.EndsWith(AddSuffix, StringComparison.Ordinal) && value is JsonArray items)
             {
                 // "List#add": [...] puts items at the end of List, those it hasn't already

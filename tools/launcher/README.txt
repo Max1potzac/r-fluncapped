@@ -153,6 +153,12 @@ CONTENT (cdn\ and files\ in a mod)
     "List#add": [...]   adds to the list List rather than replacing it (what
                    it has already is left out); LawnStrings' LocStringValues
                    by key, so a key it has gets the new text
+    "List#merge": [{"#key": "Type", "Type": "plant", ...}]   changes the
+                   object of the list List whose Type is "plant" as above
+                   (only the fields given, "X#add" too), or adds it if there
+                   is none; "#key" can be a list of fields, all of which must
+                   match. The Pinecone sample puts its plant into the shop's
+                   allow list (MAGENTO_FILTER) this way.
   Mods load in order, so where two change the same field the later wins.
   Two mods adding the same new name (the same plant ID, say) can't be on
   together: switching the second on asks which one to keep, and Play stops

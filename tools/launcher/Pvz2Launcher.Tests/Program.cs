@@ -813,6 +813,14 @@ void SheetMergeTest()
     Expect(fonts.Contains("ONLY") && !fonts.Contains("BODY") && !fonts.Contains("#replace"), $"#replace: {fonts}");
     Directory.Delete(whole.Dir, true);
 
+    // "List#merge": an object of the list found by its "#key" fields gets the mod's over it, else is added
+    var filter = (System.Text.Json.Nodes.JsonObject)SheetMerge.Parse("""{"version":1,"objects":[{"aliases":["Filter"],"objdata":{"Filters":[{"Type":"plant","Sub":["peashooter"]},{"Type":"zombie","Sub":["tutorial"]}]}}]}"""u8.ToArray())!;
+    var addTo = (System.Text.Json.Nodes.JsonObject)SheetMerge.Parse("""{"version":1,"objects":[{"aliases":["Filter"],"objdata":{"Filters#merge":[{"#key":"Type","Type":"plant","Sub#add":["newplant","peashooter"]},{"#key":["Type"],"Type":"gem","Sub":["all"]}]}}]}"""u8.ToArray())!;
+    var mc = SheetMerge.Merge(filter, addTo);
+    string merged = filter.ToJsonString();
+    Expect(mc.Changed == 1 && merged.Contains("{\"Type\":\"plant\",\"Sub\":[\"peashooter\",\"newplant\"]}") && merged.Contains("{\"Type\":\"zombie\",\"Sub\":[\"tutorial\"]}")
+        && merged.Contains("{\"Type\":\"gem\",\"Sub\":[\"all\"]}") && !merged.Contains('#'), $"#merge: {merged}");
+
     // conflicts: an ID the game has, and two mods adding the same new one
     var taken = MakeSheetMod("Sunflower Two", ("PLANTTYPES.json", """{"version":1,"objects":[{"#new":true,"objclass":"PlantType","aliases":["sunflower"],"objdata":{"TypeName":"sunflower"}}]}"""));
     var c = ModConflicts.Find(g, [taken]);

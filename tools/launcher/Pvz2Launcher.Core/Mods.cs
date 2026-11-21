@@ -433,6 +433,23 @@ public static class Mods
             }
         }
 
+        // a mod's strings for the OBB's LAWNSTRINGS-<language> (a new plant's name...) go over the
+        // CDN's LawnStrings-<language> too, which the game reads in their place once it has them
+        foreach (var mod in mods)
+        {
+            string packages = Path.Combine(mod, "obb", "PACKAGES");
+            if (!Directory.Exists(packages)) continue;
+            foreach (var file in Directory.EnumerateFiles(packages).Order(StringComparer.OrdinalIgnoreCase))
+            {
+                string stem = Path.GetFileNameWithoutExtension(file);
+                if (!stem.StartsWith("LawnStrings-", StringComparison.OrdinalIgnoreCase) || !file.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) continue;
+                if (FindStrings(baseDirs["cdn"], stem["LawnStrings-".Length..]) is not { } gameFile) continue;
+                var key = ("cdn", Path.GetRelativePath(baseDirs["cdn"], gameFile));
+                if (!plan.TryGetValue(key, out var sources)) plan[key] = sources = [];
+                sources.Add(file);
+            }
+        }
+
         // localizations: their strings over the game's LawnStrings for their language
         foreach (var mod in localizations)
         {
@@ -914,7 +931,7 @@ public static class Mods
         {
             foreach (var p in e.EnumerateObject())
             {
-                if (p.Name == "LocStringValues") return p.Value;
+                if (p.Name is "LocStringValues" or "LocStringValues" + SheetMerge.AddSuffix) return p.Value;
                 if (FindLocStrings(p.Value) is { } v) return v;
             }
         }

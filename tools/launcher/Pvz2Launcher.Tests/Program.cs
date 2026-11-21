@@ -34,6 +34,7 @@ var tests = new (string Name, Action Run)[]
     ("controller setup", PadSetupTest),
     ("fonts and OBB patch", ObbPatchTest),
     ("property sheet merge", SheetMergeTest),
+    ("mods' OBB strings over the CDN's", ObbStringsTest),
     ("resource groups and atlas pictures", ResourceGroupsTest),
 };
 foreach (var (name, run) in tests)
@@ -245,6 +246,32 @@ void LevelPackTest()
     File.SetLastWriteTimeUtc(Path.Combine(cdn, "LawnStrings-en-US.rton"), DateTime.UtcNow.AddMinutes(1));
     Mods.Build(g, [name]);
     Expect(ToJson(File.ReadAllBytes(strings)).Contains("New") && ToJson(File.ReadAllBytes(strings)).Contains("Hot out here!"), "rebuilt over new game strings");
+}
+
+// A new plant's strings, given for the OBB's LAWNSTRINGS: the game reads the CDN's LawnStrings in
+// their place once it has downloaded them, so they go over those too.
+void ObbStringsTest()
+{
+    var g = MakeGame("ObbStringsGame");
+    string cdn = Path.Combine(g.DataDir, "external", "files", "No_Backup", "CDN.1.4.2");
+    Directory.CreateDirectory(cdn);
+    File.WriteAllBytes(Path.Combine(cdn, "LawnStrings-en-US.rton"), Pvz2Conv.RtonWriter.FromJson("""
+        {"version":1,"objects":[{"aliases":["LawnStringsData"],"objclass":"LawnStringsData","objdata":{"LocStringValues":["PLAY","Play"]}}]}
+        """u8));
+    string dir = Path.Combine(g.ModsDir, "Plant Strings", "obb", "PACKAGES");
+    Directory.CreateDirectory(dir);
+    File.WriteAllText(Path.Combine(dir, "LAWNSTRINGS-EN-US.json"), """
+        {"version":1,"objects":[{"aliases":["LawnStringsData"],"objclass":"LawnStringsData","objdata":{"LocStringValues#add":["NEWPLANT","New Plant"]}}]}
+        """);
+    File.WriteAllText(Path.Combine(dir, "LAWNSTRINGS-DE-DE.json"), """
+        {"version":1,"objects":[{"objclass":"LawnStringsData","objdata":{"LocStringValues#add":["NEWPLANT","Neue Pflanze"]}}]}
+        """);
+    var r = Mods.Build(g, ["Plant Strings"]);
+    string strings = Path.Combine(g.WorkDir, "overlay", "cdn", "LawnStrings-en-US.rton");
+    Expect(File.Exists(strings) && ToJson(File.ReadAllBytes(strings)) is var json && json.Contains("New Plant") && json.Contains("PLAY"),
+        $"over the CDN's strings: {string.Join(" | ", r.Log)}");
+    Expect(!Directory.EnumerateFiles(Path.Combine(g.WorkDir, "overlay", "cdn")).Any(f => f.Contains("de-DE", StringComparison.OrdinalIgnoreCase)),
+        "a language the CDN doesn't have is left to the OBB");
 }
 
 void UpdateCheckTest()

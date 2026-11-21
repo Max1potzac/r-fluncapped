@@ -443,7 +443,12 @@ public static class Mods
             {
                 string stem = Path.GetFileNameWithoutExtension(file);
                 if (!stem.StartsWith("LawnStrings-", StringComparison.OrdinalIgnoreCase) || !file.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) continue;
-                if (FindStrings(baseDirs["cdn"], stem["LawnStrings-".Length..]) is not { } gameFile) continue;
+                if (FindStrings(baseDirs["cdn"], stem["LawnStrings-".Length..]) is not { } gameFile)
+                {
+                    log.Add($"{Path.GetFileName(mod)}: no {stem} in {baseDirs["cdn"]}, so its {Path.GetFileName(file)} is in the OBB only " +
+                            "(the game reads the online copy in its place once it has downloaded it)");
+                    continue;
+                }
                 var key = ("cdn", Path.GetRelativePath(baseDirs["cdn"], gameFile));
                 if (!plan.TryGetValue(key, out var sources)) plan[key] = sources = [];
                 sources.Add(file);
@@ -468,7 +473,7 @@ public static class Mods
         Directory.CreateDirectory(game.WorkDir);
         string outDir = Path.Combine(game.WorkDir, "overlay");
         string stampPath = Path.Combine(game.WorkDir, "overlay.stamp");
-        string stamp = Stamp(plan, guest, baseDirs);
+        string stamp = Stamp(plan, guest, baseDirs, Path.Combine(baseDirs["cdn"], CdnArchive));
         bool fresh = File.Exists(stampPath) && File.ReadAllText(stampPath) == stamp && Directory.Exists(outDir);
         if (!fresh)
         {
@@ -505,6 +510,7 @@ public static class Mods
                     failed++;
                 }
             }
+            if (plan.Keys.Any(k => k.Root == "cdn") && !PutIntoArchive(Path.Combine(baseDirs["cdn"], CdnArchive), Path.Combine(outDir, "cdn"), log)) failed++;
             log.Add($"built {picked.Count} mod(s): {copied} files copied, {converted} converted or merged{(failed > 0 ? $", {failed} failed" : "")}");
             File.WriteAllText(stampPath, failed == 0 ? stamp : "");
         }
@@ -768,7 +774,50 @@ public static class Mods
         return match == null ? rel : Path.Combine(Path.GetDirectoryName(rel) ?? "", match);
     }
 
-    static string Stamp(Dictionary<(string Root, string Rel), List<string>> plan, Dictionary<string, string> guest, Dictionary<string, string> baseDirs)
+    // The archive the game downloads its CDN content as, in the CDN folder. It reads the files it
+    // applies (strings, schedules ...) out of it, not from the copies it unpacks next to it.
+    const string CdnArchive = "tar.full";
+
+    /// The CDN archive with the overlay's files in place of its own (by path, ignoring case), as
+    /// the overlay's tar.full, which the game then reads in place of its download. False when the
+    /// archive can't be read; true, and nothing written, when there's no archive or nothing in it to swap.
+    static bool PutIntoArchive(string archive, string overlayCdn, List<string> log)
+    {
+        if (!System.IO.File.Exists(archive) || !Directory.Exists(overlayCdn)) return true;
+        static string Norm(string p) => p.Replace('\\', '/').TrimStart('.', '/').ToLowerInvariant();
+        var ours = Directory.EnumerateFiles(overlayCdn, "*", SearchOption.AllDirectories)
+            .ToDictionary(f => Norm(Path.GetRelativePath(overlayCdn, f)), f => f);
+        ours.Remove(CdnArchive);
+        if (ours.Count == 0) return true;
+        string dest = Path.Combine(overlayCdn, CdnArchive), temp = dest + ".part";
+        try
+        {
+            using (var input = System.IO.File.OpenRead(archive))
+            {
+                if (input.ReadByte() == 0x1F) { log.Add($"{archive} is compressed; the mods' strings and files are left out of it"); return true; }
+                input.Position = 0;
+                List<string> swapped;
+                using (var output = System.IO.File.Create(temp))
+                    swapped = Tar.Rewrite(input, output, name => ours.TryGetValue(Norm(name), out var f) ? System.IO.File.ReadAllBytes(f) : null);
+                if (swapped.Count == 0)
+                {
+                    System.IO.File.Delete(temp);
+                    return true;
+                }
+                log.Add($"{CdnArchive}: {string.Join(", ", swapped)} put into the game's downloaded content");
+            }
+            System.IO.File.Move(temp, dest, true);
+            return true;
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            log.Add($"FAIL {archive}: {e.Message}");
+            try { System.IO.File.Delete(temp); } catch (IOException) { }
+            return false;
+        }
+    }
+
+    static string Stamp(Dictionary<(string Root, string Rel), List<string>> plan, Dictionary<string, string> guest, Dictionary<string, string> baseDirs, string archive)
     {
         var sb = new StringBuilder();
         void File(string path)
@@ -776,6 +825,7 @@ public static class Mods
             var info = new FileInfo(path);
             sb.Append(path).Append(' ').Append(info.Exists ? info.Length : -1).Append(' ').Append(info.Exists ? info.LastWriteTimeUtc.Ticks : 0).Append('\n');
         }
+        File(archive);
         foreach (var g in guest) sb.Append(g.Key).Append('=').Append(g.Value).Append('\n');
         foreach (var ((root, rel), sources) in plan.OrderBy(p => p.Key.Root).ThenBy(p => p.Key.Rel, StringComparer.Ordinal))
         {
@@ -822,14 +872,15 @@ public static class Mods
         return path;
     }
 
-    /// The game's LawnStrings-<language> file in its CDN folder (at the top, or one folder down).
+    /// The game's LawnStrings-<language> file in its CDN folder, the shallowest one there.
     static string? FindStrings(string cdnDir, string language)
     {
         if (!Directory.Exists(cdnDir)) return null;
         bool Match(string f) => Path.GetFileNameWithoutExtension(f).Equals("LawnStrings-" + language, StringComparison.OrdinalIgnoreCase) &&
                                 Path.GetExtension(f).ToLowerInvariant() is ".rton" or ".json";
-        return Directory.EnumerateFiles(cdnDir).FirstOrDefault(Match) ??
-               Directory.EnumerateDirectories(cdnDir).SelectMany(Directory.EnumerateFiles).FirstOrDefault(Match);
+        return Directory.EnumerateFiles(cdnDir, "*", SearchOption.AllDirectories).Where(Match)
+            .OrderBy(f => Path.GetRelativePath(cdnDir, f).Count(c => c == Path.DirectorySeparatorChar)).ThenBy(f => f, StringComparer.Ordinal)
+            .FirstOrDefault();
     }
 
     static bool IsStrings(string rel) => Path.GetFileName(rel).StartsWith("LawnStrings", StringComparison.OrdinalIgnoreCase);

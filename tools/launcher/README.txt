@@ -235,14 +235,20 @@ PLAY
   1. With no content or localization on, the launcher asks if you want to load
      some (a folder; tick "Don't ask again" to stop it asking). The folder is
      copied into the game's mods\ and switched on.
-  2. With no custom content, it checks for a new version of the game. It
-     downloads the game's CDN content for your version (only when it changed)
-     and reads ForceUpdateConfigData's MinVersion, the same value the game
-     uses to tell a phone to update. Above your APK's version: you're told,
-     and can point it at the new APK and OBB (the old ones move to old\, saves
-     stay) or play anyway. New events, Pinata Parties and Penny's Challenges
-     don't change MinVersion, so they never count as updates. Offline, it
-     reads the CDN content the game downloaded last time.
+  2. It downloads the game's CDN content for your version (only when it
+     changed), the way the game is about to. When that fails (no data for 30
+     seconds, as the game gives up; usually a slow or unsteady connection), it
+     warns you first: "CDN download failed. Continue anyway?". The game would
+     fail too and play with the content it downloaded last, so a new event
+     can show last year's levels, or be missing.
+     With no custom content, it also checks for a new version of the game: it
+     reads ForceUpdateConfigData's MinVersion from that content, the same
+     value the game uses to tell a phone to update. Above your APK's version:
+     you're told, and can point it at the new APK and OBB (the old ones move
+     to old\, saves stay) or play anyway. New events, Pinata Parties and
+     Penny's Challenges don't change MinVersion, so they never count as
+     updates. When the download fails, it reads the CDN content the game
+     downloaded last time.
   3. Reflourished 1.5.0 and later update their OBB themselves before they
      start (Android's Java side does it, which rfu doesn't run), so the
      launcher does it for them: it asks the game's update server which OBB is

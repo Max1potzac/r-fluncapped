@@ -982,6 +982,21 @@ sealed class MainForm : BackdropForm, ILaunchUi
         return TaskDialog.ShowDialog(this, page) == TaskDialogButton.Yes;
     }
 
+    public bool ContinueAnyway(string heading, string message)
+    {
+        Log($"{heading}: {message.Replace("\n\nContinue anyway?", "")}");
+        var page = new TaskDialogPage
+        {
+            Caption = "PvZ2 Launcher",
+            Heading = heading,
+            Text = message,
+            Icon = TaskDialogIcon.Warning,
+            Buttons = { TaskDialogButton.Yes, TaskDialogButton.No },
+            DefaultButton = TaskDialogButton.Yes,
+        };
+        return TaskDialog.ShowDialog(this, page) == TaskDialogButton.Yes;
+    }
+
     public UpdateChoice AskAboutUpdate(GameFolder game, UpdateCheck.Result result)
     {
         var update = new TaskDialogButton("Give it the new version...");

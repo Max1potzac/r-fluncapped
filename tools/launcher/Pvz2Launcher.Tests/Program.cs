@@ -330,6 +330,29 @@ void UpdateCheckTest()
     File.Copy(tar, Path.Combine(cdn, "tar.full"));
     var result = UpdateCheck.RunAsync(g, new HttpClient { Timeout = TimeSpan.FromSeconds(5) }).GetAwaiter().GetResult();
     Expect(result.Outcome == UpdateCheck.Outcome.UpdateAvailable && result.MinVersion == "1.4.3", $"offline fallback: {result.Message}");
+    Expect(result.DownloadError != null, "the failed download is reported");
+    string warning = UpdateCheck.DownloadWarning(g, result.DownloadError!);
+    Expect(warning.Contains("CDN failed") && warning.Contains("last year's levels") && warning.EndsWith("Continue anyway?"), $"warning: {warning}");
+    // a server that answers, then stalls: the check gives up as the game would
+    var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    listener.Start();
+    var serving = Task.Run(async () =>
+    {
+        using var client = await listener.AcceptTcpClientAsync();
+        var stream = client.GetStream();
+        await stream.ReadAsync(new byte[4096]);
+        await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\nabc"u8.ToArray());
+        await Task.Delay(4000);
+    });
+    var stallBefore = UpdateCheck.StallTimeout;
+    UpdateCheck.StallTimeout = TimeSpan.FromSeconds(1);
+    g.Settings.CdnUrl = $"http://127.0.0.1:{((System.Net.IPEndPoint)listener.LocalEndpoint).Port}/{{version}}.main.tar";
+    result = UpdateCheck.RunAsync(g, new HttpClient { Timeout = Timeout.InfiniteTimeSpan }).GetAwaiter().GetResult();
+    UpdateCheck.StallTimeout = stallBefore;
+    Expect(result.DownloadError == "nothing came for 1 seconds" && result.MinVersion == "1.4.3", $"stalled download: {result.DownloadError}; {result.Message}");
+    serving.Wait();
+    listener.Stop();
+
     g.Settings.CdnUrl = "";
     result = UpdateCheck.RunAsync(g, new HttpClient()).GetAwaiter().GetResult();
     Expect(result.Outcome == UpdateCheck.Outcome.Unknown, "no CDN address, no check");

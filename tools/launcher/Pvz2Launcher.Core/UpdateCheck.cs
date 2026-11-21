@@ -14,10 +14,18 @@ public static class UpdateCheck
 {
     public enum Outcome { UpToDate, UpdateAvailable, Unknown }
 
-    public sealed record Result(Outcome Outcome, string Message, string? MinVersion = null);
+    /// DownloadError: why the CDN archive couldn't be downloaded now, when it couldn't (the
+    /// connection), which is what the game is about to try too.
+    public sealed record Result(Outcome Outcome, string Message, string? MinVersion = null, string? DownloadError = null);
+
+    /// The game gives up on a download that sends nothing for this long (its HTTP timeout, per
+    /// read), so the check does too: a connection that stalls fails it the same way.
+    public static TimeSpan StallTimeout = TimeSpan.FromSeconds(30);
 
     /// Downloads the CDN archive for the game's version (only when it changed since last time) and
-    /// reads MinVersion from it. Falls back to the archive the game itself downloaded last.
+    /// reads MinVersion from it. Falls back to the archive the game itself downloaded last. The
+    /// archive is tens of MB, so `http` shouldn't cut it off by its own timeout: a download that
+    /// stalls for StallTimeout fails instead.
     public static async Task<Result> RunAsync(GameFolder game, HttpClient http, CancellationToken cancel = default)
     {
         string? receiver = game.Info?.VersionName;
@@ -31,11 +39,14 @@ public static class UpdateCheck
         string archive = Path.Combine(cacheDir, "cdn.tar"), etagPath = Path.Combine(cacheDir, "etag.txt");
 
         string source;
+        string? downloadError = null;
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             if (File.Exists(archive) && File.Exists(etagPath)) request.Headers.TryAddWithoutValidation("If-None-Match", File.ReadAllText(etagPath));
-            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel);
+            stall.CancelAfter(StallTimeout);
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stall.Token);
             if (response.StatusCode == HttpStatusCode.NotFound)
                 return new Result(Outcome.UpdateAvailable, $"the CDN has no content for version {receiver} any more, which usually means a newer version is out");
             if (response.StatusCode != HttpStatusCode.NotModified)
@@ -43,19 +54,30 @@ public static class UpdateCheck
                 response.EnsureSuccessStatusCode();
                 string temp = archive + ".part";
                 await using (var file = File.Create(temp))
-                    await response.Content.CopyToAsync(file, cancel);
+                await using (var body = await response.Content.ReadAsStreamAsync(stall.Token))
+                {
+                    var buffer = new byte[81920];
+                    for (;;)
+                    {
+                        stall.CancelAfter(StallTimeout);
+                        int n = await body.ReadAsync(buffer, stall.Token);
+                        if (n == 0) break;
+                        await file.WriteAsync(buffer.AsMemory(0, n), cancel);
+                    }
+                }
                 File.Move(temp, archive, true);
                 if (response.Headers.ETag != null) File.WriteAllText(etagPath, response.Headers.ETag.ToString());
                 else File.Delete(etagPath);
             }
             source = "the CDN";
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        catch (Exception e) when ((e is HttpRequestException or OperationCanceledException or IOException) && !cancel.IsCancellationRequested)
         {
+            downloadError = e is OperationCanceledException ? $"nothing came for {StallTimeout.TotalSeconds:0} seconds" : e.Message;
             // offline: the archive the game downloaded on its last run, or our own last copy
             string gameCopy = Path.Combine(game.DataDir, "external", "files", "No_Backup", Mods.CdnFolderName(game), "tar.full");
             if (File.Exists(gameCopy)) archive = gameCopy;
-            else if (!File.Exists(archive)) return new Result(Outcome.Unknown, $"couldn't reach the CDN ({e.Message})");
+            else if (!File.Exists(archive)) return new Result(Outcome.Unknown, $"couldn't download from the CDN ({downloadError})", DownloadError: downloadError);
             source = "the last downloaded CDN content (the CDN couldn't be reached)";
         }
 
@@ -63,12 +85,25 @@ public static class UpdateCheck
         try { min = MinVersionFromArchive(archive); }
         catch (Exception e) when (e is IOException or InvalidDataException or FormatException)
         {
-            return new Result(Outcome.Unknown, $"couldn't read the CDN content: {e.Message}");
+            return new Result(Outcome.Unknown, $"couldn't read the CDN content: {e.Message}", DownloadError: downloadError);
         }
-        if (min == null) return new Result(Outcome.Unknown, $"{source} has no ForceUpdateConfigData, so the version can't be compared");
+        if (min == null) return new Result(Outcome.Unknown, $"{source} has no ForceUpdateConfigData, so the version can't be compared", DownloadError: downloadError);
         return CompareVersions(min, receiver) > 0
-            ? new Result(Outcome.UpdateAvailable, $"the game wants version {min} or newer; you have {receiver}", min)
-            : new Result(Outcome.UpToDate, $"version {receiver} is current (the CDN asks for {min} or newer)", min);
+            ? new Result(Outcome.UpdateAvailable, $"the game wants version {min} or newer; you have {receiver}", min, downloadError)
+            : new Result(Outcome.UpToDate, $"version {receiver} is current (the CDN asks for {min} or newer)", min, downloadError);
+    }
+
+    /// The warning before playing when the CDN download failed: the game will most likely fail to
+    /// download its new content too (new events, their levels, the strings), and play with what
+    /// it downloaded last.
+    public static string DownloadWarning(GameFolder game, string error)
+    {
+        var have = new FileInfo(Path.Combine(game.DataDir, "external", "files", "No_Backup", Mods.CdnFolderName(game), "tar.full"));
+        string with = have.Exists ? $"the content it downloaded on {have.LastWriteTime:d MMMM yyyy}" : "no online content at all";
+        return $"Downloading the game's online content from the CDN failed ({error}). This is usually the internet connection: " +
+               $"a slow or unsteady one times out on it. The game will most likely fail the same way and play with {with}, " +
+               "so anything newer is missing: an event that started since then can show last year's levels, or not be there.\n\n" +
+               "Continue anyway?";
     }
 
     /// MinVersion from the first ForceUpdateConfigData in a tar (or .tar.gz) of JSON and RTON files.

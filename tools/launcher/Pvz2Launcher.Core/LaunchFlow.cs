@@ -25,6 +25,9 @@ public interface ILaunchUi
 
     /// A yes/no question (a big download, say).
     bool Confirm(string message);
+
+    /// A warning that asks whether to go on (the CDN download failed): true to play anyway.
+    bool ContinueAnyway(string heading, string message);
 }
 
 public enum UpdateChoice { GetNewVersion, PlayAnyway, Cancel }
@@ -69,13 +72,19 @@ public sealed class LaunchFlow(string launcherDir, HttpClient http, ILaunchUi ui
         }
         game.SaveSettings();
 
-        // No custom content: check the CDN for a new version, as the game would.
-        if (!restart && !Mods.AnyContentOn(game) && !s.Offline)
+        // The CDN: whether the game can download its content (new events), and with no custom
+        // content, whether a new version is out, as the game would.
+        if (!restart && !s.Offline)
         {
-            ui.Log("checking for a new version...");
-            var result = await UpdateCheck.RunAsync(game, http);
-            ui.Log($"update check: {result.Message}");
-            if (result.Outcome == UpdateCheck.Outcome.UpdateAvailable)
+            ui.Log("checking the CDN...");
+            var result = await UpdateCheck.RunAsync(game, downloads ?? http);
+            ui.Log($"CDN check: {result.Message}");
+            if (result.DownloadError is { } error && !ui.ContinueAnyway("Warning! CDN download failed", UpdateCheck.DownloadWarning(game, error)))
+            {
+                ui.Log("not started: the CDN download failed");
+                return null;
+            }
+            if (result.Outcome == UpdateCheck.Outcome.UpdateAvailable && !Mods.AnyContentOn(game))
             {
                 switch (ui.AskAboutUpdate(game, result))
                 {

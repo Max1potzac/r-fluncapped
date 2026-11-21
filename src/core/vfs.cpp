@@ -1,5 +1,7 @@
 #include "core/vfs.h"
 
+#include "core/log.h"
+
 #include <algorithm>
 
 namespace rfu {
@@ -32,6 +34,13 @@ bool has_prefix(const std::string& path, const std::string& prefix) {
            (path.size() == prefix.size() || path[prefix.size()] == '/');
 }
 
+// Android's two names for its shared storage: overlays and the paths looked up in them use the
+// second, the one the game is given (its external files folder), whichever a caller named.
+std::string storage_name(std::string path) {
+    if (has_prefix(path, "/sdcard")) path = "/storage/emulated/0" + path.substr(7);
+    return path;
+}
+
 }  // namespace
 
 std::string path_to_utf8(const std::filesystem::path& p) {
@@ -48,7 +57,7 @@ void Vfs::mount(std::string guest, std::filesystem::path host) {
     std::sort(mounts_.begin(), mounts_.end(), [](const Mount& a, const Mount& b) { return a.guest.size() > b.guest.size(); });
 }
 
-void Vfs::overlay(std::string guest, std::filesystem::path host) { overlays_.push_back({normalise(guest), std::move(host)}); }
+void Vfs::overlay(std::string guest, std::filesystem::path host) { overlays_.push_back({storage_name(normalise(guest)), std::move(host)}); }
 
 void Vfs::add_virtual(std::string guest, Generator gen) { virtual_.emplace_back(normalise(guest), std::move(gen)); }
 
@@ -81,9 +90,28 @@ std::optional<std::filesystem::path> under(const std::string& path, const std::s
 
 }  // namespace
 
+bool Vfs::written(const std::string& guest_path) {
+    std::string path = storage_name(absolute(guest_path));
+    {
+        std::lock_guard lock(written_mutex_);
+        if (!written_.insert(path).second) return false;
+    }
+    std::error_code ec;
+    for (const auto& o : overlays_)
+        if (auto host = under(path, o.guest, o.host); host && std::filesystem::is_regular_file(*host, ec)) {
+            log::info("overlay: the game wrote {}, so it reads its own from now on, not the mods' copy (made again from it next launch)", path);
+            return true;
+        }
+    return false;
+}
+
 std::optional<std::filesystem::path> Vfs::to_host_read(const std::string& guest_path) const {
-    std::string path = absolute(guest_path);
+    std::string path = storage_name(absolute(guest_path));
     auto base = to_host(path);
+    if (!overlays_.empty()) {
+        std::lock_guard lock(written_mutex_);
+        if (written_.count(path)) return base;
+    }
     std::error_code ec;
     for (auto it = overlays_.rbegin(); it != overlays_.rend(); ++it) {
         auto host = under(path, it->guest, it->host);
@@ -96,7 +124,7 @@ std::optional<std::filesystem::path> Vfs::to_host_read(const std::string& guest_
 }
 
 std::vector<std::filesystem::path> Vfs::layers(const std::string& guest_path) const {
-    std::string path = absolute(guest_path);
+    std::string path = storage_name(absolute(guest_path));
     std::vector<std::filesystem::path> out;
     std::error_code ec;
     if (auto base = to_host(path); base && std::filesystem::is_directory(*base, ec)) out.push_back(*base);

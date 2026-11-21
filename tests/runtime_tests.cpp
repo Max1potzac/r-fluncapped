@@ -85,10 +85,25 @@ void test_vfs_overlay() {
     EXPECT(read("/cdn/new") == rfu::path_to_utf8(root / "mod2/new"));  // one only a mod has
     EXPECT(rfu::path_to_utf8(*vfs.to_host("/cdn/levels/a.json")) == rfu::path_to_utf8(root / "game/levels/a.json"));  // writes
     EXPECT(vfs.layers("/cdn/levels").size() == 3 && vfs.layers("/cdn/new").size() == 1 && vfs.layers("/cdn/none").empty());
+    // Once the game writes a file (its CDN download), it reads its own: the overlay's copy is older.
+    EXPECT(vfs.written("/cdn/levels/../levels/a.json") && !vfs.written("/cdn/levels/a.json"));
+    EXPECT(read("/cdn/levels/a.json") == rfu::path_to_utf8(root / "game/levels/a.json"));
+    EXPECT(!vfs.written("/cdn/levels/b.json") && read("/cdn/levels/b.json") == rfu::path_to_utf8(root / "game/levels/b.json"));
+    EXPECT(read("/cdn/levels/c.json") == rfu::path_to_utf8(root / "mod2/levels/c.json"));
     // A file mounted on its own (the OBB) shows up in its folder's listing, if it's there.
     write(root / "elsewhere/main.obb", "obb");
     vfs.mount("/cdn/levels/main.obb", root / "elsewhere/main.obb");
     vfs.mount("/cdn/levels/gone.obb", root / "elsewhere/gone.obb");
+    // Android's two names for shared storage are one folder to an overlay.
+    write(root / "sd/files/x.json", "game x");
+    write(root / "modsd/files/x.json", "mod x");
+    vfs.mount("/storage/emulated/0", root / "sd");
+    vfs.mount("/sdcard", root / "sd");
+    vfs.overlay("/sdcard", root / "modsd");
+    EXPECT(read("/storage/emulated/0/files/x.json") == rfu::path_to_utf8(root / "modsd/files/x.json"));
+    EXPECT(read("/sdcard/files/x.json") == rfu::path_to_utf8(root / "modsd/files/x.json"));
+    EXPECT(vfs.written("/sdcard/files/x.json") && !vfs.written("/storage/emulated/0/files/x.json"));
+    EXPECT(read("/storage/emulated/0/files/x.json") == rfu::path_to_utf8(root / "sd/files/x.json"));
     auto kids = vfs.mounted_children("/cdn/levels");
     EXPECT(kids.size() == 1 && kids[0] == "main.obb");
     EXPECT(vfs.mounted_children("/cdn").empty());

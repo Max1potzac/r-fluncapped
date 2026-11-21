@@ -192,7 +192,7 @@ void ModsTest()
     var r = Mods.Build(g, [n1, n2]);
     string outDir = Path.Combine(g.WorkDir, "overlay");
     Expect(r.Overlays.Count == 2, $"two overlays: {string.Join(", ", r.Overlays)}");
-    Expect(r.Overlays.Any(o => o.Guest == "/sdcard/Android/data/com.ea.game.pvz2_rfl/files/No_Backup/CDN.1.4.2"), "CDN guest path");
+    Expect(r.Overlays.Any(o => o.Guest == "/storage/emulated/0/Android/data/com.ea.game.pvz2_rfl/files/No_Backup/CDN.1.4.2"), "CDN guest path");
     Expect(File.ReadAllText(Path.Combine(outDir, "cdn", "levels", "egypt1.json")).Contains("mod2"), "later mod wins");
     Expect(File.Exists(Path.Combine(outDir, "cdn", "levels", "custom1.json")), "new level copied");
     Expect(!File.Exists(Path.Combine(outDir, "cdn", "mod.json")), "mod.json left out");

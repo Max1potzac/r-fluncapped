@@ -30,7 +30,7 @@ namespace Pvz2Launcher;
 ///   cdn/...         content over the game's CDN folder (No_Backup/CDN.<version>: levels, strings,
 ///                   liveconfig ...), the content the game downloads and RFLib reads
 ///   files/...       content over the game's external files folder (what Android calls
-///                   /sdcard/Android/data/<package>/files)
+///                   /storage/emulated/0/Android/data/<package>/files)
 ///   fonts/...       fonts in place of the game's, by its font's file name (BrianneTod.ttf): a
 ///                   localization's fonts with the letters the game's lack. Each takes the name of
 ///                   the font it replaces, so the game's typefaces (FONTS.RTON) use it.
@@ -401,7 +401,7 @@ public static class Mods
 
         string package = game.Info?.Package is { Length: > 0 } p ? p : "com.ea.game.pvz2_rfl";
         string cdnName = CdnFolderName(game);
-        string filesGuest = $"/sdcard/Android/data/{package}/files";
+        string filesGuest = $"/storage/emulated/0/Android/data/{package}/files";  // where the game is told its files are (rfu takes /sdcard too)
         var guest = new Dictionary<string, string> { ["cdn"] = $"{filesGuest}/No_Backup/{cdnName}", ["files"] = filesGuest };
         var baseDirs = new Dictionary<string, string>
         {

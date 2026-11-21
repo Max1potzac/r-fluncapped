@@ -15,6 +15,7 @@
 #include "game/game_keys.h"
 #include "game/hover.h"
 #include "game/plant_behaviours.h"
+#include "game/preview_flags.h"
 #include "core/log.h"
 #include "jni/jni.h"
 #include "platform/gles.h"
@@ -73,6 +74,7 @@ void usage() {
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
                  "  --custom-cursor          the glove for the mouse, in place of the system's arrow\n"
                  "  --fix-animations         unfreeze plants stuck on an animation while the level isn't running\n"
+                 "  --preview-flags          the level's flag zombie, once per flag, ahead of the zombies shown before it starts\n"
                  "  --kill-shot <a>=<b>[:<l>] a plant whose projectile <a> kills fires <b> next, until one hits, with its\n"
                  "                           attack animation <l> if given (new plants; projectile aliases; see\n"
                  "                           src/game/plant_behaviours.h)\n"
@@ -173,6 +175,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> patch_files;
     bool load_mod_libs = true;
     bool fix_animations = false;
+    bool preview_flags = false;
     rfu::PlantBehaviours plant_behaviours;
     bool key_hints = false;
     std::vector<rfu::PadBind> pad_binds;
@@ -238,6 +241,8 @@ int main(int argc, char** argv) {
                 app.window.hover = true;
             } else if (arg == "--fix-animations") {
                 fix_animations = true;
+            } else if (arg == "--preview-flags") {
+                preview_flags = true;
             } else if (arg == "--kill-shot") {
                 rfu::PlantBehaviours::KillShot k;
                 std::string error;
@@ -515,6 +520,7 @@ int main(int argc, char** argv) {
 
         if (app.window.hover) app.window.hover = rfu::install_hover_collect(rt, pvz2);
         if (fix_animations) rfu::install_animation_fix(rt, pvz2);
+        if (preview_flags) rfu::install_preview_flags(rt, pvz2);
         if (!plant_behaviours.empty()) rfu::install_plant_behaviours(rt, pvz2, plant_behaviours);
         bool game_keybinds = !app.script.empty() || std::any_of(app.window.keybinds.begin(), app.window.keybinds.end(), [](const auto& b) {
             return rfu::platform::is_game_action(b.action);

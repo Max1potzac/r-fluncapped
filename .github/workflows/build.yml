@@ -80,3 +80,22 @@ jobs:
           path: |
             tools/launcher/publish/PvZ2Launcher.exe
             tools/launcher/README.txt
+
+  builder:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Test
+        run: dotnet run --project tools/builder/Pvz2Builder.Tests
+      - name: Publish
+        run: dotnet publish tools/builder/Pvz2Builder -c Release -o tools/builder/publish
+      - name: Upload PvZ2Builder.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvz2builder-windows-x64
+          path: |
+            tools/builder/publish/PvZ2Builder.exe
+            tools/builder/README.txt

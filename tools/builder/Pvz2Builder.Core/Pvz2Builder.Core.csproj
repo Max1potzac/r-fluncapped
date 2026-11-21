@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Everything the Builder does that isn't a window: opening a game, its catalogue, the field
+       schema, edits saved as a launcher mod, sprites and PAM previews. Plain .NET, so it builds and
+       is tested on any OS. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Pvz2Builder</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pvz2Builder" />
+    <InternalsVisibleTo Include="Pvz2Builder.Tests" />
+  </ItemGroup>
+
+  <!-- game folders, mod.json and the property sheet merge the launcher applies -->
+  <ItemGroup>
+    <ProjectReference Include="../../launcher/Pvz2Launcher.Core/Pvz2Launcher.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LZMA-SDK" Version="22.1.1" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
+  </ItemGroup>
+
+  <!-- the OBB, RTON, PTX and PAM readers, shared with pvz2conv (internal here, so they don't clash
+       with the launcher's copies) -->
+  <ItemGroup>
+    <Compile Include="../../pvz2conv/BinReader.cs" Link="pvz2conv/BinReader.cs" />
+    <Compile Include="../../pvz2conv/Trie.cs" Link="pvz2conv/Trie.cs" />
+    <Compile Include="../../pvz2conv/Rsb.cs" Link="pvz2conv/Rsb.cs" />
+    <Compile Include="../../pvz2conv/Rslb.cs" Link="pvz2conv/Rslb.cs" />
+    <Compile Include="../../pvz2conv/Unpack.cs" Link="pvz2conv/Unpack.cs" />
+    <Compile Include="../../pvz2conv/Ptx.cs" Link="pvz2conv/Ptx.cs" />
+    <Compile Include="../../pvz2conv/Pam.cs" Link="pvz2conv/Pam.cs" />
+    <Compile Include="../../pvz2conv/Png.cs" Link="pvz2conv/Png.cs" />
+  </ItemGroup>
+
+</Project>

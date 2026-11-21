@@ -150,5 +150,6 @@ Options:
 | `tests` | Host unit tests and `tests/guest/testlib.c`, an arm64 library run under the JIT |
 | `tools/pvz2conv` | C# tool that takes the libraries and icon out of the game's .apk, unpacks its .obb, converts PTX to PNG and RTON, PAM, POPFX to JSON, and JSON back to RTON (see its README.txt) |
 | `tools/launcher` | C# launcher: a menu per game, the update check, custom content (mods), keybinds and code patches (see its README.txt) |
+| `tools/builder` | C# modding toolkit (PvZ2 Builder): opens any international PvZ2 game (EA's, Reflourished, fan games), lists what that game has, edits its property sheets with typed fields, previews its animations, and saves the edits as a launcher mod (see its README.txt) |
 
 See [docs/runtime.md](docs/runtime.md) for how the pieces fit together.

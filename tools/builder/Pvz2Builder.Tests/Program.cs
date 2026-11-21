@@ -7,6 +7,11 @@ using Pvz2Launcher;
 //   profile <obb or game folder>          what the game has
 //   render <obb> <POPANIM_ID> <out.png>   a PopAnim's preview
 //   sprites <obb> <POPANIM_ID>            a PopAnim's sprites
+//   files <obb> <regex> [file]            the OBB's files, and one RTON file as JSON
+//   classes <obb> <regex>                 the classes the game's sheets use, with their fields
+//   pamjson <obb> <POPANIM_ID> <out.json> a PopAnim as JSON
+//   image <obb> <IMAGE_ID or ATLAS.PTX> <out.png>   one picture cut out of its atlas, or a whole atlas
+//   image <obb> list <GROUP>              a resource group's PopAnims and pictures
 
 if (args.Length >= 2 && args[0] == "profile")
 {
@@ -25,10 +30,54 @@ if (args.Length >= 3 && args[0] == "sprites")
         Console.WriteLine($"sprite {i}: {anim.Sprites[i].Name} ({anim.Sprites[i].Frames.Length} frames){(PamPreview.DefaultHidden(anim.Sprites[i].Name) ? ", hidden" : "")}");
     return 0;
 }
+if (args.Length >= 4 && args[0] == "image")
+{
+    using var game = Game.Open(args[1]);
+    var r = Resources.Load(game);
+    if (args[2] == "list" && args.Length > 3) { foreach (var g in r.PopAnimsIn(args[3])) Console.WriteLine(g); foreach (var i in r.ImagesIn(args[3])) Console.WriteLine($"{i.Id} {i.AtlasPath} {i.W}x{i.H}"); return 0; }
+    var pic = args[2].EndsWith(".PTX", StringComparison.OrdinalIgnoreCase) ? r.Atlas(args[2]) : r.Image(args[2]);
+    if (pic == null) { Console.WriteLine("no such picture"); return 1; }
+    File.WriteAllBytes(args[3], pic.ToPng());
+    Console.WriteLine($"{pic.Width}x{pic.Height}");
+    return 0;
+}
+if (args.Length >= 3 && args[0] == "files")
+{
+    using var game = Game.Open(args[1]);
+    var re = new System.Text.RegularExpressions.Regex(args[2], System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    foreach (var f in game.Obb!.Files.Where(f => re.IsMatch(f)).OrderBy(f => f)) Console.WriteLine(f);
+    if (args.Length > 3 && game.Obb.Read(args[3]) is { } data)
+        Console.WriteLine(Pvz2Launcher.SheetMerge.Parse(data)?.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    return 0;
+}
+if (args.Length >= 3 && args[0] == "classes")
+{
+    using var game = Game.Open(args[1]);
+    var schema = Schema.Infer(game);
+    var re = new System.Text.RegularExpressions.Regex(args[2], System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    foreach (var c in schema.Classes.Values.Where(c => re.IsMatch(c.Name)).OrderBy(c => c.Name))
+        Console.WriteLine($"{c.Name} ({c.Objects}): {string.Join(", ", c.Fields.Select(f => $"{f.Key}:{f.Value.Main}"))}");
+    return 0;
+}
+if (args.Length >= 4 && args[0] == "pamjson")
+{
+    using var game = Game.Open(args[1]);
+    using var f = File.Create(args[3]);
+    using var w = new System.Text.Json.Utf8JsonWriter(f, new() { Indented = true });
+    Pvz2Conv.Pam.ToJson(Resources.Load(game).PopAnimFile(args[2])!, w, []);
+    return 0;
+}
 if (args.Length >= 4 && args[0] == "render")
 {
     using var game = Game.Open(args[1]);
-    var pic = PamPreview.Render(Resources.Load(game), args[2], out var why, scale: args.Length > 4 ? double.Parse(args[4]) : 0.5);
+    var resources = Resources.Load(game);
+    Picture? pic; string why = "";
+    if (args.Length > 5)
+    {
+        var anim = PamAnimation.Parse(resources.PopAnimFile(args[2])!);
+        pic = PamPreview.Render(anim, id => resources.Image(id) is { } p ? (p, int.Parse(resources.ResOf(id)!)) : null, 0, double.Parse(args[4]), args[5] == "-" ? null : args[5], n => args.Skip(6).Contains(n) || (args[5] == "-" && PamPreview.DefaultHidden(n)));
+    }
+    else pic = PamPreview.Render(resources, args[2], out why, scale: args.Length > 4 ? double.Parse(args[4]) : 0.5);
     if (pic == null) { Console.WriteLine(why); return 1; }
     File.WriteAllBytes(args[3], pic.ToPng());
     Console.WriteLine($"{pic.Width}x{pic.Height}");
@@ -233,6 +282,15 @@ void Drawing()
     var q = canvas.ToPicture();
     Expect(q.Rgba[(1 * 8 + 1) * 4 + 3] is > 120 and < 135, "half see-through where nothing was before");
     Expect(q.Crop(2, 2, 2, 2).Width == 2 && q.Crop(6, 6, 5, 5).Width == 2, "a crop, clipped");
+    // a picture's see-through edge keeps its colour (a dark outline stays dark, not bright)
+    var edge = new Canvas(1, 1);
+    edge.Draw(new Picture(1, 1, [0, 80, 0, 77]), Affine.Identity, [1, 1, 1, 1]);
+    var e = edge.ToPicture();
+    Expect(Math.Abs(e.Rgba[1] - 80) <= 1 && Math.Abs(e.Rgba[3] - 77) <= 1, $"a see-through pixel keeps its colour (got {e.Rgba[0]},{e.Rgba[1]},{e.Rgba[2]},{e.Rgba[3]})");
+    var over = new Canvas(1, 1);
+    over.Draw(new Picture(1, 1, [255, 255, 255, 255]), Affine.Identity, [1, 1, 1, 1]);
+    over.Draw(new Picture(1, 1, [0, 0, 0, 128]), Affine.Identity, [1, 1, 1, 1]);
+    Expect(over.ToPicture().Rgba[0] is >= 125 and <= 130, "half black over white is grey");
     var png = Picture.FromPng(q.ToPng());
     Expect(png.Width == 8 && png.Rgba.SequenceEqual(q.Rgba), "PNG both ways");
 }

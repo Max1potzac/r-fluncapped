@@ -109,7 +109,7 @@ public sealed class Canvas
                 Sample(src, u - 0.5, v - 0.5, s);
                 float a = s[3] * ca;
                 if (a <= 0) continue;
-                float r = s[0] * cr * ca, g = s[1] * cg * ca, b = s[2] * cb * ca;  // premultiplied
+                float r = s[0] * cr * a, g = s[1] * cg * a, b = s[2] * cb * a;  // premultiplied: the sample is straight
                 int o = (y * Width + x) * 4;
                 if (additive)
                 {

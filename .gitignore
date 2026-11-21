@@ -8,3 +8,4 @@ CMakeUserPresets.json
 *.apk
 bin/
 obj/
+publish/

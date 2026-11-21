@@ -265,11 +265,11 @@ void test_plant_options() {
 }
 
 void test_preview_flag_rows() {
-    // one in the middle; more spread over the 10 rows, top to bottom, none off the street
+    // one in the middle; more spread over the 10 rows, top to bottom, none off the street or doubled up
     EXPECT(rfu::preview_flag_row(0, 1) == 5);
     EXPECT(rfu::preview_flag_row(0, 2) == 2 && rfu::preview_flag_row(1, 2) == 7);
     EXPECT(rfu::preview_flag_row(0, 3) == 1 && rfu::preview_flag_row(1, 3) == 5 && rfu::preview_flag_row(2, 3) == 8);
-    for (int n = 1; n <= 5; ++n)
+    for (int n = 1; n <= 10; ++n)
         for (int i = 0; i < n; ++i) {
             int row = rfu::preview_flag_row(i, n);
             EXPECT(row >= 0 && row <= 9);

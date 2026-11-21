@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- dotnet run: tests for the Builder's logic, no window needed. With PVZ2_OBB set to a game's
+       .obb they also run against the real game. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Pvz2Builder.Tests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Pvz2Builder.Core/Pvz2Builder.Core.csproj" />
+  </ItemGroup>
+
+</Project>

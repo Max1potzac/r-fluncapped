@@ -159,6 +159,10 @@ CONTENT (cdn\ and files\ in a mod)
                    is none; "#key" can be a list of fields, all of which must
                    match. The Pinecone sample puts its plant into the shop's
                    allow list (MAGENTO_FILTER) this way.
+  A mod's obb\PACKAGES\LAWNSTRINGS-<language>.json (a new plant's name and
+  almanac text) also goes over the CDN's LawnStrings-<language>: once the
+  game has downloaded its CDN content it reads its strings from there and not
+  from the OBB, so strings only in the OBB would show as <Missing ...>.
   Mods load in order, so where two change the same field the later wins.
   Two mods adding the same new name (the same plant ID, say) can't be on
   together: switching the second on asks which one to keep, and Play stops

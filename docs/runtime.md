@@ -60,7 +60,12 @@ read (`open` without write flags, `stat`, `access`, `gzopen` for reading) takes 
 topmost overlay that has it, else from the mount underneath; anything that writes goes to the
 mount. `opendir` lists the mount's directory with every overlay's files added, each name once. So
 custom levels and strings can sit over the CDN folder (`No_Backup/CDN.<version>`) without
-changing it: the game's CDN download rewrites the folder underneath, and the overlay still wins.
+changing it. The overlay is made before the game starts, from what the game had then (the
+launcher's copy of the CDN archive `tar.full` has the mods' strings put into the game's), so a file
+the game writes while it runs (`open` to write, `rename` onto it, `unlink`, `truncate`, `gzopen`
+to write) is read from the mount from then on (`Vfs::written`, logged once): a CDN download in the
+middle of a session (a new event) shows the new content at once rather than the overlay's older
+copy, and the launcher makes its copy again from the new file at the next launch.
 The launcher builds one overlay for the CDN folder and one for the external files folder from the
 mods switched on, converting JSON to RTON where the game's file is RTON and merging LawnStrings.
 

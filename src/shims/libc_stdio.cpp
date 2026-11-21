@@ -188,6 +188,7 @@ int open_path(Runtime& rt, const std::string& path, int flags) {
     }
     // Reads see the overlays (mods); anything that writes goes to the game's own files.
     bool read_only = (flags & android::kO_ACCMODE) == android::kO_RDONLY && !(flags & (android::kO_CREAT | android::kO_TRUNC));
+    if (!read_only) rt.vfs().written(path);
     auto host = read_only ? rt.vfs().to_host_read(path) : rt.vfs().to_host(path);
     if (!host) return -android::kENOENT;
     std::error_code ec;
@@ -493,6 +494,7 @@ void register_libc_stdio(ShimRegistry& reg) {
         c.ret(0);
     });
     auto unlink = [](CallContext& c) {
+        c.rt().vfs().written(guest_path(c, 0));
         auto host = c.rt().vfs().to_host(guest_path(c, 0));
         std::error_code ec;
         if (!host || !fs::exists(*host, ec)) return c.fail(android::kENOENT);
@@ -502,6 +504,8 @@ void register_libc_stdio(ShimRegistry& reg) {
     reg.add("unlink", unlink);
     reg.add("remove", unlink);
     reg.add("rename", [](CallContext& c) {
+        c.rt().vfs().written(guest_path(c, 0));
+        c.rt().vfs().written(guest_path(c, 1));
         auto from = c.rt().vfs().to_host(guest_path(c, 0));
         auto to = c.rt().vfs().to_host(guest_path(c, 1));
         if (!from || !to) return c.fail(android::kENOENT);
@@ -526,6 +530,7 @@ void register_libc_stdio(ShimRegistry& reg) {
         ec ? c.fail(map_errno(ec)) : c.ret(0);
     });
     reg.add("truncate", [](CallContext& c) {
+        c.rt().vfs().written(guest_path(c, 0));
         auto host = c.rt().vfs().to_host(guest_path(c, 0));
         std::error_code ec;
         if (!host) return c.fail(android::kENOENT);

@@ -46,7 +46,9 @@ if (args.Length >= 3 && args[0] == "files")
     using var game = Game.Open(args[1]);
     var re = new System.Text.RegularExpressions.Regex(args[2], System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     foreach (var f in game.Obb!.Files.Where(f => re.IsMatch(f)).OrderBy(f => f)) Console.WriteLine(f);
-    if (args.Length > 3 && game.Obb.Read(args[3]) is { } data)
+    if (args.Length > 3 && game.Obb.Read(args[3]) is { } text && !args[3].EndsWith(".RTON", StringComparison.OrdinalIgnoreCase))
+        Console.WriteLine(text.Length > 1 && text[0] == 0xFF && text[1] == 0xFE ? System.Text.Encoding.Unicode.GetString(text, 2, text.Length - 2) : System.Text.Encoding.UTF8.GetString(text));
+    else if (args.Length > 3 && game.Obb.Read(args[3]) is { } data)
         Console.WriteLine(Pvz2Launcher.SheetMerge.Parse(data)?.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
     return 0;
 }
@@ -106,14 +108,20 @@ var tests = new List<(string Name, Action Run)>
     ("affine and canvas", Drawing),
     ("game names", GameNames),
     ("typed values", TypedValues),
+    ("almanac page", AlmanacPage),
+    ("text edits saved and loaded", TextEdits),
+    ("an older game's strings file", StringsTxt),
 };
 if (obb != null && File.Exists(obb))
 {
     tests.Add(("real game: profile", RealProfile));
     tests.Add(("real game: previews", RealPreviews));
     tests.Add(("real game: edit, save, launcher loads it", RealEditAndLauncher));
+    tests.Add(("real game: almanac page edited, launcher loads it", RealAlmanac));
 }
 else Console.WriteLine("(PVZ2_OBB isn't set to a game's .obb: the real-game tests are skipped)");
+string? oldObb = Environment.GetEnvironmentVariable("PVZ2_OLD_OBB");
+if (oldObb != null && File.Exists(oldObb)) tests.Add(("older game: text edited, launcher loads it", OldGameText));
 
 foreach (var (name, run) in tests)
 {
@@ -146,6 +154,129 @@ static Dictionary<string, JsonObject> Sheets() => new(StringComparer.OrdinalIgno
     ["LIVECONFIG"] = J("""{"version":1,"objects":[{"objclass":"PVZLiveConfig","objdata":{"A":1}},{"objclass":"Other","objdata":{"B":2}},{"objclass":"Other","objdata":{"B":3}}]}"""),
     ["LAWNSTRINGS-EN-US"] = J("""{"version":1,"objects":[{"objclass":"LawnStringsData","objdata":{"LocStringValues":["PEASHOOTER","Peashooter","SUNFLOWER","Sunflower"]}}]}"""),
 };
+
+static Dictionary<string, JsonObject> AlmanacSheets()
+{
+    var sheets = Sheets();
+    sheets["PLANTALMANACDATA"] = J("""
+        {"version":1,"objects":[{"aliases":["peashooter"],"objclass":"PlantAlmanacData","objdata":{"TypeName":"peashooter","AlmanacDataEntries":[
+          {"LevelToUnlock":"0","StatName":"Cost","StatNameAlias":"Cost","StatType":"suncost","StatValue":"suncost0","TypeStringID":"[STAT_SUNCOST]","ValueStringID":"[MISSING INFO]"},
+          {"LevelToUnlock":"0","StatName":"PacketCooldown","StatNameAlias":"Recharge","StatType":"recharge","StatValue":"recharge4","TypeStringID":"[STAT_RECHARGE]","ValueStringID":"[STAT_RECHARGE_RECHARGE4]"},
+          {"LevelToUnlock":"0","StatName":"DamageString","StatNameAlias":"Damage","StatType":"damage","StatValue":"damage2","TypeStringID":"[STAT_DAMAGE]","ValueStringID":"20"},
+          {"LevelToUnlock":"0","StatName":"Range","StatNameAlias":"Range","StatType":"range","StatValue":"straight","TypeStringID":"[STAT_RANGE]","ValueStringID":"[STAT_RANGE_STRAIGHT]"}
+        ]}}]}
+        """);
+    sheets["PLANTLEVELS"] = J("""
+        {"version":1,"objects":[{"aliases":["peashooter"],"objclass":"PlantLevelStats","objdata":{"TypeName":"peashooter","UsesLeveling":false,
+          "FloatStats":[{"Name":"Cost","Values":[100,100,100]},{"Name":"PacketCooldown","Values":[5,5,5]}],
+          "StringStats":[{"Name":"Range","Values":["","",""]},{"Name":"DamageString","Values":["","",""]}]}}]}
+        """);
+    sheets["LAWNSTRINGS-EN-US"] = J("""
+        {"version":1,"objects":[{"aliases":["LawnStringsData"],"objclass":"LawnStringsData","objdata":{"LocStringValues":[
+          "PEASHOOTER","Peashooter","PEASHOOTER_TOOLTIP","Shoots peas at the enemy",
+          "PEASHOOTER_DESCRIPTION_HEADER","Peashooters are your first line of defense.",
+          "PEASHOOTER_DESCRIPTION","{KEYWORD}Special: {STAT}none\n\n{FLAVOR}Famous.",
+          "STAT_SUNCOST","SUN COST","STAT_RECHARGE","RECHARGE","STAT_RECHARGE_RECHARGE4","Fast","STAT_DAMAGE","DAMAGE","STAT_RANGE","RANGE","STAT_RANGE_STRAIGHT","Straight",
+          "SUNFLOWER","Sunflower"]}}]}
+        """);
+    return sheets;
+}
+
+void AlmanacPage()
+{
+    using var game = Game.FromSheets(AlmanacSheets());
+    var profile = GameProfile.Build(game);
+    var edits = new EditSession(game);
+    var page = PlantAlmanac.For(edits, profile, profile.Find(GameProfile.Plants, "peashooter")!);
+    Expect(page.HasStats && page.NameKey == "PEASHOOTER", "the page and its name's key");
+    Expect(page.Text(page.HeaderKey) == "Peashooters are your first line of defense.", "its texts");
+    var stats = page.Stats;
+    string Shown() => string.Join(" | ", page.Stats.Select(s => $"{s.Label}={s.Value}"));
+    Expect(Shown() == "SUN COST=100 | RECHARGE=Fast | DAMAGE=20 | RANGE=Straight", $"stats as the page shows them: {Shown()}");
+    Expect(stats[0].ValueFrom.StartsWith("PLANTLEVELS"), "the sun cost comes from the plant's levels");
+
+    // the sun cost is a number the plant plays with: levels and properties both change
+    page.SetValue(0, "125");
+    Expect(page.Stats[0].Value == "125", "a new sun cost");
+    var levels = edits.Current("PLANTLEVELS", 0)!["objdata"]!["FloatStats"]![0]!["Values"]!.AsArray();
+    Expect(levels.All(v => v!.GetValue<int>() == 125), "every level's cost");
+    Expect(edits.Current("PLANTPROPERTIES", 0)!["objdata"]!["Cost"]!.GetValue<int>() == 125, "and the plant's properties");
+    Expect(!edits.IsChanged("PLANTALMANACDATA", 0), "the almanac entry itself is untouched");
+
+    // a label written over a shared string goes into this entry only
+    page.SetLabel(2, "PEA DAMAGE");
+    Expect(page.Stats[2].Label == "PEA DAMAGE" && edits.Text("STAT_DAMAGE") == "DAMAGE", "the shared string is left as it is");
+    page.SetValue(2, "25");
+    Expect(page.Stats[2].Value == "25" && page.Stats[2].ValueRaw == "25", "a value written in the entry");
+    page.SetValue(1, "Very fast");
+    Expect(page.Stats[1].Value == "Very fast", "a value over a string key");
+    int added = page.AddStat("PIERCE", "2 zombies");
+    Expect(page.Stats.Count == 5 && page.Stats[added].Label == "PIERCE" && page.Stats[added].Value == "2 zombies", "a stat added");
+    page.MoveStat(added, -1);
+    Expect(page.Stats[3].Label == "PIERCE", "moved up");
+    page.RemoveStat(3);
+    Expect(page.Stats.Count == 4, "and removed");
+
+    page.SetText(page.HeaderKey, "Peashooters shoot peas.");
+    Expect(edits.IsTextChanged("PEASHOOTER_DESCRIPTION_HEADER") && page.IsChanged, "a text change");
+    page.SetText(page.HeaderKey, "Peashooters are your first line of defense.");
+    Expect(!edits.IsTextChanged("PEASHOOTER_DESCRIPTION_HEADER"), "changed back is no change");
+
+    var runs = PlantAlmanac.Markup(page.Text(page.DescriptionKey));
+    Expect(runs.Count == 3 && runs[0] == new TextRun("KEYWORD", "Special: ") && runs[1].Style == "STAT" && runs[2] == new TextRun("FLAVOR", "Famous."),
+        $"description markup ({string.Join(", ", runs)})");
+}
+
+void TextEdits()
+{
+    var sheets = AlmanacSheets();
+    using var game = Game.FromSheets(sheets);
+    var edits = new EditSession(game);
+    edits.SetText("PEASHOOTER_TOOLTIP", "Shoots peas, fast");
+    edits.SetText("PEASHOOTER_NEWLINE", "A new string");
+    Expect(edits.ChangeCount == 2 && edits.Changed.Count == 0, "two strings, no objects");
+    var result = edits.Save(Path.Combine(root, "mods-text"), new ModInfo("Text test"));
+    Expect(result.Files.SequenceEqual(["obb/PACKAGES/LAWNSTRINGS-EN-US.json"]), $"one strings file ({string.Join(", ", result.Files)})");
+    var patch = J(File.ReadAllText(Path.Combine(result.Dir, "obb", "PACKAGES", "LAWNSTRINGS-EN-US.json")));
+    var add = patch["objects"]![0]!["objdata"]!["LocStringValues#add"]!.AsArray();
+    Expect(add.Count == 4, "only the changed strings");
+
+    // the launcher's merge puts them over the game's
+    var merged = (JsonObject)sheets["LAWNSTRINGS-EN-US"].DeepClone();
+    SheetMerge.Merge(merged, patch);
+    var values = merged["objects"]![0]!["objdata"]!["LocStringValues"]!.AsArray().Select(v => v!.GetValue<string>()).ToList();
+    int at = values.IndexOf("PEASHOOTER_TOOLTIP");
+    Expect(at >= 0 && values[at + 1] == "Shoots peas, fast", "a changed string has its new text");
+    Expect(values.Contains("PEASHOOTER_NEWLINE") && values.Contains("SUNFLOWER"), "a new one is added, the others kept");
+
+    var again = new EditSession(game);
+    var notes = again.LoadMod(result.Dir);
+    Expect(notes.Count == 0 && again.Text("PEASHOOTER_TOOLTIP") == "Shoots peas, fast" && again.ChangeCount == 2, $"loaded back ({string.Join("; ", notes)})");
+
+    // with the strings sheet edited too, the text goes into that edit
+    var both = new EditSession(game);
+    both.SetText("PEASHOOTER", "Pea Shooter");
+    both.Edit("LAWNSTRINGS-EN-US", 0)["objdata"]!["LocStringValues"]!.AsArray().Add("EXTRA");
+    both.Edit("LAWNSTRINGS-EN-US", 0)["objdata"]!["LocStringValues"]!.AsArray().Add("Extra");
+    var r2 = both.Save(Path.Combine(root, "mods-text"), new ModInfo("Text test 2"));
+    Expect(r2.Files.Count == 1, $"one file ({string.Join(", ", r2.Files)})");
+    var merged2 = (JsonObject)sheets["LAWNSTRINGS-EN-US"].DeepClone();
+    SheetMerge.Merge(merged2, J(File.ReadAllText(Path.Combine(r2.Dir, r2.Files[0]))));
+    var v2 = merged2["objects"]![0]!["objdata"]!["LocStringValues"]!.AsArray().Select(v => v!.GetValue<string>()).ToList();
+    Expect(v2[v2.IndexOf("PEASHOOTER") + 1] == "Pea Shooter" && v2.Contains("EXTRA"), "both changes are in it");
+}
+
+void StringsTxt()
+{
+    byte[] file = [0xFF, 0xFE, .. System.Text.Encoding.Unicode.GetBytes("[PEASHOOTER]\r\nPeashooter\r\n\r\n[PEASHOOTER_DESCRIPTION]\r\n{FLAVOR}Line one\r\nline two\r\n\r\n[SUNFLOWER]\r\nSunflower\r\n")];
+    var parsed = StringsText.Parse(file);
+    Expect(parsed.Count == 3 && parsed[1] == ("PEASHOOTER_DESCRIPTION", "{FLAVOR}Line one\nline two"), $"parsed ({string.Join(", ", parsed)})");
+    var written = StringsText.Write(file, new Dictionary<string, string> { ["SUNFLOWER"] = "Sun Flower", ["NEW_KEY"] = "New" });
+    Expect(written[0] == 0xFF && written[1] == 0xFE, "still UTF-16");
+    var back = StringsText.Parse(written);
+    Expect(back.Count == 4 && back[0] == ("PEASHOOTER", "Peashooter") && back[1].Text == "{FLAVOR}Line one\nline two" && back[2] == ("SUNFLOWER", "Sun Flower") && back[3] == ("NEW_KEY", "New"),
+        $"written back ({string.Join(", ", back)})");
+}
 
 void SchemaInference()
 {
@@ -391,4 +522,63 @@ void RealEditAndLauncher()
     var now = sheet!["objects"]![props.Index]!;
     Expect(now["objdata"]!["Cost"]!.GetValue<int>() == cost + 25, "the game reads the new cost");
     Expect(JsonNode.DeepEquals(now, edits.Current(props.Sheet, props.Index)), "and the object is exactly the edited one");
+}
+
+void RealAlmanac()
+{
+    string gameDir = Path.Combine(root, "launcher", "games", "Almanac");
+    Directory.CreateDirectory(gameDir);
+    File.CreateSymbolicLink(Path.Combine(gameDir, Path.GetFileName(obb!)), obb!);
+    using var game = Game.OpenFolder(gameDir);
+    var profile = GameProfile.Build(game);
+    var edits = new EditSession(game);
+    var page = PlantAlmanac.For(edits, profile, profile.Find(GameProfile.Plants, "peashooter")!);
+    Console.WriteLine("  peashooter: " + string.Join(" | ", page.Stats.Select(s => $"{s.Label}={s.Value}")));
+    Expect(page.HasStats && page.Stats.Count >= 4, "the peashooter's page has its stats");
+    Expect(page.Text(page.NameKey) == "Peashooter", "and its name");
+    int damage = page.Stats.First(s => s.StatName == "DamageString").Index;
+    page.SetValue(damage, "45");
+    page.SetValue(page.Stats.First(s => s.StatName == "Cost").Index, "75");
+    page.SetText(page.HeaderKey, "Peashooters now hit much harder.");
+    var saved = edits.Save(game.Folder!.ModsDir, new ModInfo("Almanac test"));
+    Console.WriteLine("  files: " + string.Join(", ", saved.Files));
+
+    var mod = Mods.List(game.Folder).First(m => m.Name == "Almanac test");
+    var build = Mods.Build(game.Folder, [mod.Key]);
+    Expect(build.ObbPatch != null && !build.Log.Any(l => l.Contains("FAIL")), $"the launcher builds it ({string.Join(" | ", build.Log.Where(l => l.Contains("FAIL")))})");
+    string patched = Path.Combine(root, "patched-almanac.obb");
+    ObbPatch.Apply(obb!, File.ReadAllBytes(build.ObbPatch!), patched);
+    using var after = Game.OpenObb(patched);
+    var profile2 = GameProfile.Build(after);
+    var page2 = PlantAlmanac.For(new EditSession(after), profile2, profile2.Find(GameProfile.Plants, "peashooter")!);
+    Console.WriteLine("  after: " + string.Join(" | ", page2.Stats.Select(s => $"{s.Label}={s.Value}")));
+    Expect(page2.Stats.First(s => s.StatName == "DamageString").Value == "45", "the game reads the new damage");
+    Expect(page2.Stats.First(s => s.StatName == "Cost").Value == "75", "and the new sun cost");
+    Expect(page2.Text(page2.HeaderKey) == "Peashooters now hit much harder.", "and the new text");
+    Expect(page2.Text("SUNFLOWER") == "Sunflower", "with the other strings kept");
+}
+
+void OldGameText()
+{
+    string gameDir = Path.Combine(root, "launcher", "games", "Old");
+    Directory.CreateDirectory(gameDir);
+    File.CreateSymbolicLink(Path.Combine(gameDir, Path.GetFileName(oldObb!)), oldObb!);
+    using var game = Game.OpenFolder(gameDir);
+    var profile = GameProfile.Build(game);
+    Expect(!game.StringsInSheet() && game.Strings().Count > 1000, $"its strings come from the .txt ({game.Strings().Count})");
+    Expect(profile.Find(GameProfile.Plants, "peashooter")?.DisplayName == "Peashooter", "so plants have their names");
+    var edits = new EditSession(game);
+    var page = PlantAlmanac.For(edits, profile, profile.Find(GameProfile.Plants, "peashooter")!);
+    Expect(!page.HasStats, "no stats in this game's data");
+    page.SetText(page.HeaderKey, "Old peashooters, new words.");
+    var saved = edits.Save(game.Folder!.ModsDir, new ModInfo("Old text test"));
+    Console.WriteLine("  files: " + string.Join(", ", saved.Files));
+    var mod = Mods.List(game.Folder).First(m => m.Name == "Old text test");
+    var build = Mods.Build(game.Folder, [mod.Key]);
+    Expect(build.ObbPatch != null && !build.Log.Any(l => l.Contains("FAIL")), "the launcher builds it");
+    string patched = Path.Combine(root, "patched-old.obb");
+    ObbPatch.Apply(oldObb!, File.ReadAllBytes(build.ObbPatch!), patched);
+    using var after = Game.OpenObb(patched);
+    Expect(after.Strings()["PEASHOOTER_DESCRIPTION_HEADER"] == "Old peashooters, new words.", "the game reads the new text");
+    Expect(after.Strings().Count == game.Strings().Count && after.Strings()["SUNFLOWER"] == game.Strings()["SUNFLOWER"], "and every other string as it was");
 }

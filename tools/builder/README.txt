@@ -1,8 +1,8 @@
 PvZ2 Builder - a modding toolkit for PvZ2 and the games made from it
 =====================================================================
 
-This is milestone 0 of the Builder: the core every later tool sits on (almanac editor, import
-tool, level editor). It opens a game, lists what that game has, lets you change any of its
+This is milestone 1 of the Builder: the core every later tool sits on, and the almanac editor
+(the import tool and level editor come next). It opens a game, lists what that game has, lets you change any of its
 property sheets with fields that know their types, shows its animations and pictures without
 starting the game, and saves your changes as a mod the launcher loads.
 
@@ -34,6 +34,17 @@ THE WINDOW
              field the class has that this object doesn't set.
   Properties a plant's, zombie's or grid item's property sheet (its Properties RTID), edited
              the same way: cost, recharge, hitpoints and so on live there.
+  Almanac    a plant's almanac page: its name, tooltip, short description, description and Plant
+             Food text (the game's strings), and its stats, with a preview of the page laid out
+             the way the game's almanac shows it (roughly: not the game's own fonts and frame).
+             In the description, {KEYWORD}, {STAT} and {FLAVOR} switch the style.
+             Stats: a label and a value each, as the page shows them, and where the value comes
+             from. Text over a shared string (the "DAMAGE" every plant uses) goes into this
+             plant's entry alone. Sun cost and recharge are the plant's real numbers: changing
+             them changes every level's value (PLANTLEVELS) and the plant's properties, so the
+             page and the plant agree. Add stat, Remove, Up and Down change the list.
+             Older games keep no stats in their data (no PLANTALMANACDATA), so only their
+             texts can be changed.
   Preview    the object's animation (PopAnim) drawn with the game's own pictures, at the first
              frame of a label (idle, attack ...). Parts the game only shows some of the time
              (costumes, armour and its damage, effects) start hidden; tick them under "Parts
@@ -49,6 +60,13 @@ SAVING (File > Save as mod, Ctrl+S)
                              only the changed fields; the launcher merges them over the game's
                              own, so the mod keeps working when the game changes the rest, and
                              several mods can change the same sheet
+    obb\PACKAGES\LAWNSTRINGS-EN-US.json
+                             the strings changed, and only those ("LocStringValues#add"); the
+                             launcher puts them over the game's text, and over the copy it
+                             downloads from its CDN
+    obb\LOCALES\EN-US\PROPERTIES\LAWNSTRINGS.TXT
+                             in an older game that keeps its text in a .txt: the whole file,
+                             with the changes in it
     builder.json             what the Builder wrote, so saving again replaces it
   A change a merge can't express (a field taken away, a changed object with no alias when its
   sheet has several of its class) puts the whole sheet in the mod instead ("#replace"), and the

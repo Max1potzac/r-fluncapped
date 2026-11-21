@@ -18,7 +18,10 @@ public sealed record SaveResult(string Dir, IReadOnlyList<string> Files, IReadOn
 public sealed class EditSession
 {
     public Game Game { get; }
+    /// The language whose strings text edits change.
+    public string Language { get; } = "en-US";
     readonly Dictionary<(string Sheet, int Index), JsonObject> _edited = [];
+    readonly Dictionary<string, string> _texts = new(StringComparer.Ordinal);
 
     public EditSession(Game game) => Game = game;
 
@@ -51,7 +54,34 @@ public sealed class EditSession
 
     public void Revert(string sheet, int index) => _edited.Remove((sheet.ToUpperInvariant(), index));
 
-    public void RevertAll() => _edited.Clear();
+    public void RevertAll()
+    {
+        _edited.Clear();
+        _texts.Clear();
+    }
+
+    // ---- text (LawnStrings) ----
+
+    /// A string's text as edited so far, else the game's own, else null.
+    public string? Text(string key) => _texts.TryGetValue(key, out var t) ? t : Game.Strings(Language).TryGetValue(key, out var g) ? g : null;
+
+    /// The game's own text for a key.
+    public string? OriginalText(string key) => Game.Strings(Language).TryGetValue(key, out var g) ? g : null;
+
+    /// Sets a string's text; back to the game's own (or null for a key the game hasn't) is no change.
+    public void SetText(string key, string? text)
+    {
+        if (text == null || text == OriginalText(key)) _texts.Remove(key);
+        else _texts[key] = text;
+    }
+
+    public bool IsTextChanged(string key) => _texts.ContainsKey(key);
+
+    /// The strings changed, key -> new text.
+    public IReadOnlyDictionary<string, string> ChangedTexts => _texts;
+
+    /// Everything changed: objects and strings.
+    public int ChangeCount => Changed.Count + _texts.Count;
 
     public IReadOnlyList<(string Sheet, int Index)> Changed =>
         _edited.Keys.Where(k => IsChanged(k.Sheet, k.Index)).OrderBy(k => k.Sheet, StringComparer.Ordinal).ThenBy(k => k.Index).ToList();
@@ -89,6 +119,14 @@ public sealed class EditSession
             catch (JsonException) { }
 
         var files = new List<string>();
+        string stringsSheet = Game.StringsSheet(Language);
+        bool textsInSheet = _texts.Count > 0 && Game.StringsInSheet(Language);
+        // text edits and an edit of the strings sheet itself: the text goes into that edit
+        if (textsInSheet && Changed.Any(k => k.Sheet == stringsSheet))
+        {
+            foreach (var (s, i) in Changed.Where(k => k.Sheet == stringsSheet).ToList()) PutTexts(Edit(s, i));
+            textsInSheet = false;
+        }
         foreach (var group in Changed.GroupBy(k => k.Sheet))
         {
             string sheet = group.Key;
@@ -113,6 +151,26 @@ public sealed class EditSession
             File.WriteAllText(path, content.ToJsonString(Indented));
             files.Add(rel.Replace('\\', '/'));
         }
+        if (textsInSheet)
+        {
+            // only the strings changed, put over the game's (and the CDN copy's) by the launcher
+            string rel = Path.Combine("obb", "PACKAGES", stringsSheet + ".json");
+            string path = Path.Combine(dir, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, StringsPatch().ToJsonString(Indented));
+            files.Add(rel.Replace('\\', '/'));
+        }
+        else if (_texts.Count > 0 && !Game.StringsInSheet(Language) && Game.Obb?.Read(Game.StringsTxt(Language)) is { } txt)
+        {
+            // an older game's strings file, whole: the launcher puts obb\ files into the OBB
+            string rel = Path.Combine("obb", Game.StringsTxt(Language).Replace('\\', Path.DirectorySeparatorChar));
+            string path = Path.Combine(dir, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, StringsText.Write(txt, _texts));
+            files.Add(rel.Replace('\\', '/'));
+            notes.Add($"{Path.GetFileName(path)}: this game keeps its text in a .txt, so the mod has the whole file (redo the save after the game updates it)");
+        }
+        else if (_texts.Count > 0) notes.Add("this game has no strings the Builder can write to, so the text changes were left out");
 
         var mod = new JsonObject
         {
@@ -135,6 +193,40 @@ public sealed class EditSession
             ["files"] = new JsonArray(files.Select(f => (JsonNode?)f).ToArray()),
         }.ToJsonString(Indented));
         return new SaveResult(dir, files, notes);
+    }
+
+    /// The strings sheet's patch: its one object with the changed keys only. A flat key, text list
+    /// takes them with "LocStringValues#add" (a key it has gets the new text); a key: text object
+    /// merges them like any object.
+    JsonObject StringsPatch()
+    {
+        var sheet = Game.Sheet(Game.StringsSheet(Language));
+        var obj = (sheet?["objects"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault(o => o["objdata"]?["LocStringValues"] != null);
+        var data = new JsonObject();
+        if (obj?["objdata"]?["LocStringValues"] is JsonObject)
+            data["LocStringValues"] = new JsonObject(_texts.Select(p => KeyValuePair.Create(p.Key, (JsonNode?)p.Value)));
+        else
+            data["LocStringValues" + SheetMerge.AddSuffix] = new JsonArray(_texts.SelectMany(p => new JsonNode?[] { p.Key, p.Value }).ToArray());
+        var entry = new JsonObject { ["objclass"] = GameProfile.Str(obj?["objclass"]) ?? "LawnStringsData" };
+        if (obj != null && GameProfile.FirstAlias(obj) is { } alias) entry["aliases"] = new JsonArray(alias);
+        entry["objdata"] = data;
+        return new JsonObject { ["version"] = 1, ["objects"] = new JsonArray(entry) };
+    }
+
+    /// Puts the text edits into an edited copy of the strings sheet's object.
+    void PutTexts(JsonObject obj)
+    {
+        if (obj["objdata"]?["LocStringValues"] is JsonArray pairs)
+        {
+            var at = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int i = 0; i + 1 < pairs.Count; i += 2)
+                if (GameProfile.Str(pairs[i]) is { } k) at.TryAdd(k, i);
+            foreach (var (k, v) in _texts)
+                if (at.TryGetValue(k, out int i)) pairs[i + 1] = v;
+                else { pairs.Add(k); pairs.Add(v); }
+        }
+        else if (obj["objdata"]?["LocStringValues"] is JsonObject map)
+            foreach (var (k, v) in _texts) map[k] = v;
     }
 
     static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -238,13 +330,24 @@ public sealed class EditSession
     public List<string> LoadMod(string modDir)
     {
         var notes = new List<string>();
+        string txt = Path.Combine(modDir, "obb", Game.StringsTxt(Language).Replace('\\', Path.DirectorySeparatorChar));
+        if (File.Exists(txt))
+            foreach (var (k, v) in StringsText.Parse(File.ReadAllBytes(txt)))
+                if (v != OriginalText(k)) SetText(k, v);
         string packages = Path.Combine(modDir, "obb", "PACKAGES");
-        if (!Directory.Exists(packages)) { notes.Add("the mod has no obb\\PACKAGES sheets"); return notes; }
+        if (!Directory.Exists(packages)) { if (!File.Exists(txt)) notes.Add("the mod has no obb\\PACKAGES sheets"); return notes; }
         foreach (var file in Directory.EnumerateFiles(packages, "*.json"))
         {
             string name = Path.GetFileNameWithoutExtension(file);
             if (name.EndsWith(".rton", StringComparison.OrdinalIgnoreCase)) name = name[..^5];
             name = name.ToUpperInvariant();
+            if (name.StartsWith("LAWNSTRINGS-", StringComparison.Ordinal))
+            {
+                if (!name.Equals(Game.StringsSheet(Language), StringComparison.Ordinal)) { notes.Add($"{name}: another language's strings, left as they are"); continue; }
+                try { foreach (var (k, v) in ReadTexts(File.ReadAllBytes(file))) SetText(k, v); }
+                catch (Exception e) when (e is JsonException or FormatException) { notes.Add($"{name}: {e.Message}"); }
+                continue;
+            }
             if (Game.Sheet(name) is not { } own) { notes.Add($"{name}: this game has no such sheet"); continue; }
             JsonObject? mine;
             try { mine = SheetMerge.Parse(File.ReadAllBytes(file)) as JsonObject; }
@@ -260,5 +363,34 @@ public sealed class EditSession
             if (after.Count > before.Count) notes.Add($"{name}: {after.Count - before.Count} new object(s) left out (adding new objects comes with the import tool)");
         }
         return notes;
+    }
+
+    /// A mod's strings file: key, text pairs from its LocStringValues (a list, a key: text object, or
+    /// "#add"), or a plain { "KEY": "text" }.
+    static List<(string Key, string Text)> ReadTexts(byte[] data)
+    {
+        var node = SheetMerge.Parse(data);
+        var result = new List<(string, string)>();
+        void From(JsonNode? values)
+        {
+            if (values is JsonArray a)
+                for (int i = 0; i + 1 < a.Count; i += 2)
+                {
+                    if (GameProfile.Str(a[i]) is { } k && GameProfile.Str(a[i + 1]) is { } v) result.Add((k, v));
+                }
+            else if (values is JsonObject o)
+                foreach (var (k, v) in o)
+                    if (GameProfile.Str(v) is { } t) result.Add((k, t));
+        }
+        if (node?["objects"] is JsonArray objects)
+            foreach (var o in objects.OfType<JsonObject>())
+                if (o["objdata"] is JsonObject d)
+                {
+                    From(d["LocStringValues"]);
+                    From(d["LocStringValues" + SheetMerge.AddSuffix]);
+                }
+        if (result.Count == 0 && node is JsonObject flat && flat.All(p => GameProfile.Str(p.Value) != null))
+            From(flat);
+        return result;
     }
 }

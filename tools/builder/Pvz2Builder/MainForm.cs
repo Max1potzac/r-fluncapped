@@ -16,6 +16,7 @@ sealed class MainForm : Form
     readonly FieldEditor _props = new() { Dock = DockStyle.Fill };
     readonly Label _noProps = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Text = "This object has no Properties sheet of its own." };
     readonly PreviewPanel _preview = new() { Dock = DockStyle.Fill };
+    readonly AlmanacPanel _almanac = new() { Dock = DockStyle.Fill };
     readonly PicturesPanel _pictures = new() { Dock = DockStyle.Fill };
     readonly TextBox _json = new() { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Both, WordWrap = false, Font = new Font(FontFamily.GenericMonospace, 9f) };
     readonly Label _gameLabel = new() { Dock = DockStyle.Top, Height = 26, Padding = new Padding(6, 6, 6, 0) };
@@ -74,6 +75,7 @@ sealed class MainForm : Form
         _propsPage.Controls.Add(_props);
         _propsPage.Controls.Add(_noProps);
         _tabs.TabPages.Add(_propsPage);
+        _tabs.TabPages.Add(Page("Almanac", _almanac));
         _tabs.TabPages.Add(Page("Preview", _preview));
         _tabs.TabPages.Add(Page("Pictures", _pictures));
         var jsonPage = Page("JSON", _json);
@@ -115,6 +117,7 @@ sealed class MainForm : Form
         _list.SelectedIndexChanged += (_, _) => { if (_list.SelectedIndices.Count > 0) Select(_rows[(int)_list.SelectedItems[0].Tag!]); };
         _fields.Changed += OnChanged;
         _props.Changed += OnChanged;
+        _almanac.Changed += OnChanged;
         _fields.Navigate += GoTo;
         _props.Navigate += GoTo;
         FormClosing += (_, e) => { if (!ConfirmDiscard()) e.Cancel = true; };
@@ -284,7 +287,10 @@ sealed class MainForm : Form
         SetStatus($"{_list.Items.Count} shown");
     }
 
-    string Mark(Row r) => _session != null && (_session.IsChanged(r.Sheet, r.Index) || PropsChanged(r)) ? "*" : "";
+    string Mark(Row r) => _session != null && (_session.IsChanged(r.Sheet, r.Index) || PropsChanged(r) || AlmanacChanged(r)) ? "*" : "";
+
+    bool AlmanacChanged(Row r) =>
+        r.Entry is { Kind: GameProfile.Plants } e && _profile != null && PlantAlmanac.For(_session!, _profile, e).IsChanged;
 
     bool PropsChanged(Row r) =>
         r.Entry?.Properties is { } p && _profile?.Resolve(p, r.Sheet) is { } t && _session!.IsChanged(t.Sheet, t.Index);
@@ -320,6 +326,7 @@ sealed class MainForm : Form
             _noProps.Visible = props == null;
             if (props is { } t) _props.Show(_session, _profile, _schema, t.Sheet, t.Index);
         }
+        if (page == "Almanac") _almanac.Show(_session, _profile, _resources, row.Entry ?? EntryFor(row));
         if (page == "Preview") _preview.Show(_resources, row.Entry ?? EntryFor(row));
         if (page == "Pictures") _pictures.Show(_resources, row.Entry ?? EntryFor(row));
         if (page == "JSON") ShowJson();
@@ -383,8 +390,9 @@ sealed class MainForm : Form
 
     void UpdateChanges()
     {
-        int n = _session?.Changed.Count ?? 0;
-        _changes.Text = n == 0 ? "No changes" : $"{n} object(s) changed, not saved yet";
+        int n = _session?.ChangeCount ?? 0;
+        int texts = _session?.ChangedTexts.Count ?? 0;
+        _changes.Text = n == 0 ? "No changes" : $"{n - texts} object(s) and {texts} string(s) changed, not saved yet";
         Text = "PvZ2 Builder" + (_game != null ? $" - {_game.Name}" : "") + (n > 0 ? " *" : "");
     }
 
@@ -393,14 +401,21 @@ sealed class MainForm : Form
         if (_session == null || _current == null) return;
         _session.Revert(_current.Sheet, _current.Index);
         if (PropertiesOf(_current) is { } p) _session.Revert(p.Sheet, p.Index);
+        if (_current.Entry is { Kind: GameProfile.Plants } e && _profile != null)
+        {
+            var page = PlantAlmanac.For(_session, _profile, e);
+            if (page.DataIndex >= 0) _session.Revert(PlantAlmanac.DataSheet, page.DataIndex);
+            if (page.LevelsIndex >= 0) _session.Revert(PlantAlmanac.LevelsSheet, page.LevelsIndex);
+            foreach (var k in new[] { page.NameKey, page.TooltipKey, page.HeaderKey, page.DescriptionKey, page.PlantFoodKey }) _session.SetText(k, null);
+        }
         OnChanged();
         ShowTab(all: true);
     }
 
     void RevertAll()
     {
-        if (_session == null || _session.Changed.Count == 0) return;
-        if (MessageBox.Show(this, $"Throw away all {_session.Changed.Count} changes?", "PvZ2 Builder", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        if (_session == null || _session.ChangeCount == 0) return;
+        if (MessageBox.Show(this, $"Throw away all {_session.ChangeCount} changes?", "PvZ2 Builder", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
         _session.RevertAll();
         RefreshMarks(all: true);
         UpdateChanges();
@@ -409,8 +424,8 @@ sealed class MainForm : Form
 
     bool ConfirmDiscard()
     {
-        if (_session == null || _session.Changed.Count == 0) return true;
-        var answer = MessageBox.Show(this, $"{_session.Changed.Count} changed object(s) aren't saved as a mod. Save them first?", "PvZ2 Builder",
+        if (_session == null || _session.ChangeCount == 0) return true;
+        var answer = MessageBox.Show(this, $"{_session.ChangeCount} change(s) aren't saved as a mod. Save them first?", "PvZ2 Builder",
             MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
         if (answer == DialogResult.Cancel) return false;
         if (answer == DialogResult.Yes) return SaveMod();
@@ -422,7 +437,7 @@ sealed class MainForm : Form
     bool SaveMod()
     {
         if (_session == null || _game == null) return false;
-        if (_session.Changed.Count == 0) { MessageBox.Show(this, "Nothing has changed yet.", "PvZ2 Builder"); return false; }
+        if (_session.ChangeCount == 0) { MessageBox.Show(this, "Nothing has changed yet.", "PvZ2 Builder"); return false; }
         using var dlg = new SaveModDialog(_game, _savedModDir);
         if (dlg.ShowDialog(this) != DialogResult.OK) return false;
         try
@@ -433,7 +448,7 @@ sealed class MainForm : Form
             string where = _game.Folder != null && Path.GetFullPath(dlg.ModsDir) == Path.GetFullPath(_game.Folder.ModsDir)
                 ? "Switch it on in the launcher's Mods tab for this game."
                 : "Copy the folder into the game's mods folder in the launcher (or use + Add mod).";
-            MessageBox.Show(this, $"Saved {result.Files.Count} sheet(s) to\n{result.Dir}\n\n{where}{notes}", "PvZ2 Builder");
+            MessageBox.Show(this, $"Saved {result.Files.Count} file(s) to\n{result.Dir}\n\n{where}{notes}", "PvZ2 Builder");
             SetStatus($"Saved to {result.Dir}");
             return true;
         }
@@ -455,7 +470,7 @@ sealed class MainForm : Form
         RefreshMarks(all: true);
         UpdateChanges();
         ShowTab(all: true);
-        MessageBox.Show(this, $"{_session.Changed.Count} object(s) changed by the mod." + (notes.Count > 0 ? "\n\n" + string.Join("\n", notes.Select(n => "- " + n)) : ""), "PvZ2 Builder");
+        MessageBox.Show(this, $"{_session.Changed.Count} object(s) and {_session.ChangedTexts.Count} string(s) changed by the mod." + (notes.Count > 0 ? "\n\n" + string.Join("\n", notes.Select(n => "- " + n)) : ""), "PvZ2 Builder");
     }
 
     void LoadDumpDialog()

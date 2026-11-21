@@ -76,6 +76,7 @@ void usage() {
                  "  --kill-shot <a>=<b>      a plant whose projectile <a> kills fires <b> next, until one hits (new plants;\n"
                  "                           projectile aliases; see src/game/plant_behaviours.h)\n"
                  "  --homing-retarget <p>    homing projectile <p> goes for the zombie nearest the house, again when its dies\n"
+                 "  --plant-id <plant>=<n>   the number the save keeps new plant <plant> by, so having it lasts\n"
                  "  --icon <file.png>        the window's icon\n"
                  "  --title <text>           the window's title\n"
                  "  --version-name <x.y.z>   the APK's version name, which the game reports (default: 1.4.0)\n"
@@ -243,6 +244,11 @@ int main(int argc, char** argv) {
                 plant_behaviours.kill_shots.push_back(k);
             } else if (arg == "--homing-retarget") {
                 plant_behaviours.homing.push_back(value());
+            } else if (arg == "--plant-id") {
+                rfu::PlantBehaviours::PlantId p;
+                std::string error;
+                if (!rfu::parse_plant_id(value(), p, error)) throw std::invalid_argument(error);
+                plant_behaviours.plant_ids.push_back(p);
             } else if (arg == "--key-hints") {
                 key_hints = true;
             } else if (arg == "--controller") {

@@ -60,6 +60,16 @@ constexpr Known kIterDone{0x14ea1fc, {0xA9BD57F6, 0xA9014FF4, 0xA9027BFD}};
 constexpr Known kZombieDead{0xc3e204, {0xB940B008, 0x51000D09, 0x7100313F}};
 constexpr Known kSkipTarget{0xc56b90, {0xD10183FF, 0xF90013F7, 0xA90357F6}};
 constexpr Known kZombieClass{0xc36fe4, {0xF81D0FF5, 0xA9014FF4, 0xA9027BFD}};
+// The plants' numbers, as profiles keep them, a std::map<std::string, int> built in: (list,
+// const std::string& plant) -> number, 0 when it has none; (list, plant) -> whether it has one
+// (Profile::AddPlant asks before adding); (list, number) -> the plant's name, a std::string
+// through x8, empty when none; and, inside (list, PlantType handle) -> number, the map's find
+// on the type's name (a std::string at sp), whose number goes to w19 after it.
+constexpr Known kPlantIdOf{0x1175f18, {0xF81E0FF3, 0xA9017BFD, 0x910043FD}};
+constexpr Known kPlantKnown{0x11761f0, {0xF81E0FF3, 0xA9017BFD, 0x910043FD}};
+constexpr Known kPlantOfId{0x1175f5c, {0xA9BD57F6, 0xA9014FF4, 0xA9027BFD}};
+constexpr Known kPlantIdOfTypeFind{0x1182d08, {0x91002260, 0x910003E1, 0x97D0A927}};
+constexpr std::uint64_t kPlantIdOfTypeFound = 0x1182d24;
 constexpr std::uint64_t kIsASlot = 0x20;
 constexpr std::uint32_t kTargetFlags = 0xa85;  // Homing Thistle's plant food's (0x800 | 0x285)
 // The checks Homing Thistle's leaf drops its target on, besides being dead.
@@ -84,6 +94,7 @@ public:
     Behaviours(Runtime& rt, GuestAddr base, const PlantBehaviours& b) : rt_(rt), base_(base) {
         for (const auto& k : b.kill_shots) kill_shots_.push_back({sheet(k.normal), sheet(k.special)});
         for (const auto& h : b.homing) homing_.push_back(sheet(h));
+        plant_ids_ = b.plant_ids;
         scratch_ = rt.heap().alloc_zeroed(0x100);
         ref_ = scratch_;
         handle_ = scratch_ + 0x10;
@@ -98,9 +109,59 @@ public:
         }
         if (!homing_.empty())
             hook(rt_, base_ + kLeafUpdate.offset, "homing retarget", [self](CallContext& c) { self->on_leaf_update(c.x(0)); });
+        if (!plant_ids_.empty()) {
+            hook(rt_, base_ + kPlantIdOf.offset, "plant id: of plant", [self](CallContext& c) {
+                if (auto id = self->id_of(c.x(1))) return_now(c, id);
+            });
+            hook(rt_, base_ + kPlantKnown.offset, "plant id: known", [self](CallContext& c) {
+                if (self->id_of(c.x(1))) return_now(c, 1);
+            });
+            hook(rt_, base_ + kPlantIdOfTypeFind.offset, "plant id: of type", [self](CallContext& c) {
+                if (auto id = self->id_of(c.sp())) {
+                    c.cpu().jit().SetRegister(19, id);
+                    c.cpu().jit().SetPC(self->base_ + kPlantIdOfTypeFound);
+                }
+            });
+            hook(rt_, base_ + kPlantOfId.offset, "plant id: plant of", [self](CallContext& c) { self->on_plant_of(c); });
+        }
     }
 
 private:
+    // A libc++ std::string's text: short ones inline (size << 1 in the first byte), long ones
+    // through a pointer (capacity | 1, size, data).
+    std::string read_string(GuestAddr s) const {
+        auto& mem = rt_.mem();
+        std::uint8_t first = mem.read<std::uint8_t>(s);
+        std::size_t size = (first & 1) ? mem.read<std::uint64_t>(s + 8) : first >> 1;
+        GuestAddr data = (first & 1) ? mem.read<std::uint64_t>(s + 16) : s + 1;
+        if (size > 256) return {};
+        std::string out(size, '\0');
+        for (std::size_t i = 0; i < size; ++i) out[i] = static_cast<char>(mem.read<std::uint8_t>(data + i));
+        return out;
+    }
+
+    // The number given for the plant named by the std::string at `name`, 0 when none.
+    std::uint32_t id_of(GuestAddr name) const {
+        std::string plant = read_string(name);
+        for (const auto& p : plant_ids_)
+            if (p.plant == plant) return p.id;
+        return 0;
+    }
+
+    // Names fit the short form (22 characters), which needs no memory of the game's.
+    void on_plant_of(CallContext& c) {
+        auto id = static_cast<std::uint32_t>(c.x(1));
+        for (const auto& p : plant_ids_) {
+            if (p.id != id || p.plant.size() > 22) continue;
+            GuestAddr out = c.x(8);
+            auto& mem = rt_.mem();
+            for (int i = 0; i < 24; i += 8) mem.write<std::uint64_t>(out + i, 0);
+            mem.write<std::uint8_t>(out, static_cast<std::uint8_t>(p.plant.size() << 1));
+            for (std::size_t i = 0; i < p.plant.size(); ++i) mem.write<std::uint8_t>(out + 1 + i, static_cast<std::uint8_t>(p.plant[i]));
+            return return_now(c, out);
+        }
+    }
+
     // A projectile type by its alias: the handle, made once the game is up, and the properties
     // object, once the sheet is loaded.
     struct Sheet {
@@ -275,6 +336,7 @@ private:
     GuestAddr base_;
     std::vector<KillShot> kill_shots_;
     std::vector<Sheet> homing_;
+    std::vector<PlantBehaviours::PlantId> plant_ids_;
     GuestAddr scratch_ = 0, ref_ = 0, handle_ = 0, iter_ = 0, zombie_class_ = 0;
     std::set<GuestAddr> armed_;  // plants whose next shot is the special one
     std::unordered_map<GuestAddr, Chase> chasing_;
@@ -298,20 +360,36 @@ bool parse_kill_shot(const std::string& text, PlantBehaviours::KillShot& out, st
     return true;
 }
 
+bool parse_plant_id(const std::string& text, PlantBehaviours::PlantId& out, std::string& error) {
+    auto eq = text.find('=');
+    std::uint32_t id = 0;
+    bool number = eq != std::string::npos && eq + 1 < text.size() && text.size() - eq - 1 <= 9 &&
+                  std::all_of(text.begin() + eq + 1, text.end(), [](char ch) { return ch >= '0' && ch <= '9'; });
+    if (number) id = static_cast<std::uint32_t>(std::stoul(text.substr(eq + 1)));
+    if (eq == 0 || eq > 22 || !number || id == 0) {
+        error = "--plant-id wants <plant>=<number> (a name of up to 22 characters, a number from 1), got \"" + text + "\"";
+        return false;
+    }
+    out = {text.substr(0, eq), id};
+    return true;
+}
+
 bool install_plant_behaviours(Runtime& rt, const Module& pvz2, const PlantBehaviours& behaviours) {
     if (behaviours.empty()) return false;
     GuestAddr base = pvz2.base();
     for (const Known* k : {&kHit, &kAddProjectile, &kLeafUpdate, &kLeafSetTarget, &kParseRtid, &kRegistry,
                            &kHandleRef, &kRefIsNull, &kRefType, &kTypeTable, &kRefResolve, &kRefFree, &kIterate, &kIterHasNext,
-                           &kIterCurrent, &kIterNext, &kIterDone, &kZombieDead, &kZombieClass})
+                           &kIterCurrent, &kIterNext, &kIterDone, &kZombieDead, &kZombieClass, &kPlantIdOf, &kPlantKnown, &kPlantOfId,
+                           &kPlantIdOfTypeFind})
         if (!code_matches(rt, base + k->offset, k->code)) {
-            log::warn("plant behaviours (--kill-shot, --homing-retarget): this libPVZ2.so is a build they don't know ({:#x} differs); left off",
+            log::warn("plant behaviours (--kill-shot, --homing-retarget, --plant-id): this libPVZ2.so is a build they don't know ({:#x} differs); left off",
                       k->offset);
             return false;
         }
     std::make_shared<Behaviours>(rt, base, behaviours)->install();
     for (const auto& k : behaviours.kill_shots) log::info("kill shot: {} arms {}", k.normal, k.special);
     for (const auto& h : behaviours.homing) log::info("homing retarget: {}", h);
+    for (const auto& p : behaviours.plant_ids) log::info("plant id: {} is {} in the save", p.plant, p.id);
     return true;
 }
 

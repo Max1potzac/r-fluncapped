@@ -106,7 +106,7 @@ hook on the plant's per-frame call runs the special update for the plants listed
 game skipped it, with the target check (`Plant::FindTarget`) answering no meanwhile, so it only
 moves animations along and never fires.
 
-`src/game/plant_behaviours.cpp` (`--kill-shot`, `--homing-retarget`): behaviours for new plants
+`src/game/plant_behaviours.cpp` (`--kill-shot`, `--homing-retarget`, `--plant-id`): behaviours for new plants
 that mods make from property sheets alone (a mod turns them on through mod.json's `"rfu"`), each
 naming projectiles by their alias in PROJECTILETYPES. RFLib replaces the game's `Plant::DoAction`
 whole (rflib_hooks.json), so the kill shot hooks `Board::AddProjectile` instead: when the
@@ -116,8 +116,14 @@ done, so a normal projectile whose zombie is left dead (or at 0 hp) arms its pla
 one that hits anything (a zombie, its shield, a grid item) disarms it. `--homing-retarget` hooks
 `HomingThistleLeaf`'s update: one with no target, or a target that can't be hit any more, goes for
 the zombie nearest the house that the leaves already chasing it (each counting its damage) won't
-finish; at debug level each retarget is logged. The addresses are checked against the code
-expected there, as for the other fixes.
+finish; at debug level each retarget is logged. `--plant-id` gives a new plant the number the
+profile keeps it by: `pp.dat`'s `p` (and the other per-plant lists) hold numbers from a
+`std::map<std::string, int>` built into libPVZ2 (`0x11797b4`, RFLib adding its plants, 300 and
+up), so a plant only in PLANTTYPES gets 0, and `Profile::AddPlant` (`0x1242314`) leaves one
+bought in the shop out. Hooks on what reads the map (name to number at `0x1175f18`, whether it has
+a name at `0x11761f0`, number to name at `0x1175f5c`, the name a `std::string` through `x8`, and
+the find inside PlantType to number, at `0x1182d08`) answer for the plants given. The addresses are checked
+against the code expected there, as for the other fixes.
 
 `src/game/game_keys.cpp` (keybinds `seed <n>`, `shovel`, `plantfood`, `fastforward`, `pause`): the
 seed bank (`SeedBankNew`), its packets and the buttons (`ShovelUI`, `PlantfoodUI`,

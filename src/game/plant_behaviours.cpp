@@ -11,9 +11,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -32,6 +32,10 @@ constexpr Known kHit{0xca065c, {0xD10103FF, 0xF9000BF5, 0xA9024FF4}};
 // Board::AddProjectile(board, const props handle&, instigator, position), which plants' actions
 // fire through (Plant::DoAction, which RFLib replaces with its own).
 constexpr Known kAddProjectile{0xaae5b4, {0xD10283FF, 0x6D032BEB, 0x6D0423E9}};
+// PlantAnimRig starting its attack animation: the call that plays it, the rig in x0 and the label
+// (a std::string on the stack, "attack") in x1, three instructions on.
+constexpr Known kRigPlayAttack{0x5c6024, {0x9100C3E3, 0xAA1303E0, 0x2A1F03E2}};
+constexpr std::uint64_t kRigPlayAttackCall = 0x5c6030;
 constexpr Known kLeafUpdate{0xee194c, {0xD10283FF, 0x6D033BEF, 0x6D0433ED}};  // HomingThistleLeaf's per-frame update
 constexpr Known kLeafSetTarget{0xee05e8, {0xD10143FF, 0xF90013F5, 0xA9034FF4}};  // (leaf, zombie or null)
 // RtWeakPtr: parse "RTID(name@sheet)" (x0 a std::string, the handle through x8).
@@ -80,7 +84,7 @@ constexpr std::uint64_t kZombieGone1 = 0x171, kZombieGone1Bit = 4, kZombieGone2 
 // HomingThistleLeaf: its target.
 constexpr std::uint64_t kPosX = 0x18;
 constexpr std::uint64_t kProps = 0x58, kPropsHandle = 0x60, kInstigator = 0x68, kDamage = 236;
-constexpr std::uint64_t kPlantFood = 296;
+constexpr std::uint64_t kPlantFood = 296, kPlantRig = 0x118;
 constexpr std::uint64_t kHitpoints = 376;
 constexpr std::uint64_t kLeafTarget = 0x178;
 // The lawn's right edge: the board's grid origin and size (ints, world units).
@@ -92,7 +96,7 @@ constexpr auto kInFlight = std::chrono::milliseconds(300);  // a leaf not update
 class Behaviours : public std::enable_shared_from_this<Behaviours> {
 public:
     Behaviours(Runtime& rt, GuestAddr base, const PlantBehaviours& b) : rt_(rt), base_(base) {
-        for (const auto& k : b.kill_shots) kill_shots_.push_back({sheet(k.normal), sheet(k.special)});
+        for (const auto& k : b.kill_shots) kill_shots_.push_back({sheet(k.normal), sheet(k.special), k.animation});
         for (const auto& h : b.homing) homing_.push_back(sheet(h));
         plant_ids_ = b.plant_ids;
         scratch_ = rt.heap().alloc_zeroed(0x100);
@@ -106,6 +110,8 @@ public:
         hook(rt_, base_ + kHit.offset, "kill shot: hit", [self](CallContext& c) { self->on_hit(c.x(0), c.x(1)); });
         if (!kill_shots_.empty()) {
             hook(rt_, base_ + kAddProjectile.offset, "kill shot: fire", [self](CallContext& c) { self->on_fire(c, c.x(1), c.x(2)); });
+            if (std::any_of(kill_shots_.begin(), kill_shots_.end(), [](const KillShot& k) { return !k.animation.empty(); }))
+                hook(rt_, base_ + kRigPlayAttackCall, "kill shot: animation", [self](CallContext& c) { self->on_attack(c.x(0), c.x(1)); });
         }
         if (!homing_.empty())
             hook(rt_, base_ + kLeafUpdate.offset, "homing retarget", [self](CallContext& c) { self->on_leaf_update(c.x(0)); });
@@ -171,6 +177,7 @@ private:
     };
     struct KillShot {
         Sheet normal, special;
+        std::string animation;  // the armed plant's attack label, empty for its usual one
     };
     struct Chase {
         GuestAddr zombie;
@@ -240,15 +247,18 @@ private:
         GuestAddr props = props_of(projectile);
         if (!props) return;
         bool special = false, ours = false;
-        for (auto& k : kill_shots_) {
+        std::size_t which = 0;
+        for (std::size_t i = 0; i < kill_shots_.size() && !ours; ++i) {
+            auto& k = kill_shots_[i];
             if (props == object(k.special)) special = ours = true;
             else if (props == object(k.normal)) ours = true;
+            which = i;
         }
         if (!ours) return;
         GuestAddr plant = resolve(projectile + kInstigator);
         if (!plant) return;
         if (special && armed_.erase(plant)) log::debug("kill shot: plant {:#x} disarmed", plant);
-        if (is_zombie(target) && (hitpoints(target) <= 0 || dead(target)) && armed_.insert(plant).second)
+        if (is_zombie(target) && (hitpoints(target) <= 0 || dead(target)) && armed_.emplace(plant, which).second)
             log::debug("kill shot: plant {:#x} armed", plant);
     }
 
@@ -261,6 +271,25 @@ private:
                 c.cpu().jit().SetRegister(1, k.special.handle);  // the handle is the sheet's own: point elsewhere
                 return;
             }
+    }
+
+    // A plant's rig starts its attack animation: an armed plant's kill shot with an animation of
+    // its own plays that one instead (its "use_action" fires the special projectile, as the
+    // usual one's would). The label is a short std::string ("attack"), so the new one is written
+    // over it when it fits the short form too.
+    void on_attack(GuestAddr rig, GuestAddr label) {
+        if (armed_.empty() || read_string(label) != "attack") return;
+        for (auto [plant, which] : armed_) {
+            const std::string& animation = kill_shots_[which].animation;
+            if (animation.empty() || animation.size() > 22 || rt_.mem().read<std::uint8_t>(plant + kPlantFood)) continue;
+            if (resolve(plant + kPlantRig) != rig) continue;
+            auto& mem = rt_.mem();
+            mem.write<std::uint8_t>(label, static_cast<std::uint8_t>(animation.size() << 1));
+            for (std::size_t i = 0; i < animation.size(); ++i) mem.write<std::uint8_t>(label + 1 + i, static_cast<std::uint8_t>(animation[i]));
+            mem.write<std::uint8_t>(label + 1 + animation.size(), 0);
+            log::debug("kill shot: plant {:#x} attacks with {}", plant, animation);
+            return;
+        }
     }
 
     bool chases(GuestAddr leaf) {
@@ -338,7 +367,7 @@ private:
     std::vector<Sheet> homing_;
     std::vector<PlantBehaviours::PlantId> plant_ids_;
     GuestAddr scratch_ = 0, ref_ = 0, handle_ = 0, iter_ = 0, zombie_class_ = 0;
-    std::set<GuestAddr> armed_;  // plants whose next shot is the special one
+    std::map<GuestAddr, std::size_t> armed_;  // plants whose next shot is the special one, and whose kill shot it is
     std::unordered_map<GuestAddr, Chase> chasing_;
 };
 
@@ -352,11 +381,13 @@ bool code_matches(Runtime& rt, GuestAddr addr, const std::array<std::uint32_t, 3
 
 bool parse_kill_shot(const std::string& text, PlantBehaviours::KillShot& out, std::string& error) {
     auto eq = text.find('=');
-    if (eq == std::string::npos || eq == 0 || eq + 1 == text.size()) {
-        error = "--kill-shot wants <normal projectile>=<special projectile>, got \"" + text + "\"";
+    auto colon = text.find(':', eq == std::string::npos ? 0 : eq);
+    std::size_t end = colon == std::string::npos ? text.size() : colon;
+    if (eq == std::string::npos || eq == 0 || eq + 1 >= end || colon + 1 == text.size() || (colon != std::string::npos && text.size() - colon - 1 > 22)) {
+        error = "--kill-shot wants <normal projectile>=<special projectile>[:<attack animation>] (the animation up to 22 characters), got \"" + text + "\"";
         return false;
     }
-    out = {text.substr(0, eq), text.substr(eq + 1)};
+    out = {text.substr(0, eq), text.substr(eq + 1, end - eq - 1), colon == std::string::npos ? std::string() : text.substr(colon + 1)};
     return true;
 }
 
@@ -379,7 +410,7 @@ bool install_plant_behaviours(Runtime& rt, const Module& pvz2, const PlantBehavi
     GuestAddr base = pvz2.base();
     for (const Known* k : {&kHit, &kAddProjectile, &kLeafUpdate, &kLeafSetTarget, &kParseRtid, &kRegistry,
                            &kHandleRef, &kRefIsNull, &kRefType, &kTypeTable, &kRefResolve, &kRefFree, &kIterate, &kIterHasNext,
-                           &kIterCurrent, &kIterNext, &kIterDone, &kZombieDead, &kZombieClass, &kPlantIdOf, &kPlantKnown, &kPlantOfId,
+                           &kIterCurrent, &kIterNext, &kIterDone, &kRigPlayAttack, &kZombieDead, &kZombieClass, &kPlantIdOf, &kPlantKnown, &kPlantOfId,
                            &kPlantIdOfTypeFind})
         if (!code_matches(rt, base + k->offset, k->code)) {
             log::warn("plant behaviours (--kill-shot, --homing-retarget, --plant-id): this libPVZ2.so is a build they don't know ({:#x} differs); left off",
@@ -387,7 +418,8 @@ bool install_plant_behaviours(Runtime& rt, const Module& pvz2, const PlantBehavi
             return false;
         }
     std::make_shared<Behaviours>(rt, base, behaviours)->install();
-    for (const auto& k : behaviours.kill_shots) log::info("kill shot: {} arms {}", k.normal, k.special);
+    for (const auto& k : behaviours.kill_shots)
+        log::info("kill shot: {} arms {}{}", k.normal, k.special, k.animation.empty() ? "" : ", fired with its " + k.animation + " animation");
     for (const auto& h : behaviours.homing) log::info("homing retarget: {}", h);
     for (const auto& p : behaviours.plant_ids) log::info("plant id: {} is {} in the save", p.plant, p.id);
     return true;

@@ -237,7 +237,11 @@ void test_plant_options() {
     std::string error;
     rfu::PlantBehaviours::KillShot k;
     EXPECT(rfu::parse_kill_shot("PineconeDefault=PineconeKnockback", k, error) && k.normal == "PineconeDefault" && k.special == "PineconeKnockback");
+    EXPECT(k.animation.empty());
+    EXPECT(rfu::parse_kill_shot("PineconeDefault=PineconeKnockback:attack2", k, error) && k.special == "PineconeKnockback" && k.animation == "attack2");
     EXPECT(!rfu::parse_kill_shot("PineconeDefault", k, error) && !error.empty());
+    for (const char* bad : {"=b", "a=", "a=:attack2", "a=b:", "a=b:averyveryverylonglabel1"})
+        EXPECT(!rfu::parse_kill_shot(bad, k, error));
     rfu::PlantBehaviours::PlantId p;
     EXPECT(rfu::parse_plant_id("pinecone=1000", p, error) && p.plant == "pinecone" && p.id == 1000);
     for (const char* bad : {"pinecone", "=5", "pinecone=", "pinecone=0", "pinecone=x1", "pinecone=99999999999", "averyveryverylongplantname=400"})

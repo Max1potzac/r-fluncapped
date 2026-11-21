@@ -69,6 +69,33 @@ static class Trie
             warnings.Add($"{what}: {size - last} bytes after the last name weren't reachable");
     }
 
+    /// Writes a table that Read reads back: names (with their payloads) in byte order, each
+    /// character's pointer leading to the next character at its position, the way the game's own
+    /// packer lays them out.
+    public static byte[] Write(IEnumerable<(string Name, byte[] Payload)> names)
+    {
+        var output = new List<byte>();
+        void Node(List<(byte[] Tail, byte[] Payload)> items)
+        {
+            var branches = items.GroupBy(i => i.Tail.Length == 0 ? (byte)0 : i.Tail[0]).OrderBy(b => b.Key).ToList();
+            for (int k = 0; k < branches.Count; k++)
+            {
+                int at = output.Count;
+                output.AddRange([branches[k].Key, 0, 0, 0]);
+                if (branches[k].Key == 0) output.AddRange(branches[k].First().Payload);
+                else Node(branches[k].Select(i => (i.Tail[1..], i.Payload)).ToList());
+                if (k + 1 < branches.Count)
+                {
+                    int alt = output.Count / 4;
+                    output[at + 1] = (byte)alt; output[at + 2] = (byte)(alt >> 8); output[at + 3] = (byte)(alt >> 16);
+                }
+            }
+        }
+        var list = names.Select(n => (Encoding.UTF8.GetBytes(n.Name), n.Payload)).ToList();
+        if (list.Count > 0) Node(list);
+        return output.ToArray();
+    }
+
     // Names are ASCII in practice; anything else is read as UTF-8, and
     // characters Windows can't put in a file name are replaced later.
     static string Decode(List<byte> bytes) => Encoding.UTF8.GetString(bytes.ToArray());

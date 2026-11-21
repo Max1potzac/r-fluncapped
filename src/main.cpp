@@ -14,6 +14,7 @@
 #include "game/anim_fix.h"
 #include "game/game_keys.h"
 #include "game/hover.h"
+#include "game/plant_behaviours.h"
 #include "core/log.h"
 #include "jni/jni.h"
 #include "platform/gles.h"
@@ -72,6 +73,10 @@ void usage() {
                  "  --hover                  collect sun, coins and plant food by moving the mouse over them\n"
                  "  --custom-cursor          the glove for the mouse, in place of the system's arrow\n"
                  "  --fix-animations         unfreeze plants stuck on an animation while the level isn't running\n"
+                 "  --kill-shot <a>=<b>      a plant whose projectile <a> kills fires <b> next, until one hits (new plants;\n"
+                 "                           projectile aliases; see src/game/plant_behaviours.h)\n"
+                 "  --homing-retarget <p>    homing projectile <p> goes for the zombie nearest the house, again when its dies\n"
+                 "  --plant-id <plant>=<n>   the number the save keeps new plant <plant> by, so having it lasts\n"
                  "  --icon <file.png>        the window's icon\n"
                  "  --title <text>           the window's title\n"
                  "  --version-name <x.y.z>   the APK's version name, which the game reports (default: 1.4.0)\n"
@@ -167,6 +172,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> patch_files;
     bool load_mod_libs = true;
     bool fix_animations = false;
+    rfu::PlantBehaviours plant_behaviours;
     bool key_hints = false;
     std::vector<rfu::PadBind> pad_binds;
     std::vector<rfu::PadTap> pad_taps;
@@ -231,6 +237,18 @@ int main(int argc, char** argv) {
                 app.window.hover = true;
             } else if (arg == "--fix-animations") {
                 fix_animations = true;
+            } else if (arg == "--kill-shot") {
+                rfu::PlantBehaviours::KillShot k;
+                std::string error;
+                if (!rfu::parse_kill_shot(value(), k, error)) throw std::invalid_argument(error);
+                plant_behaviours.kill_shots.push_back(k);
+            } else if (arg == "--homing-retarget") {
+                plant_behaviours.homing.push_back(value());
+            } else if (arg == "--plant-id") {
+                rfu::PlantBehaviours::PlantId p;
+                std::string error;
+                if (!rfu::parse_plant_id(value(), p, error)) throw std::invalid_argument(error);
+                plant_behaviours.plant_ids.push_back(p);
             } else if (arg == "--key-hints") {
                 key_hints = true;
             } else if (arg == "--controller") {
@@ -496,6 +514,7 @@ int main(int argc, char** argv) {
 
         if (app.window.hover) app.window.hover = rfu::install_hover_collect(rt, pvz2);
         if (fix_animations) rfu::install_animation_fix(rt, pvz2);
+        if (!plant_behaviours.empty()) rfu::install_plant_behaviours(rt, pvz2, plant_behaviours);
         bool game_keybinds = !app.script.empty() || std::any_of(app.window.keybinds.begin(), app.window.keybinds.end(), [](const auto& b) {
             return rfu::platform::is_game_action(b.action);
         });

@@ -116,7 +116,7 @@ public static class Mods
 
     static readonly string[] Roots = ["cdn", "files"];
     // what goes into the OBB rather than over a folder
-    static readonly string[] ObbRoots = ["fonts", "obb"];
+    static readonly string[] ObbRoots = ["fonts", "obb", "groups"];
     static readonly HashSet<string> NotContent = new(StringComparer.OrdinalIgnoreCase) { "mod.json", "missing-strings.json", "readme.txt", "readme.md", "license", "license.txt" };
     static readonly JsonDocumentOptions ManifestOptions = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
 
@@ -414,7 +414,7 @@ public static class Mods
         var plan = new Dictionary<(string Root, string Rel), List<string>>(new PathKeyComparer());
         foreach (var mod in mods)
         {
-            bool laidOut = Roots.Any(r => Directory.Exists(Path.Combine(mod, r)));
+            bool laidOut = Roots.Concat(ObbRoots).Any(r => Directory.Exists(Path.Combine(mod, r)));
             foreach (var root in Roots)
             {
                 string src = laidOut ? Path.Combine(mod, root) : root == "cdn" ? mod : "";
@@ -509,27 +509,49 @@ public static class Mods
     {
         // fonts: the game's font -> the mod's file, the last mod in load order winning
         var fonts = new Dictionary<string, string>(StringComparer.Ordinal);
-        // obb/ files: (their OBB path, the mod's file), in load order
+        // obb/ files: (their OBB path, the mod's file), in load order, and each one's mod folder
         var obbFiles = new List<(string Key, string File)>();
+        var modDirs = new Dictionary<string, string>(StringComparer.Ordinal);
+        // pictures for the game's atlases ("#png" in a mod's manifest), anywhere in a mod but obb/ and groups/
+        var pictureFiles = new List<string>();
+        // groups/<name>/: new resource groups, by name (the last mod in load order winning)
+        var newGroups = new Dictionary<string, (Mod Mod, List<(string Key, string File)> Files)>(StringComparer.OrdinalIgnoreCase);
         foreach (var mod in mods)
         {
             foreach (var (gameFont, file) in mod.Fonts) fonts[ObbPatch.Key("PRIMEFONTS/" + gameFont)] = file;
             string obbDir = Path.Combine(mod.Dir, "obb");
             if (Directory.Exists(obbDir))
                 foreach (var file in Directory.EnumerateFiles(obbDir, "*", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase))
+                {
                     obbFiles.Add((ObbPatch.Key(Path.GetRelativePath(obbDir, file)), file));
+                    modDirs[file] = mod.Dir;
+                }
+            if (Directory.Exists(mod.Dir))
+                pictureFiles.AddRange(Directory.EnumerateFiles(mod.Dir, "*.png", new EnumerationOptions { RecurseSubdirectories = true, MatchCasing = MatchCasing.CaseInsensitive })
+                    .Where(f => Path.GetRelativePath(mod.Dir, f).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0].ToLowerInvariant() is not ("obb" or "groups"))
+                    .Order(StringComparer.OrdinalIgnoreCase));
+            foreach (var (name, files) in GroupFolders(mod))
+            {
+                if (newGroups.TryGetValue(name, out var had)) log.Add($"group {name}: {mod.Name}'s, not {had.Mod.Name}'s");
+                newGroups[name] = (mod, files);
+            }
         }
         string patchPath = Path.Combine(game.WorkDir, "obb-patch.bin"), stampPath = Path.Combine(game.WorkDir, "obb-patch.stamp");
-        int count = fonts.Count + obbFiles.Count;
+        int count = fonts.Count + obbFiles.Count + newGroups.Values.Sum(g => g.Files.Count);
         if (count == 0) return null;
         if (game.Obb == null || !File.Exists(game.Obb))
         {
             log.Add("fonts and obb/ files go into the OBB, and this game has none (PvZ2 China's data is in its APK); left out");
             return null;
         }
-        var stamp = new StringBuilder($"obb-patch v2\n{game.Obb}|{new FileInfo(game.Obb).Length}|{File.GetLastWriteTimeUtc(game.Obb).Ticks}\n");
+        var stamp = new StringBuilder($"obb-patch v3\n{game.Obb}|{new FileInfo(game.Obb).Length}|{File.GetLastWriteTimeUtc(game.Obb).Ticks}\n");
         foreach (var (key, file, font) in fonts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (p.Key, p.Value, true)).Concat(obbFiles.Select(f => (f.Key, f.File, false))))
             stamp.Append($"{key}|{file}|{font}|{(File.Exists(file) ? $"{new FileInfo(file).Length}|{File.GetLastWriteTimeUtc(file).Ticks}" : "-")}\n");
+        foreach (var (name, (_, groupFiles)) in newGroups.OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (var (key, file) in groupFiles)
+                stamp.Append($"group {name}|{key}|{file}|{new FileInfo(file).Length}|{File.GetLastWriteTimeUtc(file).Ticks}\n");
+        foreach (var file in pictureFiles)
+            stamp.Append($"picture {file}|{new FileInfo(file).Length}|{File.GetLastWriteTimeUtc(file).Ticks}\n");
         if (File.Exists(patchPath) && File.Exists(stampPath) && File.ReadAllText(stampPath) == stamp.ToString())
         {
             log.Add($"OBB patch: {count} file(s), unchanged since the last build");
@@ -539,6 +561,7 @@ public static class Mods
         {
             var index = ObbPatch.Read(game.Obb);
             var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            var pictures = new AtlasPictures(game.Obb, index);
 
             // fonts, with the names of the game's font each replaces
             var originals = ObbPatch.ReadFiles(game.Obb, index, fonts.Keys);
@@ -563,6 +586,7 @@ public static class Mods
                 return key;
             }
             var byTarget = obbFiles.GroupBy(f => Target(f.Key)).ToList();
+            var composites = new List<JsonObject>();
             var gameSheets = ObbPatch.ReadFiles(game.Obb, index,
                 byTarget.Select(g => g.Key).Where(t => t.EndsWith(".RTON", StringComparison.Ordinal) || t.EndsWith(".JSON", StringComparison.Ordinal)));
             foreach (var group in byTarget)
@@ -570,6 +594,7 @@ public static class Mods
                 string target = group.Key;
                 bool rton = target.EndsWith(".RTON", StringComparison.Ordinal);
                 JsonObject? sheet = null;  // the merged sheet so far, or null when the last file isn't one
+                JsonObject? manifest = null;  // the same for the resource manifest
                 byte[]? whole = null;      // the last file that isn't a sheet, as it goes in
                 int merged = 0, added = 0, changed = 0, removed = 0;
                 foreach (var (key, file) in group)
@@ -582,8 +607,21 @@ public static class Mods
                         try { mine = SheetMerge.Parse(data) as JsonObject; }
                         catch (Exception e) when (e is JsonException or FormatException) { if (key != target) throw new FormatException($"{file}: {e.Message}"); }
                     }
+                    if (mine != null && SheetMerge.IsManifest(mine) && !SheetMerge.IsSheet(mine))
+                    {
+                        // the resource manifest: the game's (or the merged one so far), the mod's groups added
+                        manifest ??= whole == null && gameSheets.TryGetValue(target, out var own) ? SheetMerge.Parse(own) as JsonObject : null;
+                        if (manifest == null || !SheetMerge.IsManifest(manifest)) { manifest = mine; whole = null; continue; }
+                        if (modDirs.TryGetValue(file, out var modDir)) pictures.Place(manifest, mine, modDir, log);
+                        var (mc, comps) = SheetMerge.MergeManifest(manifest, mine);
+                        composites.AddRange(comps);
+                        whole = null;
+                        log.Add($"{target}: {Path.GetFileName(file)} merged in ({mc.Added} group(s) added, {mc.Changed} changed, {mc.Removed} removed)");
+                        continue;
+                    }
                     if (mine == null || !SheetMerge.IsSheet(mine))
                     {
+                        manifest = null;
                         sheet = null;
                         whole = key != target && rton ? Pvz2Conv.RtonWriter.FromJson(data) : data;
                         continue;
@@ -608,7 +646,8 @@ public static class Mods
                     merged++;
                     added += c.Added; changed += c.Changed; removed += c.Removed;
                 }
-                if (sheet != null)
+                if (manifest != null) files[target] = rton ? SheetMerge.ToRton(manifest) : Encoding.UTF8.GetBytes(manifest.ToJsonString());
+                else if (sheet != null)
                 {
                     files[target] = rton ? SheetMerge.ToRton(sheet) : Encoding.UTF8.GetBytes(sheet.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                     if (merged > 0) log.Add($"{target}: {merged} mod file(s) merged into the game's ({added} added, {changed} changed, {removed} removed)");
@@ -616,7 +655,36 @@ public static class Mods
                 else if (whole != null) files[target] = whole;
             }
 
-            var patch = ObbPatch.Build(game.Obb, index, files, log);
+            // new groups: their files, PNGs as textures (RGBA8888)
+            var groups = new List<ObbPatch.NewGroup>();
+            foreach (var (name, (mod, groupFiles)) in newGroups.OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var plain = new List<(string, byte[])>();
+                var textures = new List<ObbPatch.NewTexture>();
+                foreach (var (key, file) in groupFiles)
+                {
+                    if (!key.EndsWith(".PNG", StringComparison.Ordinal)) { plain.Add((key, File.ReadAllBytes(file))); continue; }
+                    try
+                    {
+                        var (rgba, w, h) = Pvz2Conv.Png.Decode(File.ReadAllBytes(file));
+                        textures.Add(new ObbPatch.NewTexture(key[..^4] + ".PTX", rgba, w, h, 0));
+                    }
+                    catch (FormatException e) { log.Add($"{file}: {e.Message}; left out"); }
+                }
+                groups.Add(new ObbPatch.NewGroup(name, plain, textures));
+            }
+            // composite groups the mods' manifests add (or add groups to), with the RSB's resolutions
+            // (1536, 768, else any)
+            var newComposites = composites
+                .Where(c => c["subgroups"] is JsonArray)
+                .Select(c => new ObbPatch.NewComposite(c["id"]!.ToString(), ((JsonArray)c["subgroups"]!).OfType<JsonObject>()
+                    .Where(sg => sg["id"] != null)
+                    .Select(sg => (sg["id"]!.ToString(), int.TryParse(sg["res"]?.ToString(), out int res) && res is 1536 or 768 ? res : 0)).ToList()))
+                .ToList();
+
+            var atlases = pictures.Changed();
+            foreach (var path in atlases.Keys) log.Add($"{path}: mods' pictures put into it");
+            var patch = ObbPatch.Build(game.Obb, index, files, log, groups, newComposites, atlases);
             Directory.CreateDirectory(game.WorkDir);
             if (patch.Length == 0)
             {
@@ -635,6 +703,17 @@ public static class Mods
             if (File.Exists(stampPath)) File.Delete(stampPath);
             return null;
         }
+    }
+
+    /// A mod's new resource groups: each folder of groups/, with its files by OBB path.
+    public static List<(string Name, List<(string Key, string File)> Files)> GroupFolders(Mod mod)
+    {
+        string dir = Path.Combine(mod.Dir, "groups");
+        if (!Directory.Exists(dir)) return [];
+        return Directory.EnumerateDirectories(dir).Order(StringComparer.OrdinalIgnoreCase)
+            .Select(g => (Path.GetFileName(g), Directory.EnumerateFiles(g, "*", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase)
+                .Select(f => (ObbPatch.Key(Path.GetRelativePath(g, f)), f)).ToList()))
+            .Where(g => g.Item2.Count > 0).ToList();
     }
 
     /// Where a mod's file goes: x.rton.json -> x.rton; x.json -> x.rton when the game's file is
